@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ops Knowledge Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">K</div>
+        <div>
+          <strong>Ops Knowledge</strong>
+          <span>可信运维知识工作台</span>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-page="dashboard">概览</button>
+        <button class="nav-item" data-page="ingest">知识采集</button>
+        <button class="nav-item" data-page="review">知识审核队列 <span id="review-count" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="query">可信方案</button>
+        <button class="nav-item" data-page="library">知识库</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="api-dot" class="status-dot"></span>
+        <div><strong id="api-status">检查配置中</strong><small id="model-name">DeepSeek</small></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">KNOWLEDGE GOVERNANCE HARNESS</p>
+          <h1 id="page-title">知识能力概览</h1>
+        </div>
+        <button id="refresh-button" class="button secondary">刷新数据</button>
+      </header>
+
+      <div id="toast" class="toast" role="status"></div>
+
+      <section id="page-dashboard" class="page active">
+        <div class="metric-grid">
+          <article class="metric"><span>来源文档</span><strong id="metric-documents">0</strong><small>已进入知识流水线</small></article>
+          <article class="metric"><span>知识卡片</span><strong id="metric-cards">0</strong><small>结构化知识单元</small></article>
+          <article class="metric accent"><span>已批准</span><strong id="metric-approved">0</strong><small>允许用于方案生成</small></article>
+          <article class="metric warning"><span>待审核</span><strong id="metric-pending">0</strong><small>等待知识责任人决策</small></article>
+        </div>
+        <div class="two-column">
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">LIFECYCLE</p><h2>知识生命周期</h2></div></div>
+            <div id="lifecycle-bars" class="lifecycle-bars"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">QUALITY GATE</p><h2>治理原则</h2></div></div>
+            <ol class="principles">
+              <li><span>01</span><div><strong>结构化</strong><p>场景、版本、步骤、风险、回退和验证分别建模。</p></div></li>
+              <li><span>02</span><div><strong>比较后入库</strong><p>新知识必须判断重复、冲突或新版本关系。</p></div></li>
+              <li><span>03</span><div><strong>有证据才发布</strong><p>只有 APPROVED 知识能够进入可信方案上下文。</p></div></li>
+            </ol>
+          </article>
+        </div>
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">RECENT KNOWLEDGE</p><h2>最近知识</h2></div></div>
+          <div id="recent-cards" class="card-list empty">暂无知识卡片</div>
+        </article>
+      </section>
+
+      <section id="page-ingest" class="page">
+        <div class="two-column ingest-layout">
+          <div class="panel form-panel">
+            <div class="panel-head"><div><p class="eyebrow">SOURCE TO CARD</p><h2>上传实际文档</h2></div></div>
+            <form id="upload-form" class="source-form">
+              <label>选择文件
+                <input id="source-files" type="file" multiple required accept=".txt,.md,.markdown,.log,.csv,.json,.yaml,.yml,.docx,.pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp">
+              </label>
+              <p class="form-hint">支持 PDF、DOCX、结构化文本和常见图片，单次最多 50 MB。扫描 PDF 和图片自动使用 PaddleOCR；首次识别会加载本地 OCR 模型。</p>
+              <button class="button primary" type="submit">上传并加工文档</button>
+            </form>
+            <div class="source-divider"><span>或者粘贴原文</span></div>
+            <form id="ingest-form" class="source-form">
+              <label>来源名称<input id="source-name" required placeholder="例如：核心网 V4.2 升级指导书"></label>
+              <label>来源标识<input id="source-ref" placeholder="例如：工单 INC-2026-001 / 文档路径 / URL"></label>
+              <label>来源原文<textarea id="source-content" required rows="10" placeholder="粘贴 SOP、变更方案、工单复盘或操作记录原文……"></textarea></label>
+              <p class="form-hint">模型会抽取知识卡片、校验证据、比较已有知识；不会自动发布。</p>
+              <button class="button secondary" type="submit">加工粘贴文本</button>
+            </form>
+          </div>
+          <article class="panel pipeline-panel">
+            <div class="panel-head"><div><p class="eyebrow">PIPELINE</p><h2>加工流水线</h2></div></div>
+            <div class="pipeline">
+              <div><span>1</span><strong>分片与定位</strong><p>保留原文字符位置和来源校验和</p></div>
+              <div><span>2</span><strong>DeepSeek 抽取</strong><p>生成固定 Schema 的知识卡片</p></div>
+              <div><span>3</span><strong>质量门禁</strong><p>检查字段、回退、验证和原文证据</p></div>
+              <div><span>4</span><strong>知识比较</strong><p>识别 NEW / DUPLICATE / CONFLICT / NEW_VERSION</p></div>
+              <div><span>5</span><strong>人工审核</strong><p>批准、驳回或替代旧版本</p></div>
+            </div>
+            <pre id="ingest-result" class="result-box">等待上传文档或提交来源文本。</pre>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-review" class="page">
+        <article class="panel review-controls">
+          <div><p class="eyebrow">HUMAN IN THE LOOP</p><h2>审核人设置</h2></div>
+          <label>审核人<input id="reviewer" placeholder="请输入姓名或工号"></label>
+          <label class="grow">审核意见<input id="review-comment" placeholder="可选：判断依据、修改说明或驳回原因"></label>
+        </article>
+        <div id="review-queue" class="review-grid empty">当前没有待审核知识</div>
+      </section>
+
+      <section id="page-query" class="page">
+        <div class="query-layout">
+          <article class="panel query-panel">
+            <p class="eyebrow">TRUSTED GENERATION</p>
+            <h2>基于已审核知识生成方案</h2>
+            <p>检索范围固定为 APPROVED；回答必须使用 [K编号] 标注证据。</p>
+            <form id="query-form">
+              <textarea id="query-question" rows="5" required placeholder="例如：V2.8 网元升级到 V3.2 前需要满足哪些条件？失败后如何回退？"></textarea>
+              <button class="button primary" type="submit" data-mode="direct">生成可信方案</button>
+              <button class="button" type="submit" data-mode="agent">Agent 检索生成</button>
+            </form>
+          </article>
+          <article class="panel answer-panel">
+            <div class="panel-head"><div><p class="eyebrow">ANSWER</p><h2>方案结果</h2></div></div>
+            <div id="answer-content" class="answer-content empty">等待问题</div>
+            <div id="answer-agent-meta" class="hint"></div>
+            <div id="answer-sources" class="source-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-library" class="page">
+        <article class="panel library-tools">
+          <div><p class="eyebrow">KNOWLEDGE LIBRARY</p><h2>知识资产</h2></div>
+          <input id="library-query" placeholder="搜索对象、版本、场景、风险……">
+          <select id="library-status">
+            <option value="APPROVED">已批准</option>
+            <option value="PENDING_REVIEW">待审核</option>
+            <option value="DRAFT">草稿</option>
+            <option value="REJECTED">已驳回</option>
+            <option value="SUPERSEDED">已替代</option>
+          </select>
+          <button id="library-search" class="button secondary">检索</button>
+        </article>
+        <div id="library-cards" class="card-list empty">暂无知识</div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="detail-dialog">
+    <button id="dialog-close" class="dialog-close" aria-label="关闭">×</button>
+    <div id="dialog-content"></div>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+[project]
+name = "ops-knowledge-studio"
+version = "1.0.0"
+description = "DeepSeek-powered operations knowledge engineering and governance platform"
+requires-python = ">=3.10"
+dependencies = [
+  "pypdf>=6.14,<7",
+]
+
+[project.optional-dependencies]
+ocr = [
+  "paddlepaddle>=3.0,<4",
+  "paddleocr>=3.7,<4",
+  "PyMuPDF>=1.28,<2",
+]
+
+[tool.unittest]
+start-directory = "tests"
