@@ -54,18 +54,23 @@ JSON 格式：
   "claims": [
     {
       "category": "适用条件|执行步骤|风险|回退|验证|结论|知识不足",
-      "text": "一条独立、可核验的结论",
-      "card_ids": [1]
+      "card_id": 1,
+      "support_field": "prerequisites",
+      "support_index": 0
     }
   ]
 }
 严格要求：
-1. 每条 claim 只能表达一个事实、步骤、风险、回退、验证结论或知识不足说明；
-2. 每条 claim 的 card_ids 至少包含一个本次提供的 card_id 数值，必须原样复制，不能按候选顺序重新编号；
-3. text 中不要自行书写 K 编号或引用标记，引用由程序统一渲染；
-4. 不得使用模型常识补充处置建议，不得生成卡片中没有的事实；
-5. 卡片缺少某类信息时，可输出“现有已审核知识未提供……”并关联相关卡片；
-6. 如果知识完全无法回答问题，返回 {"claims": []}。"""
+1. 不要输出 text 或 card_ids；程序会从字段指针读取原值并统一生成正文与引用；
+2. card_id 必须原样复制本次提供的 card_id 数值，不能按候选顺序重新编号；
+3. support_field 及 category 必须按以下对应关系选择：
+   - 结论：summary；
+   - 适用条件：scenario、object_name、applicable_versions、prerequisites；
+   - 执行步骤：procedure_steps；风险：risks；回退：rollback_steps；验证：validation_steps；
+4. support_field 为数组时，support_index 必须是从 0 开始的有效数组下标；标量字段应为 null；
+5. 只有字段为空时才可输出“知识不足”，support_field 指向该空字段，support_index 为 null；
+6. 每条 claim 只能选择一个卡片字段原子，不得使用模型常识补充建议；
+7. 如果知识完全无法回答问题，返回 {"claims": []}。"""
 
 
 def extraction_user_prompt(source_name: str, locator: str, content: str) -> str:

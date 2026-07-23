@@ -1,11 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ops-knowledge-studio"
-version = "1.0.0"
+version = "1.1.0"
 description = "DeepSeek-powered operations knowledge engineering and governance platform"
 requires-python = ">=3.10"
 dependencies = [
   "pypdf>=6.14,<7",
 ]
+
+[project.scripts]
+ops-knowledge-studio = "knowledge_platform.cli:main"
 
 [project.optional-dependencies]
 ocr = [
@@ -16,3 +23,27 @@ ocr = [
 
 [tool.unittest]
 start-directory = "tests"
+
+[tool.setuptools.packages.find]
+include = [
+  "harness",
+  "harness.*",
+  "knowledge_platform",
+  "knowledge_platform.*",
+]
+exclude = [
+  "artifacts*",
+  "data*",
+  "docs*",
+  "knowledge_sources*",
+  "sample_data*",
+  "tests*",
+  "tmp*",
+]
+
+[tool.setuptools.package-data]
+knowledge_platform = [
+  "static/*.css",
+  "static/*.html",
+  "static/*.js",
+]

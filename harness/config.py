@@ -102,6 +102,10 @@ class Settings:
     agent_max_steps: int
     host: str
     port: int
+    runtime_database_path: Path | None = None
+    runtime_workers: int = 2
+    runtime_max_queued_runs: int = 100
+    runtime_sync_wait_seconds: int = 900
 
     @property
     def api_configured(self) -> bool:
@@ -127,6 +131,8 @@ class Settings:
             "retrieval_min_score": self.retrieval_min_score,
             "retrieval_min_coverage": self.retrieval_min_coverage,
             "agent_max_steps": self.agent_max_steps,
+            "runtime_workers": self.runtime_workers,
+            "runtime_max_queued_runs": self.runtime_max_queued_runs,
         }
 
     @classmethod
@@ -198,7 +204,15 @@ class Settings:
             agent_max_steps=_read_int(values, "AGENT_MAX_STEPS", 4),
             host=_get(values, "PLATFORM_HOST", "127.0.0.1"),
             port=_read_int(values, "PLATFORM_PORT", 8765),
+            runtime_database_path=_resolve_path(
+                project_root, _get(values, "HARNESS_RUNTIME_DB_PATH", "data/runtime.db")
+            ),
+            runtime_workers=_read_int(values, "HARNESS_WORKERS", 2),
+            runtime_max_queued_runs=_read_int(values, "HARNESS_MAX_QUEUED_RUNS", 100),
+            runtime_sync_wait_seconds=_read_int(values, "HARNESS_SYNC_WAIT_SECONDS", 900),
         )
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+        if settings.runtime_database_path is not None:
+            settings.runtime_database_path.parent.mkdir(parents=True, exist_ok=True)
         settings.source_dir.mkdir(parents=True, exist_ok=True)
         return settings
