@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-import re
 from typing import Any
+import unicodedata
 
 from harness.api_client import APIError, DeepSeekClient
 from harness.config import Settings
@@ -48,6 +48,7 @@ class ExtractedCard:
 class KnowledgeService:
     MAX_CARDS_PER_EXTRACTION = 5
     MAX_EXTRACTION_SPLIT_DEPTH = 2
+    MAX_ANSWER_CLAIMS = 30
     ANSWER_CATEGORIES = {
         "适用条件",
         "执行步骤",
@@ -56,6 +57,28 @@ class KnowledgeService:
         "验证",
         "结论",
         "知识不足",
+    }
+    CLAIM_FIELD_CATEGORIES = {
+        "summary": "结论",
+        "scenario": "适用条件",
+        "object_name": "适用条件",
+        "applicable_versions": "适用条件",
+        "prerequisites": "适用条件",
+        "procedure_steps": "执行步骤",
+        "risks": "风险",
+        "rollback_steps": "回退",
+        "validation_steps": "验证",
+    }
+    CLAIM_FIELD_LABELS = {
+        "summary": "结论摘要",
+        "scenario": "适用场景",
+        "object_name": "适用对象",
+        "applicable_versions": "适用版本",
+        "prerequisites": "前置条件",
+        "procedure_steps": "执行步骤",
+        "risks": "风险说明",
+        "rollback_steps": "回退步骤",
+        "validation_steps": "验证步骤",
     }
 
     def __init__(
@@ -125,6 +148,8 @@ class KnowledgeService:
             self.settings.chunk_overlap,
         )
         extracted: list[ExtractedCard] = []
+        batch_seen: dict[str, int] = {}
+        batch_duplicates_skipped = 0
         self.trace.log(
             "knowledge_ingest_started",
             source_name=document.name,
@@ -176,6 +201,44 @@ class KnowledgeService:
                             else None
                         ),
                     )
+                    batch_key = self._batch_card_key(draft)
+                    if batch_key in batch_seen:
+                        existing_index = batch_seen[batch_key]
+                        existing_item = extracted[existing_index]
+                        batch_duplicates_skipped += 1
+                        score, issues = draft.quality(extracted_chunk.content)
+                        replace_existing = (
+                            evidence_span is not None,
+                            score,
+                        ) > (
+                            existing_item.evidence_span is not None,
+                            existing_item.quality_score,
+                        )
+                        if replace_existing:
+                            extracted[existing_index] = ExtractedCard(
+                                chunk=extracted_chunk,
+                                draft=draft,
+                                evidence_span=evidence_span,
+                                quality_score=score,
+                                quality_issues=issues,
+                                comparison=existing_item.comparison,
+                            )
+                        self.trace.log(
+                            "knowledge_batch_duplicate_skipped",
+                            source_name=document.name,
+                            title=draft.title,
+                            chunk_index=chunk.index,
+                            previous_chunk_index=existing_item.chunk.index,
+                            kept_chunk_index=(
+                                extracted_chunk.index
+                                if replace_existing
+                                else existing_item.chunk.index
+                            ),
+                            replaced_existing=replace_existing,
+                            fingerprint=batch_key,
+                        )
+                        continue
+                    batch_seen[batch_key] = len(extracted)
                     score, issues = draft.quality(extracted_chunk.content)
                     comparison = self._compare(draft)
                     extracted.append(
@@ -251,6 +314,7 @@ class KnowledgeService:
             "duplicate_document": False,
             "chunks": len(chunks),
             "extracted_cards": len(card_ids),
+            "batch_duplicates_skipped": batch_duplicates_skipped,
             "card_ids": card_ids,
             "pending_review": sum(
                 1
@@ -261,6 +325,42 @@ class KnowledgeService:
         }
         self.trace.log("knowledge_ingest_completed", **result)
         return result
+
+    @staticmethod
+    def _normalize_batch_value(value: Any) -> str:
+        normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+        return "".join(character for character in normalized if character.isalnum())
+
+    @classmethod
+    def _batch_card_key(cls, draft: KnowledgeCardDraft) -> str:
+        """Build a stable semantic fingerprint for cards extracted in one document."""
+
+        scalar_fields = (
+            draft.knowledge_type,
+            draft.summary,
+            draft.scenario,
+            draft.object_type,
+            draft.object_name,
+        )
+        list_fields = (
+            sorted(draft.applicable_versions),
+            sorted(draft.prerequisites),
+            draft.procedure_steps,
+            sorted(draft.risks),
+            draft.rollback_steps,
+            draft.validation_steps,
+        )
+        parts = [cls._normalize_batch_value(value) for value in scalar_fields]
+        for values in list_fields:
+            parts.append(
+                "|".join(cls._normalize_batch_value(value) for value in values)
+            )
+        if not any(parts[1:]):
+            parts.extend(
+                cls._normalize_batch_value(value)
+                for value in (draft.title, draft.evidence_quote)
+            )
+        return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
     @staticmethod
     def _split_extraction_chunk(chunk: DocumentChunk) -> list[DocumentChunk]:
@@ -408,44 +508,113 @@ class KnowledgeService:
         return [hit.to_dict() for hit in hits]
 
     def _validate_answer_claims(
-        self, payload: Any, retrieved_ids: set[int]
+        self, payload: Any, retrieved_cards: dict[int, dict[str, Any]]
     ) -> list[dict[str, Any]]:
         if not isinstance(payload, dict) or not isinstance(payload.get("claims"), list):
             raise KnowledgeServiceError("模型答案不是规定的 claims JSON 对象")
+        if len(payload["claims"]) > self.MAX_ANSWER_CLAIMS:
+            raise KnowledgeServiceError(
+                f"模型答案超过 {self.MAX_ANSWER_CLAIMS} 条结论限制"
+            )
 
         claims: list[dict[str, Any]] = []
+        seen_claims: set[tuple[str, str, int]] = set()
         for index, raw_claim in enumerate(payload["claims"], start=1):
             if not isinstance(raw_claim, dict):
                 raise KnowledgeServiceError(f"第 {index} 条结论不是 JSON 对象")
             category = str(raw_claim.get("category") or "").strip()
-            text = str(raw_claim.get("text") or "").strip()
-            raw_ids = raw_claim.get("card_ids")
             if category not in self.ANSWER_CATEGORIES:
                 raise KnowledgeServiceError(f"第 {index} 条结论类别无效: {category!r}")
-            if not text:
-                raise KnowledgeServiceError(f"第 {index} 条结论内容为空")
-            if re.search(r"(?:\[\s*)?K\d+(?:\s*\])?", text, flags=re.IGNORECASE):
+            if "text" in raw_claim or "card_ids" in raw_claim:
                 raise KnowledgeServiceError(
-                    f"第 {index} 条结论在正文中自行写入了 K 编号，无法安全渲染"
+                    f"第 {index} 条结论包含模型自由文本或旧式引用；"
+                    "可信答案只接受结构化字段指针"
                 )
-            if not isinstance(raw_ids, list) or not raw_ids:
-                raise KnowledgeServiceError(f"第 {index} 条结论缺少 card_ids")
-            card_ids: list[int] = []
-            for raw_id in raw_ids:
-                try:
-                    card_id = int(raw_id)
-                except (TypeError, ValueError) as exc:
+            raw_card_id = raw_claim.get("card_id")
+            if isinstance(raw_card_id, bool):
+                raise KnowledgeServiceError(f"第 {index} 条结论 card_id 无效")
+            try:
+                card_id = int(raw_card_id)
+            except (TypeError, ValueError) as exc:
+                raise KnowledgeServiceError(
+                    f"第 {index} 条结论包含无效 card_id: {raw_card_id!r}"
+                ) from exc
+            card = retrieved_cards.get(card_id)
+            if card is None or card.get("status") != CardStatus.APPROVED.value:
+                raise KnowledgeServiceError(
+                    f"第 {index} 条结论引用了未检索或未批准的知识卡片: K{card_id}"
+                )
+
+            support_field = str(raw_claim.get("support_field") or "").strip()
+            expected_category = self.CLAIM_FIELD_CATEGORIES.get(support_field)
+            if expected_category is None:
+                raise KnowledgeServiceError(
+                    f"第 {index} 条结论包含不可引用字段: {support_field!r}"
+                )
+            value = card.get(support_field)
+            support_index: int | None = None
+            if category == "知识不足":
+                if raw_claim.get("support_index") not in (None, ""):
                     raise KnowledgeServiceError(
-                        f"第 {index} 条结论包含无效 card_id: {raw_id!r}"
-                    ) from exc
-                if card_id not in retrieved_ids:
-                    raise KnowledgeServiceError(
-                        f"第 {index} 条结论引用了未检索或未批准的知识卡片: K{card_id}"
+                        f"第 {index} 条知识不足结论不允许 support_index"
                     )
-                if card_id not in card_ids:
-                    card_ids.append(card_id)
+                if value not in (None, "", []):
+                    raise KnowledgeServiceError(
+                        f"第 {index} 条知识不足结论指向了非空字段: {support_field}"
+                    )
+                text = (
+                    "现有已审核知识未提供"
+                    f"{self.CLAIM_FIELD_LABELS[support_field]}。"
+                )
+            else:
+                if category != expected_category:
+                    raise KnowledgeServiceError(
+                        f"第 {index} 条结论类别 {category!r} 与字段 "
+                        f"{support_field!r} 不匹配"
+                    )
+                if isinstance(value, list):
+                    raw_support_index = raw_claim.get("support_index")
+                    if isinstance(raw_support_index, bool):
+                        raise KnowledgeServiceError(
+                            f"第 {index} 条结论 support_index 无效"
+                        )
+                    try:
+                        support_index = int(raw_support_index)
+                    except (TypeError, ValueError) as exc:
+                        raise KnowledgeServiceError(
+                            f"第 {index} 条结论缺少有效 support_index"
+                        ) from exc
+                    if not 0 <= support_index < len(value):
+                        raise KnowledgeServiceError(
+                            f"第 {index} 条结论 support_index 超出字段范围"
+                        )
+                    text = str(value[support_index]).strip()
+                else:
+                    if raw_claim.get("support_index") not in (None, ""):
+                        raise KnowledgeServiceError(
+                            f"第 {index} 条标量字段不允许 support_index"
+                        )
+                    text = str(value or "").strip()
+                if not text:
+                    raise KnowledgeServiceError(
+                        f"第 {index} 条结论指向了空字段: {support_field}"
+                    )
+
+            claim_key = (category, text, card_id)
+            if claim_key in seen_claims:
+                continue
+            seen_claims.add(claim_key)
             claims.append(
-                {"category": category, "text": text, "card_ids": card_ids}
+                {
+                    "category": category,
+                    "text": text,
+                    "card_ids": [card_id],
+                    "support": {
+                        "card_id": card_id,
+                        "field": support_field,
+                        "index": support_index,
+                    },
+                }
             )
         return claims
 
@@ -488,8 +657,8 @@ class KnowledgeService:
             ANSWER_SYSTEM_PROMPT,
             answer_user_prompt(question, cards),
         )
-        retrieved_ids = {int(card["id"]) for card in cards}
-        claims = self._validate_answer_claims(payload, retrieved_ids)
+        retrieved_cards = {int(card["id"]): card for card in cards}
+        claims = self._validate_answer_claims(payload, retrieved_cards)
         if not claims:
             return {
                 "answer": "现有已审核知识不足，无法生成可信方案。",

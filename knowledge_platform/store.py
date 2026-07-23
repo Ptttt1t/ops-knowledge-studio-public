@@ -436,8 +436,15 @@ class KnowledgeStore:
             ).fetchone()
             if current is None:
                 raise StoreError(f"知识卡片不存在: {card_id}")
-            if current["status"] == CardStatus.SUPERSEDED.value:
-                raise StoreError("已被替代的知识卡片不能再次审核")
+            reviewable_statuses = {
+                CardStatus.DRAFT.value,
+                CardStatus.PENDING_REVIEW.value,
+            }
+            if current["status"] not in reviewable_statuses:
+                raise StoreError(
+                    f"仅 DRAFT 或 PENDING_REVIEW 卡片可以审核；"
+                    f"当前状态为 {current['status']}"
+                )
             if action in {"APPROVE", "SUPERSEDE"}:
                 quality_issues = json.loads(current["quality_issues"] or "[]")
                 evidence_issues = [issue for issue in quality_issues if "证据" in str(issue)]
@@ -454,6 +461,11 @@ class KnowledgeStore:
                 ).fetchone()
                 if target is None:
                     raise StoreError(f"被替代知识不存在: {supersedes_id}")
+                if target["status"] != CardStatus.APPROVED.value:
+                    raise StoreError(
+                        "只能替代 APPROVED 知识；"
+                        f"目标卡片当前状态为 {target['status']}"
+                    )
                 connection.execute(
                     "UPDATE cards SET status = ?, updated_at = ? WHERE id = ?",
                     (CardStatus.SUPERSEDED.value, now, supersedes_id),
@@ -482,6 +494,24 @@ class KnowledgeStore:
                     VALUES (?, ?, 'SUPERSEDES', 1.0, ?, ?)
                     """,
                     (card_id, supersedes_id, comment or "人工确认版本替代", now),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO audit_log (card_id, action, actor, detail, created_at)
+                    VALUES (?, 'SUPERSEDED', ?, ?, ?)
+                    """,
+                    (
+                        supersedes_id,
+                        reviewer,
+                        json.dumps(
+                            {
+                                "comment": comment,
+                                "superseded_by": card_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
                 )
                 new_status = CardStatus.APPROVED.value
             else:

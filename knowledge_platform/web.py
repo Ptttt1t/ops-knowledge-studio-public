@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from harness.api_client import APIError
 from harness.config import ConfigurationError, Settings
+from harness.run_store import RunStoreError
+from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunQueueFull
 
 from .documents import (
     DocumentError,
@@ -21,6 +23,7 @@ from .documents import (
     document_capabilities,
 )
 from .schema import CardStatus
+from .runtime_tasks import create_knowledge_runtime
 from .service import KnowledgeService, KnowledgeServiceError
 from .store import StoreError
 
@@ -29,6 +32,11 @@ MAX_REQUEST_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 CARD_DETAIL_PATTERN = re.compile(r"^/api/cards/(\d+)$")
 CARD_REVIEW_PATTERN = re.compile(r"^/api/cards/(\d+)/review$")
+RUN_DETAIL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})$")
+RUN_EVENTS_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/events$")
+RUN_CANCEL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/cancel$")
+RUN_RESUME_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/resume$")
+RUN_APPROVAL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/approvals$")
 
 
 class KnowledgeHTTPServer(ThreadingHTTPServer):
@@ -39,10 +47,16 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         address: tuple[str, int],
         service: KnowledgeService,
         static_dir: Path,
+        runtime: HarnessRuntime,
     ):
         super().__init__(address, KnowledgeRequestHandler)
         self.service = service
         self.static_dir = static_dir
+        self.runtime = runtime
+
+    def server_close(self) -> None:
+        self.runtime.stop()
+        super().server_close()
 
 
 class KnowledgeRequestHandler(BaseHTTPRequestHandler):
@@ -81,6 +95,15 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("请求体必须是 JSON 对象")
         return payload
+
+    def _run_detail(self, run_id: str) -> dict[str, Any] | None:
+        run = self.server.runtime.store.get_run(run_id)
+        if run is None:
+            return None
+        run["steps"] = self.server.runtime.store.list_steps(run_id)
+        run["latest_checkpoint"] = self.server.runtime.store.latest_checkpoint(run_id)
+        run["tool_approvals"] = self.server.runtime.store.list_tool_approvals(run_id)
+        return run
 
     def _read_body(self, maximum: int, too_large_message: str) -> bytes:
         raw_length = self.headers.get("Content-Length", "0")
@@ -145,10 +168,14 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             DocumentError,
             KnowledgeServiceError,
             StoreError,
+            RunStoreError,
+            HarnessRuntimeError,
             ValueError,
             json.JSONDecodeError,
         )
-        if isinstance(exc, expected):
+        if isinstance(exc, RunQueueFull):
+            self._send_json({"error": str(exc), "code": exc.code}, HTTPStatus.TOO_MANY_REQUESTS)
+        elif isinstance(exc, expected):
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         else:
             self._send_json(
@@ -176,11 +203,49 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                         "platform": "Ops Knowledge Studio",
                         "config": self.server.service.settings.public_config(),
                         "document_processing": document_capabilities(),
+                        "runtime": {
+                            "task_types": self.server.runtime.task_types(),
+                            "worker_count": self.server.runtime.worker_count,
+                            "max_queued_runs": self.server.runtime.max_queued_runs,
+                        },
                     }
                 )
                 return
             if path == "/api/stats":
                 self._send_json(self.server.service.stats())
+                return
+            if path == "/api/runs":
+                query = parse_qs(parsed.query)
+                status = query.get("status", [None])[0]
+                limit = int(query.get("limit", ["100"])[0])
+                self._send_json(
+                    {"runs": self.server.runtime.store.list_runs(status=status, limit=limit)}
+                )
+                return
+            run_match = RUN_DETAIL_PATTERN.match(path)
+            if run_match:
+                run = self._run_detail(run_match.group(1))
+                if run is None:
+                    self._send_json({"error": "Run not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(run)
+                return
+            events_match = RUN_EVENTS_PATTERN.match(path)
+            if events_match:
+                run_id = events_match.group(1)
+                if self.server.runtime.store.get_run(run_id) is None:
+                    self._send_json({"error": "Run not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                query = parse_qs(parsed.query)
+                after_id = int(query.get("after_id", ["0"])[0])
+                limit = int(query.get("limit", ["200"])[0])
+                self._send_json(
+                    {
+                        "events": self.server.runtime.store.list_events(
+                            run_id, after_id=after_id, limit=limit
+                        )
+                    }
+                )
                 return
             if path == "/api/cards":
                 query = parse_qs(parsed.query)
@@ -207,9 +272,20 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/ingest-file":
                 filename, file_payload = self._read_upload()
                 saved_path = self._save_upload(filename, file_payload)
-                result = self.server.service.ingest_file(
-                    saved_path, source_name=filename
-                )
+                try:
+                    result = self.server.service.ingest_file(
+                        saved_path, source_name=filename
+                    )
+                except Exception:
+                    try:
+                        saved_path.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        self.server.service.trace.log(
+                            "knowledge_upload_cleanup_failed",
+                            path=str(saved_path),
+                            error=str(cleanup_error),
+                        )
+                    raise
                 result["upload"] = {
                     "original_name": filename,
                     "stored_path": str(saved_path),
@@ -218,6 +294,70 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.CREATED)
                 return
             payload = self._read_json()
+            if path == "/api/runs":
+                task_type = str(payload.get("task_type") or "").strip()
+                run_input = payload.get("input", {})
+                budget = payload.get("budget")
+                if not isinstance(run_input, dict):
+                    raise ValueError("Run input must be a JSON object")
+                if budget is not None and not isinstance(budget, dict):
+                    raise ValueError("Run budget must be a JSON object")
+                idempotency_key = self.headers.get("Idempotency-Key", "").strip()
+                if not idempotency_key:
+                    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+                if len(idempotency_key) > 256:
+                    raise ValueError("Idempotency-Key must be at most 256 characters")
+                run, created = self.server.runtime.submit(
+                    task_type,
+                    run_input,
+                    budget=budget,
+                    idempotency_key=idempotency_key or None,
+                )
+                self._send_json(
+                    {
+                        "run": run,
+                        "created": created,
+                        "poll_url": f"/api/runs/{run['id']}",
+                        "events_url": f"/api/runs/{run['id']}/events",
+                    },
+                    HTTPStatus.ACCEPTED if created else HTTPStatus.OK,
+                )
+                return
+            cancel_match = RUN_CANCEL_PATTERN.match(path)
+            if cancel_match:
+                run = self.server.runtime.cancel(cancel_match.group(1))
+                if run is None:
+                    self._send_json({"error": "Run not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json({"run": run})
+                return
+            resume_match = RUN_RESUME_PATTERN.match(path)
+            if resume_match:
+                run = self.server.runtime.resume(resume_match.group(1))
+                if run is None:
+                    self._send_json({"error": "Run not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json({"run": run}, HTTPStatus.ACCEPTED)
+                return
+            approval_match = RUN_APPROVAL_PATTERN.match(path)
+            if approval_match:
+                run = self.server.runtime.decide_tool_approval(
+                    approval_match.group(1),
+                    str(payload.get("tool_name") or ""),
+                    decision=str(payload.get("decision") or ""),
+                    actor=str(payload.get("actor") or ""),
+                    comment=str(payload.get("comment") or ""),
+                )
+                if run is None:
+                    self._send_json({"error": "Run not found"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(
+                        {"run": run},
+                        HTTPStatus.ACCEPTED
+                        if run["status"] == "QUEUED"
+                        else HTTPStatus.OK,
+                    )
+                return
             if path == "/api/ingest-text":
                 result = self.server.service.ingest_text(
                     source_name=str(payload.get("source_name", "")),
@@ -268,9 +408,15 @@ def create_server(
     *,
     host: str,
     port: int,
+    runtime: HarnessRuntime | None = None,
 ) -> KnowledgeHTTPServer:
     static_dir = Path(__file__).resolve().parent / "static"
-    return KnowledgeHTTPServer((host, port), service, static_dir)
+    instance = runtime or create_knowledge_runtime(
+        service,
+        worker_count=service.settings.runtime_workers,
+        max_queued_runs=service.settings.runtime_max_queued_runs,
+    )
+    return KnowledgeHTTPServer((host, port), service, static_dir, instance)
 
 
 def serve(settings: Settings, service: KnowledgeService | None = None) -> None:

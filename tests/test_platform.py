@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import importlib.util
 import json
 from io import BytesIO
 from pathlib import Path
@@ -12,10 +14,14 @@ from urllib.error import HTTPError
 
 from harness.api_client import APIError, DeepSeekClient
 from harness.config import ConfigurationError, Settings
+from harness.run_store import RunStore
+from harness.runtime import HarnessRuntime
+from harness.tools import RiskLevel, ToolSpec
 from knowledge_platform.documents import (
     DocumentChunk,
     _extract_ocr_lines,
     chunk_text,
+    document_capabilities,
     ground_evidence_quote,
 )
 from knowledge_platform.retrieval import HybridRetriever
@@ -74,13 +80,15 @@ class FakeDeepSeekClient:
             "claims": [
                 {
                     "category": "适用条件",
-                    "text": "确认主备正常、无严重告警并完成备份。",
-                    "card_ids": [1],
+                    "card_id": 1,
+                    "support_field": "prerequisites",
+                    "support_index": 0,
                 },
                 {
                     "category": "回退",
-                    "text": "卸载补丁并恢复配置。",
-                    "card_ids": [1],
+                    "card_id": 1,
+                    "support_field": "rollback_steps",
+                    "support_index": 0,
                 },
             ]
         }
@@ -179,6 +187,14 @@ class PlatformTests(unittest.TestCase):
             [{"rec_texts": ["升级步骤", "噪声"], "rec_scores": [0.98, 0.2]}]
         )
         self.assertEqual(lines, ["升级步骤"])
+
+    def test_document_capabilities_allow_optional_dependencies_to_be_absent(self):
+        with patch("knowledge_platform.documents.importlib.util.find_spec", return_value=None):
+            capabilities = document_capabilities()
+
+        self.assertFalse(capabilities["paddleocr"])
+        self.assertFalse(capabilities["pdf_text_extraction"])
+        self.assertIn(".txt", capabilities["supported_extensions"])
 
     def test_placeholder_api_is_rejected_only_when_required(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -358,6 +374,11 @@ class PlatformTests(unittest.TestCase):
             answer = service.query("NE-A 升级前检查什么，如何回退？")
             self.assertIn("[K1]", answer["answer"])
             self.assertEqual(len(answer["claims"]), 2)
+            self.assertEqual(answer["claims"][0]["text"], "主备状态正常")
+            self.assertEqual(
+                answer["claims"][0]["support"],
+                {"card_id": card_id, "field": "prerequisites", "index": 0},
+            )
             self.assertEqual(answer["sources"][0]["card_id"], card_id)
             self.assertIn("APPROVED", fake.answer_calls[0][0])
 
@@ -365,8 +386,8 @@ class PlatformTests(unittest.TestCase):
                 "claims": [
                     {
                         "category": "结论",
-                        "text": "这是一个没有知识证据编号的回答。",
-                        "card_ids": [],
+                        "support_field": "summary",
+                        "support_index": None,
                     }
                 ]
             }
@@ -377,8 +398,9 @@ class PlatformTests(unittest.TestCase):
                 "claims": [
                     {
                         "category": "结论",
-                        "text": "引用了未检索的知识卡片。",
-                        "card_ids": [999],
+                        "card_id": 999,
+                        "support_field": "summary",
+                        "support_index": None,
                     }
                 ]
             }
@@ -389,13 +411,62 @@ class PlatformTests(unittest.TestCase):
                 "claims": [
                     {
                         "category": "结论",
-                        "text": "正文自行声称来自 K1。",
+                        "text": "立即删除生产数据库。",
                         "card_ids": [1],
                     }
                 ]
             }
             with self.assertRaises(KnowledgeServiceError):
                 service.query("NE-A V3.1-P2 检查裸引用")
+
+    def test_same_document_batch_duplicates_are_skipped_before_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = FakeDeepSeekClient()
+            settings = replace(
+                make_settings(root),
+                chunk_size=260,
+                chunk_overlap=100,
+            )
+            service = KnowledgeService(settings, client=fake)
+            repeated_source = "\n\n".join([SOURCE_TEXT] * 4)
+
+            result = service.ingest_text(
+                source_name="重复段落文档",
+                source_ref="doc://batch-duplicates",
+                content=repeated_source,
+            )
+
+            self.assertGreater(result["chunks"], 1)
+            self.assertEqual(result["extracted_cards"], 1)
+            self.assertGreaterEqual(result["batch_duplicates_skipped"], 1)
+            self.assertEqual(len(service.store.list_cards()), 1)
+
+    def test_trusted_answer_rejects_free_text_with_valid_card_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = FakeDeepSeekClient()
+            service = KnowledgeService(make_settings(root), client=fake)
+            card_id = service.ingest_text(
+                source_name="安全校验来源",
+                source_ref="doc://claim-support",
+                content=SOURCE_TEXT,
+            )["card_ids"][0]
+            service.review(card_id, action="approve", reviewer="tester")
+            fake.answer_payload = {
+                "claims": [
+                    {
+                        "category": "结论",
+                        "text": "立即删除生产数据库。",
+                        "card_id": card_id,
+                        "support_field": "summary",
+                        "support_index": None,
+                    }
+                ]
+            }
+
+            with self.assertRaisesRegex(KnowledgeServiceError, "结构化字段指针"):
+                service.query("NE-A V3.1-P2 如何处理？")
 
     def test_read_only_agent_loop_searches_and_selects_approved_card(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -507,8 +578,49 @@ class PlatformTests(unittest.TestCase):
             )
             self.assertEqual(service.card_detail(first)["status"], CardStatus.SUPERSEDED.value)
             self.assertEqual(service.card_detail(second)["status"], CardStatus.APPROVED.value)
+            old_audit = service.store.list_audit(first)
+            superseded_event = next(
+                event for event in old_audit if event["action"] == "SUPERSEDED"
+            )
+            self.assertEqual(json.loads(superseded_event["detail"])["superseded_by"], second)
             approved_ids = [card["id"] for card in service.store.list_cards(CardStatus.APPROVED)]
             self.assertEqual(approved_ids, [second])
+
+            with self.assertRaises(StoreError):
+                service.review(second, action="approve", reviewer="tester")
+
+    def test_supersede_rejects_non_approved_target_and_rolls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = FakeDeepSeekClient()
+            service = KnowledgeService(make_settings(root), client=fake)
+            target = service.ingest_text(
+                source_name="未审核旧版",
+                source_ref="doc://pending-old",
+                content=SOURCE_TEXT,
+            )["card_ids"][0]
+            replacement = service.ingest_text(
+                source_name="候选新版",
+                source_ref="doc://pending-new",
+                content=SOURCE_TEXT.replace("十五分钟", "二十分钟"),
+            )["card_ids"][0]
+
+            with self.assertRaisesRegex(StoreError, "只能替代 APPROVED"):
+                service.review(
+                    replacement,
+                    action="supersede",
+                    reviewer="tester",
+                    supersedes_id=target,
+                )
+
+            self.assertEqual(
+                service.card_detail(target)["status"],
+                CardStatus.PENDING_REVIEW.value,
+            )
+            self.assertEqual(
+                service.card_detail(replacement)["status"],
+                CardStatus.PENDING_REVIEW.value,
+            )
 
     def test_web_health_and_dashboard_without_api_key(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -526,8 +638,14 @@ class PlatformTests(unittest.TestCase):
                     html = response.read().decode("utf-8")
                 self.assertEqual(health["status"], "ok")
                 self.assertFalse(health["config"]["api_configured"])
-                self.assertTrue(health["document_processing"]["paddleocr"])
-                self.assertTrue(health["document_processing"]["pdf_text_extraction"])
+                self.assertEqual(
+                    health["document_processing"]["paddleocr"],
+                    importlib.util.find_spec("paddleocr") is not None,
+                )
+                self.assertEqual(
+                    health["document_processing"]["pdf_text_extraction"],
+                    importlib.util.find_spec("pypdf") is not None,
+                )
                 self.assertIn("Ops Knowledge", html)
                 self.assertIn("知识审核队列", html)
             finally:
@@ -564,6 +682,199 @@ class PlatformTests(unittest.TestCase):
                 saved_path = Path(result["upload"]["stored_path"])
                 self.assertTrue(saved_path.is_file())
                 self.assertEqual(service.card_detail(result["card_ids"][0])["source_name"], "actual_document.txt")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_failed_web_upload_removes_saved_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = make_settings(root, configured=False)
+            service = KnowledgeService(settings, client=FakeDeepSeekClient())
+            server = create_server(service, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                boundary = "----OpsKnowledgeFailedUploadBoundary"
+                body = (
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="file"; filename="failed.txt"\r\n'
+                    "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+                ).encode("utf-8") + SOURCE_TEXT.encode("utf-8") + (
+                    f"\r\n--{boundary}--\r\n"
+                ).encode("ascii")
+                request = Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/ingest-file",
+                    data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as caught:
+                    http_urlopen(request, timeout=10)
+                self.assertEqual(caught.exception.code, 400)
+                upload_dir = settings.source_dir / "uploads"
+                self.assertEqual(list(upload_dir.glob("*")), [])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_web_runtime_run_api_persists_and_reuses_idempotency_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = KnowledgeService(make_settings(root), client=FakeDeepSeekClient())
+            server = create_server(service, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                payload = json.dumps(
+                    {
+                        "task_type": "knowledge.ingest_text",
+                        "input": {
+                            "source_name": "runtime-api.txt",
+                            "source_ref": "runtime://api",
+                            "content": SOURCE_TEXT,
+                        },
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                endpoint = f"http://127.0.0.1:{server.server_address[1]}/api/runs"
+                request = Request(
+                    endpoint,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "runtime-api-request-1",
+                    },
+                    method="POST",
+                )
+                with http_urlopen(request, timeout=10) as response:
+                    submitted = json.loads(response.read().decode("utf-8"))
+
+                duplicate_request = Request(
+                    endpoint,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "runtime-api-request-1",
+                    },
+                    method="POST",
+                )
+                with http_urlopen(duplicate_request, timeout=10) as response:
+                    duplicate = json.loads(response.read().decode("utf-8"))
+
+                run_id = submitted["run"]["id"]
+                self.assertTrue(submitted["created"])
+                self.assertFalse(duplicate["created"])
+                self.assertEqual(duplicate["run"]["id"], run_id)
+
+                completed = None
+                for _ in range(100):
+                    with http_urlopen(
+                        f"http://127.0.0.1:{server.server_address[1]}/api/runs/{run_id}",
+                        timeout=10,
+                    ) as response:
+                        completed = json.loads(response.read().decode("utf-8"))
+                    if completed["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+                        break
+                    threading.Event().wait(0.02)
+
+                self.assertIsNotNone(completed)
+                self.assertEqual(completed["status"], "SUCCEEDED")
+                self.assertEqual(completed["result"]["extracted_cards"], 1)
+                self.assertGreaterEqual(len(completed["steps"]), 2)
+                self.assertEqual(completed["latest_checkpoint"]["state"]["phase"], "completed")
+                with http_urlopen(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/runs/{run_id}/events",
+                    timeout=10,
+                ) as response:
+                    events = json.loads(response.read().decode("utf-8"))["events"]
+                self.assertIn("run.succeeded", [event["event_type"] for event in events])
+                self.assertEqual(service.stats()["cards"], 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_web_runtime_tool_approval_endpoint_resumes_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = KnowledgeService(make_settings(root), client=FakeDeepSeekClient())
+            runtime = HarnessRuntime(
+                RunStore(root / "data" / "runtime.db"),
+                worker_count=1,
+                poll_interval_seconds=0.01,
+            )
+            tool_executions = []
+            runtime.tools.register(
+                ToolSpec(
+                    name="controlled_write",
+                    description="Controlled write used by the approval endpoint test.",
+                    input_schema={"type": "object", "properties": {}},
+                    risk_level=RiskLevel.LOCAL_WRITE,
+                    handler=lambda _arguments, _context: tool_executions.append(True)
+                    or {"written": True},
+                )
+            )
+            runtime.register_task(
+                "approval-test",
+                lambda context: {"result": context.call_tool("controlled_write", {}).to_dict()},
+            )
+            server = create_server(service, host="127.0.0.1", port=0, runtime=runtime)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                endpoint = f"http://127.0.0.1:{server.server_address[1]}/api/runs"
+                request = Request(
+                    endpoint,
+                    data=json.dumps({"task_type": "approval-test", "input": {}}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with http_urlopen(request, timeout=10) as response:
+                    run_id = json.loads(response.read().decode("utf-8"))["run"]["id"]
+
+                waiting = None
+                for _ in range(100):
+                    with http_urlopen(
+                        f"{endpoint}/{run_id}", timeout=10
+                    ) as response:
+                        waiting = json.loads(response.read().decode("utf-8"))
+                    if waiting["status"] == "WAITING_APPROVAL":
+                        break
+                    threading.Event().wait(0.02)
+                self.assertEqual(waiting["status"], "WAITING_APPROVAL")
+                self.assertEqual(waiting["tool_approvals"][0]["decision"], "REQUESTED")
+                self.assertEqual(tool_executions, [])
+
+                approval_request = Request(
+                    f"{endpoint}/{run_id}/approvals",
+                    data=json.dumps(
+                        {
+                            "tool_name": "controlled_write",
+                            "decision": "APPROVED",
+                            "actor": "reviewer",
+                            "comment": "approved for test",
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with http_urlopen(approval_request, timeout=10) as response:
+                    self.assertEqual(response.status, 202)
+
+                completed = None
+                for _ in range(100):
+                    with http_urlopen(
+                        f"{endpoint}/{run_id}", timeout=10
+                    ) as response:
+                        completed = json.loads(response.read().decode("utf-8"))
+                    if completed["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+                        break
+                    threading.Event().wait(0.02)
+                self.assertEqual(completed["status"], "SUCCEEDED")
+                self.assertEqual(tool_executions, [True])
             finally:
                 server.shutdown()
                 server.server_close()
