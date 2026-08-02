@@ -6,10 +6,15 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from harness.api_client import APIError
+from harness.api_client import APIError, DeepSeekClient
 from harness.config import ConfigurationError, Settings
 from harness.run_store import RunStoreError
 from harness.runtime import HarnessRuntimeError
+
+from change_management.cases import DEFAULT_CASE_ID, list_change_cases
+from change_management.runtime_tasks import create_change_runtime
+from change_management.service import DemoChangeError, DemoChangeService
+from change_management.store import ChangeStoreError
 
 from .documents import DocumentError
 from .schema import CardStatus
@@ -99,6 +104,27 @@ def build_parser() -> argparse.ArgumentParser:
         "regrade",
         help="不调用 API，按当前证据回定位和分类质量规则重新评分已有卡片",
     )
+    demo_change = subparsers.add_parser(
+        "demo-change",
+        help="运行离线云网络变更单生成、审批、模拟执行和反馈闭环",
+    )
+    demo_change.add_argument("--actor", default="demo-operator", help="演示请求人与审批人")
+    demo_change.add_argument(
+        "--case-id",
+        choices=[item["case_id"] for item in list_change_cases()],
+        default=DEFAULT_CASE_ID,
+        help="选择要生成和执行的合成云网络案例",
+    )
+    demo_change.add_argument(
+        "--use-model",
+        action="store_true",
+        help="尝试使用DeepSeek润色标题和摘要；失败时自动回退离线模板",
+    )
+    demo_change.add_argument(
+        "--inject-failure",
+        choices=["route-switch-az-a", "route-switch-az-b"],
+        help="可选：在指定步骤注入验证失败以演示自动回退",
+    )
     run_submit = subparsers.add_parser(
         "run-submit", help="Submit a durable Harness task and wait for its result"
     )
@@ -147,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.load(args.env)
-        service = KnowledgeService(settings)
+        service = None if command == "demo-change" else KnowledgeService(settings)
 
         if command == "init":
             _print_json(
@@ -212,6 +238,181 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(service.stats())
         elif command == "regrade":
             _print_json(service.regrade_existing_cards())
+        elif command == "demo-change":
+            workspace = DemoChangeService.create_workspace(settings.project_root)
+            demo_service = DemoChangeService(
+                workspace,
+                model_client=DeepSeekClient(settings) if args.use_model else None,
+                case_id=args.case_id,
+            )
+            runtime = create_change_runtime(demo_service)
+            generation_run_id = ""
+            execution_run_id = ""
+            try:
+                submitted, _ = runtime.submit(
+                    "change.generate_demo",
+                    {"requested_by": args.actor, "use_model": args.use_model},
+                    idempotency_key=f"{workspace.name}:generate",
+                )
+                generation_run_id = submitted["id"]
+                generated = runtime.wait(
+                    generation_run_id,
+                    timeout_seconds=settings.runtime_sync_wait_seconds,
+                )
+                if generated is None or generated["status"] != "SUCCEEDED":
+                    raise DemoChangeError(f"变更单生成失败: {generated}")
+                package = generated["result"]
+                ticket = package["ticket"]
+                print("\n=== 合成云网络变更单：不连接任何真实云 ===")
+                print(f"变更单: {ticket['ticket_id']}  状态: {ticket['status']}")
+                print(f"标题: {ticket['title']}")
+                print(f"计划哈希: {ticket['plan_hash']}")
+                print(f"环境快照: v{ticket['environment_snapshot_version']} {ticket['environment_snapshot_hash']}")
+                print(f"知识证据: {', '.join('K' + str(item['card_id']) for item in ticket['knowledge_references'])}")
+                print(
+                    "执行顺序: "
+                    f"{ticket['plan_steps'][0]['route_table_id']} 灰度 -> 验证 -> "
+                    f"{ticket['plan_steps'][1]['route_table_id']} -> 验证"
+                )
+                failed_gates = [
+                    item for item in package["validations"]
+                    if item["hard_gate"] and item["status"] != "PASS"
+                ]
+                print(
+                    f"前置校验: {len(package['validations']) - len(failed_gates)} PASS / "
+                    f"{len(failed_gates)} FAIL"
+                )
+                print(f"工件目录: {workspace}")
+                if ticket["status"] == "BLOCKED":
+                    demo_service.write_runtime_events(
+                        [
+                            {
+                                "run_id": generation_run_id,
+                                "events": runtime.store.list_events(generation_run_id),
+                            }
+                        ]
+                    )
+                    _print_json({"blocked": True, "package": package})
+                    return 2
+
+                execution, _ = runtime.submit(
+                    "change.execute_demo",
+                    {
+                        "ticket_id": ticket["ticket_id"],
+                        "actor": args.actor,
+                        "inject_failure": args.inject_failure or "",
+                    },
+                    idempotency_key=f"{workspace.name}:execute",
+                )
+                execution_run_id = execution["id"]
+                waiting = runtime.wait(
+                    execution_run_id,
+                    timeout_seconds=settings.runtime_sync_wait_seconds,
+                )
+                if waiting is None or waiting["status"] != "WAITING_APPROVAL":
+                    raise DemoChangeError(f"执行任务未进入审批门禁: {waiting}")
+
+                confirmation = f"APPROVE {ticket['ticket_id']}"
+                print("\n审批后将只修改本次演示目录内的模拟SQLite网络状态。")
+                print(f"如要批准，请完整输入：{confirmation}")
+                try:
+                    decision = input("审批确认> ").strip()
+                except EOFError:
+                    decision = ""
+                if decision != confirmation:
+                    runtime.decide_tool_approval(
+                        execution_run_id,
+                        demo_service.TOOL_NAME,
+                        decision="REJECTED",
+                        actor=args.actor,
+                        comment="未输入精确批准串，演示执行已拒绝",
+                    )
+                    rejected = demo_service.reject_ticket(
+                        ticket["ticket_id"],
+                        actor=args.actor,
+                        comment="未输入精确批准串",
+                    )
+                    demo_service.write_generation_reports(ticket["ticket_id"])
+                    demo_service.write_runtime_events(
+                        [
+                            {
+                                "run_id": generation_run_id,
+                                "events": runtime.store.list_events(generation_run_id),
+                            },
+                            {
+                                "run_id": execution_run_id,
+                                "events": runtime.store.list_events(execution_run_id),
+                            },
+                        ]
+                    )
+                    _print_json(
+                        {
+                            "approved": False,
+                            "ticket": rejected,
+                            "workspace": str(workspace),
+                        }
+                    )
+                    return 3
+
+                runtime.decide_tool_approval(
+                    execution_run_id,
+                    demo_service.TOOL_NAME,
+                    decision="APPROVED",
+                    actor=args.actor,
+                    comment="已核对合成变更单、计划哈希和环境快照",
+                )
+                completed = runtime.wait(
+                    execution_run_id,
+                    timeout_seconds=settings.runtime_sync_wait_seconds,
+                )
+                events = [
+                    {
+                        "run_id": generation_run_id,
+                        "events": runtime.store.list_events(generation_run_id),
+                    },
+                    {
+                        "run_id": execution_run_id,
+                        "events": runtime.store.list_events(execution_run_id),
+                    },
+                ]
+                demo_service.write_runtime_events(events)
+                if completed is None or completed["status"] != "SUCCEEDED":
+                    raise DemoChangeError(f"变更执行Run失败: {completed}")
+                final_package = demo_service.ticket_package(ticket["ticket_id"])
+                print("\n=== 闭环完成 ===")
+                print(f"变更结果: {final_package['ticket']['status']}")
+                print(
+                    "知识候选: "
+                    f"K{final_package['feedback']['knowledge_candidate_id']} "
+                    "PENDING_REVIEW"
+                )
+                print(f"完整工件: {workspace}")
+                _print_json(
+                    {
+                        "approved": True,
+                        "run_id": execution_run_id,
+                        "run_status": completed["status"],
+                        "ticket_id": ticket["ticket_id"],
+                        "ticket_status": final_package["ticket"]["status"],
+                        "knowledge_candidate": {
+                            "card_id": final_package["feedback"]["knowledge_candidate_id"],
+                            "status": "PENDING_REVIEW",
+                        },
+                        "artifacts": {
+                            name: str(workspace / name)
+                            for name in [
+                                "change_order.md",
+                                "change_package.json",
+                                "validation_report.json",
+                                "execution_report.json",
+                                "feedback.md",
+                                "runtime_events.json",
+                            ]
+                        },
+                    }
+                )
+            finally:
+                runtime.stop()
         elif command == "run-submit":
             runtime = create_knowledge_runtime(
                 service,
@@ -324,6 +525,8 @@ def main(argv: list[str] | None = None) -> int:
         StoreError,
         RunStoreError,
         HarnessRuntimeError,
+        DemoChangeError,
+        ChangeStoreError,
         OSError,
         ValueError,
     ) as exc:

@@ -33,7 +33,7 @@ DRAFT / PENDING_REVIEW
 - SQLite：知识生命周期、关系和审计日志；
 - 本地混合检索：英数字词项、中文二元词和字段权重，无需额外向量数据库；
 - Human-in-the-loop：正式知识必须人工审核；
-- 本地 Web 工作台：采集、审核、查询和知识库管理。
+- 本地 Web 工作台：采集、审核、查询、知识库管理和云网络变更闭环演示。
 
 这条路线先验证真正有差异的治理闭环，同时保留以后接入 RAGFlow、Neo4j、向量模型或规则引擎的空间。
 
@@ -104,6 +104,8 @@ python run.py serve
 网页提供：
 
 - 概览：文档、卡片、状态和质量统计；
+- 变更方案生成：在原方案页面统一完成知识辅助研判、环境感知、知识复用、方案生成、硬校验和人工审批；
+- 变更结果：独立展示双 AZ 执行拓扑、验证、自动回退、完整审计和反馈沉淀；
 - 知识采集：上传多种实际文档或粘贴原文，并运行抽取、质量校验和知识比较；
 - 审核队列：批准、驳回或以新知识替代旧知识；
 - 可信方案：只使用 APPROVED 卡片，并返回来源证据；
@@ -111,7 +113,41 @@ python run.py serve
 
 启动平台不需要 API；只有知识抽取和可信方案生成会检查密钥。
 
+进入左侧“变更方案生成”后，可从 5 个 `APPROVED` 合成历史案例中选择一个实验：专线路由主备切换、NAT 网关蓝绿切换、云防火墙维护切流、跨区域灾备链路启用或合作方 VPN 外联迁移。点击“生成变更单”后，页面会在校验完成时停在审批门禁；输入当前页面提示的精确确认串 `APPROVE <变更单号>` 后才会修改隔离模拟器。执行结束后，从“变更结果”查看前后态与审计，并可用“送入知识审核队列”把带日志证据的候选卡片写入当前知识平台。新卡片保持 `PENDING_REVIEW`，仍需在“知识审核队列”人工处理。
+
 ## 3. 使用 CLI
+
+### 云网络变更单最小闭环（完全离线）
+
+无需 API Key，可直接运行明确标记为合成数据的云网络变更演示。默认使用专线路由案例：
+
+```powershell
+python run.py demo-change
+```
+
+也可以指定任一案例，例如 NAT 网关蓝绿切换：
+
+```powershell
+python run.py demo-change --case-id nat-egress-bluegreen
+```
+
+可选 `case-id`：`dc-route-failover`、`nat-egress-bluegreen`、`firewall-cluster-maintenance`、`cross-region-dr-activation`、`partner-extranet-migration`。
+
+命令会生成变更单、检索演示用 `APPROVED` 知识、执行硬性校验，然后停在人工审批门禁。只有完整输入：
+
+```text
+APPROVE CHG-DEMO-ROUTE-001
+```
+
+确认串中的单号会随所选案例变化（例如 NAT 案例为 `APPROVE CHG-DEMO-NAT-002`）。批准后只会修改本次演示目录内的 SQLite 模拟网络。成功后会完成双 AZ 灰度切换、有效下一跳与业务指标验证，并生成一张 `PENDING_REVIEW` 执行经验候选；不会连接真实云、CMDB、监控或工单系统。
+
+可选演示自动回退：
+
+```powershell
+python run.py demo-change --inject-failure route-switch-az-b
+```
+
+配置 DeepSeek 后，可用 `--use-model` 仅润色标题和摘要；资源、动作、阈值和回退仍由确定性规则控制，模型不可用时自动回退离线模板。完整字段、安全边界和工件说明见 [云网络变更闭环演示](docs/change-demo.md)。
 
 导入示例 SOP：
 
@@ -212,6 +248,12 @@ ops-knowledge-studio-public/
 │  ├─ runtime.py                # Worker、预算、取消、恢复与审批
 │  ├─ tools.py                  # 工具注册、Schema 与风险等级
 │  └─ trace.py                  # JSONL 运行轨迹
+├─ change_management/
+│  ├─ schema.py                 # 变更单、步骤、验证、执行与反馈模型
+│  ├─ store.py                  # 变更状态机、校验和审计SQLite存储
+│  ├─ simulator.py              # 隔离的云网络路由表模拟器与操作日志
+│  ├─ service.py                # 生成、校验、执行、回退、报告和知识反馈
+│  └─ runtime_tasks.py          # change.generate_demo / change.execute_demo
 ├─ knowledge_platform/
 │  ├─ documents.py              # 文档读取与分片
 │  ├─ schema.py                 # 知识卡片与状态模型

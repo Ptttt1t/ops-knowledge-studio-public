@@ -106,6 +106,7 @@ class RunStore:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
             tool_name TEXT NOT NULL,
+            request_digest TEXT NOT NULL DEFAULT '',
             decision TEXT NOT NULL,
             actor TEXT NOT NULL,
             comment TEXT NOT NULL,
@@ -114,8 +115,20 @@ class RunStore:
         """
         with self.connect() as connection:
             connection.executescript(schema)
+            approval_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(tool_approvals)").fetchall()
+            }
+            if "request_digest" not in approval_columns:
+                connection.execute(
+                    "ALTER TABLE tool_approvals ADD COLUMN request_digest TEXT NOT NULL DEFAULT ''"
+                )
             connection.execute(
                 "INSERT OR IGNORE INTO runtime_schema_migrations (version, applied_at) VALUES (1, ?)",
+                (utc_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO runtime_schema_migrations (version, applied_at) VALUES (2, ?)",
                 (utc_now(),),
             )
 
@@ -280,20 +293,35 @@ class RunStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def is_tool_approved(self, run_id: str, tool_name: str) -> bool:
+    def is_tool_approved(
+        self,
+        run_id: str,
+        tool_name: str,
+        *,
+        request_digest: str | None = None,
+    ) -> bool:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT decision FROM tool_approvals
+                SELECT decision, request_digest FROM tool_approvals
                 WHERE run_id = ? AND tool_name = ?
                 ORDER BY id DESC LIMIT 1
                 """,
                 (run_id, tool_name),
             ).fetchone()
-        return row is not None and str(row["decision"]) == "APPROVED"
+        if row is None or str(row["decision"]) != "APPROVED":
+            return False
+        if request_digest is None:
+            return True
+        return str(row["request_digest"] or "") == request_digest
 
     def request_tool_approval(
-        self, run_id: str, tool_name: str, *, reason: str
+        self,
+        run_id: str,
+        tool_name: str,
+        *,
+        reason: str,
+        request_digest: str = "",
     ) -> dict[str, Any] | None:
         normalized_name = tool_name.strip()
         if not normalized_name:
@@ -315,10 +343,11 @@ class RunStore:
             now = utc_now()
             connection.execute(
                 """
-                INSERT INTO tool_approvals (run_id, tool_name, decision, actor, comment, created_at)
-                VALUES (?, ?, 'REQUESTED', 'runtime', ?, ?)
+                INSERT INTO tool_approvals
+                    (run_id, tool_name, request_digest, decision, actor, comment, created_at)
+                VALUES (?, ?, ?, 'REQUESTED', 'runtime', ?, ?)
                 """,
-                (run_id, normalized_name, reason, now),
+                (run_id, normalized_name, request_digest.strip(), reason, now),
             )
             connection.execute(
                 "UPDATE runs SET status = 'WAITING_APPROVAL', updated_at = ? WHERE id = ?",
@@ -328,7 +357,10 @@ class RunStore:
                 connection,
                 run_id,
                 "tool.approval_requested",
-                {"tool_name": normalized_name},
+                {
+                    "tool_name": normalized_name,
+                    "request_digest": request_digest.strip(),
+                },
             )
         return self.get_run(run_id)
 
@@ -359,7 +391,7 @@ class RunStore:
                 raise RunStoreError("Run is not waiting for a tool approval")
             requested = connection.execute(
                 """
-                SELECT tool_name FROM tool_approvals
+                SELECT tool_name, request_digest FROM tool_approvals
                 WHERE run_id = ? AND decision = 'REQUESTED'
                 ORDER BY id DESC LIMIT 1
                 """,
@@ -370,12 +402,14 @@ class RunStore:
             now = utc_now()
             connection.execute(
                 """
-                INSERT INTO tool_approvals (run_id, tool_name, decision, actor, comment, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tool_approvals
+                    (run_id, tool_name, request_digest, decision, actor, comment, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     normalized_name,
+                    str(requested["request_digest"] or ""),
                     normalized_decision,
                     normalized_actor,
                     comment.strip(),
@@ -419,7 +453,10 @@ class RunStore:
                     "run.failed",
                     {"error_code": "TOOL_APPROVAL_REJECTED"},
                 )
-        return self.get_run(run_id)
+            decided = connection.execute(
+                "SELECT * FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._decode_run(decided) if decided is not None else None
 
     def claim_next(self) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -489,7 +526,10 @@ class RunStore:
                 (now, run_id),
             )
             self._insert_event(connection, run_id, "run.resumed", {})
-        return self.get_run(run_id)
+            resumed = connection.execute(
+                "SELECT * FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._decode_run(resumed) if resumed is not None else None
 
     def finish_run(
         self,
