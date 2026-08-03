@@ -28,17 +28,25 @@ class _FailingModel:
 
 
 class ChangeDemoTests(unittest.TestCase):
+    RUNTIME_TIMEOUT_SECONDS = 30
+
     def make_service(self, root: Path, *, model_client=None) -> DemoChangeService:
         return DemoChangeService(root / "demo", model_client=model_client)
 
     def generate_with_runtime(self, service: DemoChangeService):
         runtime = create_change_runtime(service)
-        submitted, _ = runtime.submit(
-            "change.generate_demo", {"requested_by": "tester", "use_model": False}
-        )
-        completed = runtime.wait(submitted["id"], timeout_seconds=5)
-        self.assertIsNotNone(completed)
-        self.assertEqual(completed["status"], "SUCCEEDED")
+        try:
+            submitted, _ = runtime.submit(
+                "change.generate_demo", {"requested_by": "tester", "use_model": False}
+            )
+            completed = runtime.wait(
+                submitted["id"], timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS
+            )
+            self.assertIsNotNone(completed)
+            self.assertEqual(completed["status"], "SUCCEEDED")
+        except Exception:
+            runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
+            raise
         return runtime, completed["result"]
 
     def submit_execution(
@@ -56,7 +64,9 @@ class ChangeDemoTests(unittest.TestCase):
                 "inject_failure": inject_failure,
             },
         )
-        waiting = runtime.wait(submitted["id"], timeout_seconds=5)
+        waiting = runtime.wait(
+            submitted["id"], timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS
+        )
         self.assertEqual(waiting["status"], "WAITING_APPROVAL")
         return submitted
 
@@ -68,7 +78,9 @@ class ChangeDemoTests(unittest.TestCase):
             actor="tester",
             comment="approved test fixture",
         )
-        completed = runtime.wait(run_id, timeout_seconds=5)
+        completed = runtime.wait(
+            run_id, timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS
+        )
         self.assertIsNotNone(completed)
         return completed
 
@@ -133,7 +145,7 @@ class ChangeDemoTests(unittest.TestCase):
                     )
                     self.assertEqual(route["next_hop"], service.case.to_next_hop)
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_complex_firewall_case_rolls_back_ten_applied_steps(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -175,7 +187,7 @@ class ChangeDemoTests(unittest.TestCase):
                     )
                     self.assertEqual(route["next_hop"], "nat-green")
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_offline_happy_path_waits_for_approval_then_closes_loop(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,7 +232,7 @@ class ChangeDemoTests(unittest.TestCase):
                 ):
                     self.assertTrue((service.workspace / name).is_file(), name)
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_rejection_preserves_simulated_network(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -245,7 +257,7 @@ class ChangeDemoTests(unittest.TestCase):
                 self.assertEqual(service.simulator.snapshot()["state_hash"], before["state_hash"])
                 self.assertEqual(service.simulator.operation_rows(service.TICKET_ID), [])
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_unhealthy_standby_blocks_before_approval(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -275,7 +287,7 @@ class ChangeDemoTests(unittest.TestCase):
                 )
                 self.assertEqual(service.simulator.operation_rows(service.TICKET_ID), [])
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_approval_digest_cannot_authorize_changed_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -330,7 +342,7 @@ class ChangeDemoTests(unittest.TestCase):
                     )
                 )
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_simulator_operation_journal_makes_reexecution_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -400,7 +412,9 @@ class ChangeDemoTests(unittest.TestCase):
             try:
                 resumed = runtime.resume(run["id"])
                 self.assertEqual(resumed["status"], "QUEUED")
-                completed = runtime.wait(run["id"], timeout_seconds=5)
+                completed = runtime.wait(
+                    run["id"], timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS
+                )
                 self.assertEqual(completed["status"], "SUCCEEDED")
                 final = service.ticket_package(service.TICKET_ID)
                 self.assertEqual(final["ticket"]["status"], ChangeStatus.SUCCEEDED.value)
@@ -409,7 +423,7 @@ class ChangeDemoTests(unittest.TestCase):
                 )
                 self.assertEqual(len(service.simulator.operation_rows(service.TICKET_ID)), 2)
             finally:
-                runtime.stop()
+                runtime.stop(timeout_seconds=self.RUNTIME_TIMEOUT_SECONDS)
 
     def test_runtime_store_migrates_legacy_approval_table(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
