@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
 import json
 from typing import Any, Callable, Protocol
 
@@ -26,6 +27,24 @@ class ToolExecutionContext(Protocol):
 
 
 ToolHandler = Callable[[dict[str, Any], ToolExecutionContext], Any]
+
+
+def approval_digest(name: str, arguments: dict[str, Any]) -> str:
+    """Bind an approval to one canonical tool invocation.
+
+    Only the SHA-256 digest is persisted by the runtime.  This prevents an
+    approval for one argument set from authorizing a later, modified call and
+    avoids copying potentially sensitive tool arguments into the approval log.
+    """
+
+    canonical = json.dumps(
+        {"tool": name.strip(), "arguments": arguments},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 @dataclass(frozen=True)

@@ -18,9 +18,10 @@
       </div>
       <nav>
         <button class="nav-item active" data-page="dashboard">概览</button>
+        <button class="nav-item" data-page="query">变更方案生成 <span class="nav-demo">DEMO</span></button>
+        <button class="nav-item" data-page="results">变更结果 <span id="result-count" class="nav-count">0</span></button>
         <button class="nav-item" data-page="ingest">知识采集</button>
         <button class="nav-item" data-page="review">知识审核队列 <span id="review-count" class="nav-count">0</span></button>
-        <button class="nav-item" data-page="query">可信方案</button>
         <button class="nav-item" data-page="library">知识库</button>
       </nav>
       <div class="sidebar-foot">
@@ -67,6 +68,165 @@
         </article>
       </section>
 
+      <section id="page-query" class="page">
+        <article class="change-hero">
+          <div>
+            <p class="eyebrow">TRUSTED CHANGE GENERATION</p>
+            <h2>可信变更方案生成</h2>
+            <p>在同一页面完成环境感知、已审核知识复用、风险决策、变更方案生成、硬校验与人工审批。</p>
+          </div>
+          <span class="synthetic-stamp">合成数据<br><small>不连接真实云</small></span>
+        </article>
+
+        <article class="panel case-catalog-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">SYNTHETIC CASE LIBRARY</p><h2>从知识库选择一个变更实验</h2></div>
+            <span id="change-case-count" class="tag APPROVED">正在加载…</span>
+          </div>
+          <p class="muted-copy">这些案例均为已人工批准的合成历史知识；选择后，平台会重新感知对应环境、检索证据并生成不可变计划。</p>
+          <div id="change-case-catalog" class="change-case-catalog" role="radiogroup" aria-label="合成变更案例"></div>
+        </article>
+
+        <article class="panel change-launcher">
+          <div><p class="eyebrow">NEW CHANGE PLAN</p><h2>生成一份变更方案</h2></div>
+          <label>请求人<input id="change-requester" value="demo-operator" placeholder="姓名或工号"></label>
+          <label>验证场景
+            <select id="change-failure">
+              <option value="">正常闭环</option>
+              <option value="route-switch-az-a">注入 AZ-A 验证失败并回退</option>
+              <option value="route-switch-az-b">注入 AZ-B 验证失败并回退</option>
+            </select>
+          </label>
+          <label class="checkbox-label"><input id="change-use-model" type="checkbox"> 使用 DeepSeek 润色叙述</label>
+          <button id="change-generate" class="button primary">生成变更单</button>
+        </article>
+
+        <div id="change-stages" class="change-stages" aria-label="闭环阶段"></div>
+
+        <article id="change-empty" class="panel change-empty">
+          <span>01</span>
+          <div><h2>等待生成演示变更</h2><p>点击“生成变更单”后，平台会准备合成环境并自动完成审批前的全部硬校验。</p></div>
+        </article>
+
+        <div id="change-workspace" class="change-workspace" hidden>
+          <div class="metric-grid change-metrics">
+            <article class="metric"><span>变更状态</span><strong id="change-status">—</strong><small id="change-run-state">等待任务</small></article>
+            <article class="metric warning"><span>风险评分</span><strong id="change-risk">—</strong><small>高风险 · 计划生产变更</small></article>
+            <article class="metric accent"><span>前置校验</span><strong id="change-validation-score">—</strong><small>硬门禁全部通过才可审批</small></article>
+            <article class="metric"><span>执行结果</span><strong id="change-outcome">—</strong><small id="change-network-version">模拟网络未修改</small></article>
+          </div>
+
+          <div class="change-primary-grid">
+            <article class="panel topology-panel">
+              <div class="panel-head"><div><p class="eyebrow">LIVE TOPOLOGY</p><h2>模拟网络与有效下一跳</h2></div><span id="change-network-hash" class="hash-pill">—</span></div>
+              <div id="change-topology" class="network-topology"></div>
+            </article>
+            <article class="panel ticket-panel">
+              <div class="panel-head"><div><p class="eyebrow">CHANGE ORDER</p><h2 id="change-ticket-id">正在准备…</h2></div><span id="change-risk-badge" class="tag">—</span></div>
+              <h3 id="change-ticket-title">正在感知环境并生成方案</h3>
+              <p id="change-ticket-summary" class="muted-copy"></p>
+              <dl id="change-ticket-facts" class="ticket-facts"></dl>
+              <div id="change-plan" class="plan-list"></div>
+            </article>
+          </div>
+
+          <div class="two-column change-evidence-grid">
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">APPROVED EVIDENCE</p><h2>复用的已审核知识</h2></div></div>
+              <div id="change-knowledge" class="evidence-list"></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">HARD GATES</p><h2>校验结果</h2></div><span id="change-validation-badge" class="tag">—</span></div>
+              <div id="change-validations" class="validation-list"></div>
+            </article>
+          </div>
+
+          <article id="change-approval-panel" class="panel approval-panel" hidden>
+            <div class="approval-copy">
+              <p class="eyebrow">HUMAN APPROVAL GATE</p>
+              <h2>人工确认后才会修改模拟路由</h2>
+              <p>审批绑定 ticket_id、revision、plan_hash 与 snapshot_version；参数变化后旧审批立即失效。</p>
+            </div>
+            <label>审批人<input id="change-approver" value="demo-operator"></label>
+            <label>审批意见<input id="change-approval-comment" value="同意按已验证计划执行"></label>
+            <label class="confirmation-field">精确确认串<input id="change-confirmation" autocomplete="off" placeholder="APPROVE + 当前变更单号"></label>
+            <div class="approval-actions">
+              <button id="change-reject" class="button danger">拒绝变更</button>
+              <button id="change-approve" class="button primary">批准并执行</button>
+            </div>
+          </article>
+
+        </div>
+
+        <div class="query-layout change-query-helper">
+          <article class="panel query-panel">
+            <p class="eyebrow">KNOWLEDGE ASSIST</p>
+            <h2>基于已审核知识辅助研判</h2>
+            <p>可在生成变更单前补充询问 SOP、风险或回退要求；检索范围固定为 APPROVED。</p>
+            <form id="query-form">
+              <textarea id="query-question" rows="5" required placeholder="例如：生产 VPC 路由主备切换的前置条件和回退原则是什么？"></textarea>
+              <button class="button secondary" type="submit" data-mode="direct">检索可信知识</button>
+              <button class="button" type="submit" data-mode="agent">Agent 辅助研判</button>
+            </form>
+          </article>
+          <article class="panel answer-panel compact-answer-panel">
+            <div class="panel-head"><div><p class="eyebrow">EVIDENCE ANSWER</p><h2>研判结果</h2></div></div>
+            <div id="answer-content" class="answer-content empty">等待问题</div>
+            <div id="answer-agent-meta" class="hint"></div>
+            <div id="answer-sources" class="source-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-results" class="page">
+        <article class="change-hero results-hero">
+          <div>
+            <p class="eyebrow">CHANGE EXECUTION RESULTS</p>
+            <h2>变更结果与审计</h2>
+            <p>集中查看执行结果、前后网络状态、验证证据、自动回退、完整事件轨迹和经验沉淀。</p>
+          </div>
+          <span class="synthetic-stamp">执行证据<br><small>全量可审计</small></span>
+        </article>
+
+        <article id="result-empty" class="panel change-empty">
+          <span>02</span>
+          <div><h2>暂无已完成的变更结果</h2><p>请先在“变更方案生成”完成生成与审批；执行结束后结果会自动出现在这里。</p></div>
+        </article>
+
+        <div id="result-workspace" class="change-workspace" hidden>
+          <div class="metric-grid change-metrics">
+            <article class="metric"><span>工单状态</span><strong id="result-status">—</strong><small id="result-ticket-id">等待执行</small></article>
+            <article class="metric accent"><span>执行结果</span><strong id="result-outcome">—</strong><small id="result-step-score">尚无操作记录</small></article>
+            <article class="metric"><span>执行期验证</span><strong id="result-validation-score">—</strong><small>有效下一跳与业务指标</small></article>
+            <article class="metric warning"><span>网络快照</span><strong id="result-network-version">—</strong><small id="result-hash-match">等待前后态比对</small></article>
+          </div>
+
+          <div class="change-primary-grid result-primary-grid">
+            <article class="panel topology-panel">
+              <div class="panel-head"><div><p class="eyebrow">POST-CHANGE TOPOLOGY</p><h2>执行后有效下一跳</h2></div><span id="result-network-hash" class="hash-pill">—</span></div>
+              <div id="result-topology" class="network-topology"></div>
+            </article>
+            <article class="panel result-summary-panel">
+              <div class="panel-head"><div><p class="eyebrow">EXECUTION SUMMARY</p><h2>执行摘要</h2></div><span id="result-outcome-badge" class="tag">—</span></div>
+              <div id="result-summary" class="result-summary"></div>
+              <div id="result-execution-validations" class="validation-list"></div>
+            </article>
+          </div>
+
+          <div class="two-column change-bottom-grid">
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">AUDIT TIMELINE</p><h2>编排与执行轨迹</h2></div></div>
+              <div id="change-timeline" class="change-timeline"></div>
+            </article>
+            <article class="panel feedback-panel">
+              <div class="panel-head"><div><p class="eyebrow">FEEDBACK LOOP</p><h2>执行经验沉淀</h2></div></div>
+              <div id="change-feedback" class="feedback-content"><p class="muted-copy">执行完成后生成带日志证据的知识候选。</p></div>
+              <button id="change-publish-feedback" class="button secondary" hidden>送入知识审核队列</button>
+            </article>
+          </div>
+        </div>
+      </section>
+
       <section id="page-ingest" class="page">
         <div class="two-column ingest-layout">
           <div class="panel form-panel">
@@ -108,27 +268,6 @@
           <label class="grow">审核意见<input id="review-comment" placeholder="可选：判断依据、修改说明或驳回原因"></label>
         </article>
         <div id="review-queue" class="review-grid empty">当前没有待审核知识</div>
-      </section>
-
-      <section id="page-query" class="page">
-        <div class="query-layout">
-          <article class="panel query-panel">
-            <p class="eyebrow">TRUSTED GENERATION</p>
-            <h2>基于已审核知识生成方案</h2>
-            <p>检索范围固定为 APPROVED；回答必须使用 [K编号] 标注证据。</p>
-            <form id="query-form">
-              <textarea id="query-question" rows="5" required placeholder="例如：V2.8 网元升级到 V3.2 前需要满足哪些条件？失败后如何回退？"></textarea>
-              <button class="button primary" type="submit" data-mode="direct">生成可信方案</button>
-              <button class="button" type="submit" data-mode="agent">Agent 检索生成</button>
-            </form>
-          </article>
-          <article class="panel answer-panel">
-            <div class="panel-head"><div><p class="eyebrow">ANSWER</p><h2>方案结果</h2></div></div>
-            <div id="answer-content" class="answer-content empty">等待问题</div>
-            <div id="answer-agent-meta" class="hint"></div>
-            <div id="answer-sources" class="source-list"></div>
-          </article>
-        </div>
       </section>
 
       <section id="page-library" class="page">

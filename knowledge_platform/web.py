@@ -16,7 +16,10 @@ from harness.api_client import APIError
 from harness.config import ConfigurationError, Settings
 from harness.run_store import RunStoreError
 from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunQueueFull
+from change_management.service import DemoChangeError
+from change_management.simulator import SimulationError
 
+from .change_web import ChangeDemoWebManager
 from .documents import (
     DocumentError,
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -37,6 +40,16 @@ RUN_EVENTS_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/events$")
 RUN_CANCEL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/cancel$")
 RUN_RESUME_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/resume$")
 RUN_APPROVAL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/approvals$")
+CHANGE_DEMO_PATTERN = re.compile(r"^/api/change-demos/([0-9A-Za-z_-]+)$")
+CHANGE_EXECUTE_PATTERN = re.compile(
+    r"^/api/change-demos/([0-9A-Za-z_-]+)/execute$"
+)
+CHANGE_DECISION_PATTERN = re.compile(
+    r"^/api/change-demos/([0-9A-Za-z_-]+)/decision$"
+)
+CHANGE_FEEDBACK_PATTERN = re.compile(
+    r"^/api/change-demos/([0-9A-Za-z_-]+)/publish-feedback$"
+)
 
 
 class KnowledgeHTTPServer(ThreadingHTTPServer):
@@ -53,8 +66,10 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self.service = service
         self.static_dir = static_dir
         self.runtime = runtime
+        self.change_demos = ChangeDemoWebManager(service)
 
     def server_close(self) -> None:
+        self.change_demos.close()
         self.runtime.stop()
         super().server_close()
 
@@ -170,6 +185,8 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             StoreError,
             RunStoreError,
             HarnessRuntimeError,
+            DemoChangeError,
+            SimulationError,
             ValueError,
             json.JSONDecodeError,
         )
@@ -213,6 +230,16 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/stats":
                 self._send_json(self.server.service.stats())
+                return
+            if path == "/api/change-cases":
+                self._send_json({"cases": self.server.change_demos.cases()})
+                return
+            if path == "/api/change-demos/latest":
+                self._send_json({"session": self.server.change_demos.latest()})
+                return
+            change_match = CHANGE_DEMO_PATTERN.match(path)
+            if change_match:
+                self._send_json(self.server.change_demos.describe(change_match.group(1)))
                 return
             if path == "/api/runs":
                 query = parse_qs(parsed.query)
@@ -294,6 +321,42 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.CREATED)
                 return
             payload = self._read_json()
+            if path == "/api/change-demos":
+                result = self.server.change_demos.create(
+                    requested_by=str(payload.get("requested_by") or "demo-operator"),
+                    use_model=bool(payload.get("use_model", False)),
+                    case_id=str(payload.get("case_id") or "dc-route-failover"),
+                )
+                self._send_json(result, HTTPStatus.ACCEPTED)
+                return
+            execute_match = CHANGE_EXECUTE_PATTERN.match(path)
+            if execute_match:
+                result = self.server.change_demos.start_execution(
+                    execute_match.group(1),
+                    actor=str(payload.get("actor") or "demo-operator"),
+                    inject_failure=str(payload.get("inject_failure") or ""),
+                )
+                self._send_json(result, HTTPStatus.ACCEPTED)
+                return
+            decision_match = CHANGE_DECISION_PATTERN.match(path)
+            if decision_match:
+                result = self.server.change_demos.decide(
+                    decision_match.group(1),
+                    decision=str(payload.get("decision") or ""),
+                    actor=str(payload.get("actor") or ""),
+                    comment=str(payload.get("comment") or ""),
+                    confirmation=str(payload.get("confirmation") or ""),
+                )
+                self._send_json(result, HTTPStatus.ACCEPTED)
+                return
+            feedback_match = CHANGE_FEEDBACK_PATTERN.match(path)
+            if feedback_match:
+                result = self.server.change_demos.publish_feedback(
+                    feedback_match.group(1),
+                    actor=str(payload.get("actor") or "demo-operator"),
+                )
+                self._send_json(result, HTTPStatus.CREATED)
+                return
             if path == "/api/runs":
                 task_type = str(payload.get("task_type") or "").strip()
                 run_input = payload.get("input", {})

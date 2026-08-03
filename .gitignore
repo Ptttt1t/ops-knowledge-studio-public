@@ -10,3 +10,4 @@ data/paddlex_cache/
 knowledge_sources/uploads/
 knowledge_sources/public_test_corpus/raw/
 tmp/
+_web-serve.*.log

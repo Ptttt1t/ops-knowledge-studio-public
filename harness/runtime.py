@@ -9,7 +9,7 @@ from typing import Any, Callable, Iterator
 
 from .model import ModelClient
 from .run_store import RunStore, RunStoreError, TERMINAL_RUN_STATUSES
-from .tools import ToolRegistry, ToolResult
+from .tools import ToolRegistry, ToolResult, approval_digest
 
 
 class RunStatus(str, Enum):
@@ -177,7 +177,10 @@ class RunContext:
         """Execute a registered tool with budget accounting and an audit event."""
         self.register_tool_call()
         self.check_cancelled()
-        approved = self.runtime.store.is_tool_approved(self.run_id, name)
+        request_digest = approval_digest(name, arguments)
+        approved = self.runtime.store.is_tool_approved(
+            self.run_id, name, request_digest=request_digest
+        )
         result = self.runtime.tools.execute(name, arguments, self, approved=approved)
         self.emit(
             "tool.completed",
@@ -191,6 +194,7 @@ class RunContext:
                 self.run_id,
                 name,
                 reason=result.error_message or "A non-read-only tool requires approval",
+                request_digest=request_digest,
             )
             raise RunAwaitingApproval(f"Tool approval required: {name}")
         self.check_cancelled()
