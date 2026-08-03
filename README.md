@@ -2,58 +2,79 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 
-一个由原始 AI Agent Harness 升级而来的本地运维知识工程平台。它把“文档进入向量库”扩展为可治理的知识生产闭环：
+一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、工单、复盘和历史方案转化为可审核的知识资产，再用这些已批准知识生成变更方案，经硬校验、人工审批、模拟执行和结果回流形成完整闭环。
 
-```text
-SOP / 工单 / 复盘 / 变更方案
-          ↓
-文档分片与来源定位
-          ↓
-DeepSeek 结构化知识抽取
-          ↓
-字段质量与证据精确校验
-          ↓
-重复 / 冲突 / 新版本比较
-          ↓
-DRAFT / PENDING_REVIEW
-          ↓
-人工批准 / 驳回 / 替代
-          ↓
-仅检索 APPROVED 知识
-          ↓
-带 [K编号] 证据的可信方案
+> [!IMPORTANT]
+> 仓库内置的云网络案例、资源标识、指标和执行结果全部是合成演示数据。当前版本不会连接真实华为云、AWS、Azure、CMDB、监控或工单系统，也不接受真实云凭据。
+
+## 这个项目解决什么问题
+
+普通 RAG 可以“找到资料并回答”，但生产运维还需要回答另外几个问题：引用的知识是否经过审核、执行动作是否与当前环境一致、谁批准了什么参数、失败后能否安全回退，以及这次执行经验如何进入下一轮知识治理。
+
+Ops Knowledge Studio 将这些环节放进同一个可审计流程：
+
+```mermaid
+flowchart LR
+    A["SOP / 工单 / 复盘"] --> B["知识抽取与证据定位"]
+    B --> C["人工审核"]
+    C -->|APPROVED| D["可信方案生成"]
+    D --> E["硬校验与风险决策"]
+    E --> F["人工审批"]
+    F --> G["模拟执行与验证"]
+    G --> H["执行反馈候选"]
+    H -->|PENDING_REVIEW| C
 ```
 
-## 路线选择
+核心原则：
 
-本项目选择“轻量组合一路线”：
+- **上下文可信**：只有 `APPROVED` 知识可以进入可信方案；回答保留 `[K编号]` 证据引用。
+- **决策分层**：模型负责语言理解与叙述，资源、动作、阈值、审批和回退由确定性规则控制。
+- **工具受控**：非只读工具必须经过持久化审批，审批与具体参数摘要绑定。
+- **全程可追溯**：运行状态、检查点、工具调用、前后快照、验证结果和操作者均写入审计记录。
+- **反馈不直发**：新执行经验只生成 `PENDING_REVIEW` 候选，不会自动升级为可信知识。
 
-- DeepSeek：知识抽取、知识比较和可信方案生成；
-- 固定知识卡片 Schema：场景、对象、版本、步骤、风险、回退、验证和证据；
-- SQLite：知识生命周期、关系和审计日志；
-- 本地混合检索：英数字词项、中文二元词和字段权重，无需额外向量数据库；
-- Human-in-the-loop：正式知识必须人工审核；
-- 本地 Web 工作台：采集、审核、查询、知识库管理和云网络变更闭环演示。
+## 功能总览
 
-这条路线先验证真正有差异的治理闭环，同时保留以后接入 RAGFlow、Neo4j、向量模型或规则引擎的空间。
+| 模块 | 能力 | 关键约束 |
+| --- | --- | --- |
+| 知识采集 | 上传文档或粘贴文本，分片、抽取知识卡片并精确定位来源 | 抽取结果默认进入待审核状态 |
+| 知识治理 | 质量评分、重复/冲突/新版本比较、批准、驳回与替代 | 只有 `APPROVED` 可被可信检索 |
+| 可信方案 | 本地混合检索 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
+| 变更生成 | 环境感知、知识复用、风险评分、分步计划、验证与回退生成 | 所有云资源与网络均为隔离模拟 |
+| 审批执行 | 精确确认串、参数摘要、灰度执行、故障注入与自动回退 | 审批前不修改模拟网络 |
+| 运行时 | SQLite Run、事件、步骤、检查点、取消、恢复和幂等执行 | 参数漂移或快照漂移会使旧审批失效 |
+| 反馈闭环 | 将执行日志和结果整理为知识候选 | 必须再次人工审核 |
 
-## 1. 填写 DeepSeek API
+## 界面预览
 
-直接编辑项目根目录的 `.env`：
+### 1. 从已批准案例生成变更方案
 
-```dotenv
-DEEPSEEK_API_KEY=你的API密钥
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-```
+页面统一展示案例选择、风险、前置校验、模拟拓扑、知识证据、分步操作、验证项和人工审批入口。
 
-DeepSeek 使用 OpenAI 兼容的 `POST /chat/completions`。知识抽取使用 `response_format={"type":"json_object"}`。
+![变更案例库与方案生成](docs/images/change-case-library.png)
 
-如使用 DeepSeek 格式的代理服务，只需替换 Key、Base URL 和模型名。不要把 `/chat/completions` 写进 Base URL。
+### 2. 查看执行结果与完整审计
 
-## 2. 部署与启动
+结果页集中展示工单终态、执行后有效下一跳、步骤验证、前后状态哈希、自动回退信息和审计时间线。
 
-运行要求：Python 3.10 及以上版本。Windows 用户推荐使用 Anaconda Prompt：
+![变更执行结果与审计](docs/images/change-execution-result.png)
+
+### 3. 回到统一知识资产库
+
+历史案例以 `APPROVED` 知识参与下一次方案生成；新执行反馈仍停留在审核队列。
+
+![已批准知识资产库](docs/images/knowledge-library.png)
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.10 或更高版本；
+- Git；
+- Windows、Linux 或 macOS；
+- DeepSeek API Key 为可选项：离线变更演示、知识浏览和本地治理不需要 Key。
+
+### Windows + Conda
 
 ```bat
 conda create -n ops-knowledge-studio python=3.10 -y
@@ -63,15 +84,11 @@ cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
 python -m pip install -e .
 copy .env.example .env
-notepad .env
 python run.py init
-python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-`python -m pip install -e .` 只需在首次部署和依赖发生变化时执行，不需要每次启动都重新安装。已有符合要求的 Conda 环境也可以直接复用。
-
-Linux 或 macOS 可使用：
+### Linux / macOS
 
 ```bash
 conda create -n ops-knowledge-studio python=3.10 -y
@@ -82,233 +99,196 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 cp .env.example .env
 python run.py init
-python -m unittest discover -s tests -v
 python run.py serve
 ```
 
 启动后访问：
 
-- 工作台：<http://127.0.0.1:8765>
+- Web 工作台：<http://127.0.0.1:8765>
 - 健康检查：<http://127.0.0.1:8765/api/health>
 
-后续日常启动只需要激活环境、进入仓库并执行：
+日常启动只需要激活环境并执行 `python run.py serve`。`python -m pip install -e .` 仅在首次部署或依赖变化后重新运行。
 
-```bat
-conda activate ops-knowledge-studio
-cd /d 你的仓库目录
-python run.py serve
-```
+## 三分钟体验变更闭环
 
-完整的配置、OCR、后台启动、数据备份和升级流程见 [部署指南](docs/deployment.md)。
+推荐从 Web 界面体验：
 
-网页提供：
+1. 启动服务，打开左侧 **变更方案生成**。
+2. 从案例库选择一个场景，例如 **NAT 网关蓝绿切换**。
+3. 选择 **正常闭环**，点击 **生成变更单**。
+4. 核对环境快照、知识证据、风险、硬校验、计划哈希和回退方案。
+5. 输入页面提示的精确确认串，例如 `APPROVE CHG-DEMO-NAT-002`。
+6. 批准后观察双 AZ 灰度执行；完成后进入 **变更结果** 查看证据和审计。
+7. 可选择将执行经验送入知识审核队列，再由人工决定是否批准。
 
-- 概览：文档、卡片、状态和质量统计；
-- 变更方案生成：在原方案页面统一完成知识辅助研判、环境感知、知识复用、方案生成、硬校验和人工审批；
-- 变更结果：独立展示双 AZ 执行拓扑、验证、自动回退、完整审计和反馈沉淀；
-- 知识采集：上传多种实际文档或粘贴原文，并运行抽取、质量校验和知识比较；
-- 审核队列：批准、驳回或以新知识替代旧知识；
-- 可信方案：只使用 APPROVED 卡片，并返回来源证据；
-- 知识库：按生命周期状态检索和查看完整来源。
+直接拒绝、关闭标准输入或输入错误确认串都不会修改模拟网络。
 
-启动平台不需要 API；只有知识抽取和可信方案生成会检查密钥。
+## 内置云网络案例
 
-进入左侧“变更方案生成”后，可从 5 个 `APPROVED` 合成历史案例中选择一个实验：专线路由主备切换、NAT 网关蓝绿切换、云防火墙维护切流、跨区域灾备链路启用或合作方 VPN 外联迁移。点击“生成变更单”后，页面会在校验完成时停在审批门禁；输入当前页面提示的精确确认串 `APPROVE <变更单号>` 后才会修改隔离模拟器。执行结束后，从“变更结果”查看前后态与审计，并可用“送入知识审核队列”把带日志证据的候选卡片写入当前知识平台。新卡片保持 `PENDING_REVIEW`，仍需在“知识审核队列”人工处理。
+平台预置 5 个 `APPROVED` 合成历史案例。案例定义同时驱动环境模拟、知识检索、变更单生成和前端拓扑，避免界面与实际执行逻辑脱节。
 
-## 3. 使用 CLI
+| 案例 ID | 变更单 | 场景 | 核心动作 |
+| --- | --- | --- | --- |
+| `dc-route-failover` | `CHG-DEMO-ROUTE-001` | 专线路由主备切换 | 双 AZ 路由从劣化主专线切至健康备用专线 |
+| `nat-egress-bluegreen` | `CHG-DEMO-NAT-002` | NAT 网关蓝绿切换 | 生产出口按 AZ 从旧 NAT 切至绿色 NAT |
+| `firewall-cluster-maintenance` | `CHG-DEMO-CFW-003` | 云防火墙集群维护切流 | 将流量切至备用防火墙节点完成维护 |
+| `cross-region-dr-activation` | `CHG-DEMO-DR-004` | 跨区域灾备链路启用 | 启用受控灾备路径并验证有效路由 |
+| `partner-extranet-migration` | `CHG-DEMO-B2B-005` | 合作方 VPN 外联迁移 | 将合作方访问迁移至新的双隧道链路 |
 
-### 云网络变更单最小闭环（完全离线）
+所有案例都会检查资源存在性、CIDR、冲突路由、当前下一跳、备用链路健康度、容量、变更窗口和知识审批状态。执行阶段按案例阈值验证有效下一跳、连通率、丢包和时延；硬校验失败时阻断或按计划逆序回退。
 
-无需 API Key，可直接运行明确标记为合成数据的云网络变更演示。默认使用专线路由案例：
+## 命令行演示
+
+### 正常闭环
 
 ```powershell
 python run.py demo-change
 ```
 
-也可以指定任一案例，例如 NAT 网关蓝绿切换：
+指定案例：
 
 ```powershell
 python run.py demo-change --case-id nat-egress-bluegreen
 ```
 
-可选 `case-id`：`dc-route-failover`、`nat-egress-bluegreen`、`firewall-cluster-maintenance`、`cross-region-dr-activation`、`partner-extranet-migration`。
+程序会打印变更摘要、知识引用、风险、计划哈希、环境快照和校验结果，然后等待精确确认串。
 
-命令会生成变更单、检索演示用 `APPROVED` 知识、执行硬性校验，然后停在人工审批门禁。只有完整输入：
-
-```text
-APPROVE CHG-DEMO-ROUTE-001
-```
-
-确认串中的单号会随所选案例变化（例如 NAT 案例为 `APPROVE CHG-DEMO-NAT-002`）。批准后只会修改本次演示目录内的 SQLite 模拟网络。成功后会完成双 AZ 灰度切换、有效下一跳与业务指标验证，并生成一张 `PENDING_REVIEW` 执行经验候选；不会连接真实云、CMDB、监控或工单系统。
-
-可选演示自动回退：
+### 故障注入与自动回退
 
 ```powershell
 python run.py demo-change --inject-failure route-switch-az-b
 ```
 
-配置 DeepSeek 后，可用 `--use-model` 仅润色标题和摘要；资源、动作、阈值和回退仍由确定性规则控制，模型不可用时自动回退离线模板。完整字段、安全边界和工件说明见 [云网络变更闭环演示](docs/change-demo.md)。
-
-导入示例 SOP：
+也可以在指定案例中注入故障：
 
 ```powershell
-python run.py ingest --file sample_data\demo_upgrade_sop.md
+python run.py demo-change --case-id firewall-cluster-maintenance --inject-failure route-switch-az-a
 ```
 
-查看待审核知识：
+### 可选模型润色
 
 ```powershell
-python run.py list --status PENDING_REVIEW
+python run.py demo-change --use-model
 ```
 
-批准知识：
+模型只允许润色标题和摘要，不能修改资源标识、CIDR、下一跳、阈值、执行步骤或回退逻辑。模型不可用或输出不合格时会明确记录降级，并回到确定性模板。
 
-```powershell
-python run.py review --id 1 --action approve --reviewer "你的名字" --comment "证据和适用范围已核对"
+## 配置 DeepSeek
+
+复制 `.env.example` 为 `.env`，填写：
+
+```dotenv
+DEEPSEEK_API_KEY=你的API密钥
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
-不调用 API 的本地检索：
+项目使用 OpenAI 兼容的 `POST /chat/completions`。若使用兼容代理服务，只替换 Key、Base URL 和模型名，不要把 `/chat/completions` 写进 Base URL。
 
-```powershell
-python run.py search --query "NE-A V3.1-P2 回退"
-```
+DeepSeek 用于：
 
-基于已批准知识生成方案：
+- 将原始文档抽取为固定 Schema 的知识卡片；
+- 比较候选知识与现有知识的重复、冲突和版本关系；
+- 基于 `APPROVED` 证据生成可信方案；
+- 在显式 `--use-model` 时润色变更单叙述字段。
 
-```powershell
-python run.py query --question "NE-A 安装 V3.1-P2 前要检查什么，失败后如何回退？"
-```
+不要把真实 `.env` 提交到 Git。仓库默认忽略 `.env`、SQLite 数据库、上传文件、OCR 缓存和运行工件。
 
-## 4. 知识卡片与生命周期
+## 知识治理流程
 
-每张卡片保存：
+### 支持的文档
 
-- 标题、摘要和知识类型；
-- 适用场景、对象、版本和前置条件；
-- 操作步骤、风险、回退与验证；
-- 来源文档、字符范围、原文证据和内容校验和；
-- 质量分和质量问题；
-- NEW、DUPLICATE、CONFLICT 或 NEW_VERSION 判断；
-- 审核人、审核意见、发布时间和替代关系；
-- 全部生命周期审计记录。
+- 文本：`.txt`、`.md`、`.markdown`、`.log`、`.csv`、`.json`、`.yaml`、`.yml`；
+- Office：`.docx`；
+- PDF：带文本层的 `.pdf` 默认由 `pypdf` 解析；
+- 图片/OCR：`.png`、`.jpg`、`.jpeg`、`.bmp`、`.tif`、`.tiff`、`.webp`。
 
-状态规则：
+扫描 PDF 和图片识别需要可选 OCR 依赖：
 
-- `DRAFT`：质量分不足 65，需要补充；
-- `PENDING_REVIEW`：通过基础质量门禁，等待人工审核；
-- `APPROVED`：允许进入可信方案检索；
-- `REJECTED`：已驳回，不参与正式检索；
-- `SUPERSEDED`：已被新版本替代，保留历史但不参与正式检索。
-
-## 5. 支持的文档
-
-平台支持 TXT、Markdown、CSV、JSON、YAML、DOCX、PDF，以及 PNG、JPG、TIFF、BMP、WebP 等常见图片。网页端支持多选上传，单个请求限制为 50 MB。
-
-PDF 文本提取已包含在基础依赖中。需要解析扫描 PDF 或图片时，再安装 OCR 可选依赖：
-
-```powershell
+```text
 python -m pip install -e ".[ocr]"
+python scripts/ocr_smoke_test.py
 ```
 
-如果 PaddlePaddle 在特定平台无法从默认软件源安装，请先按照 PaddlePaddle 官方说明安装与系统匹配的 CPU/GPU 版本，再执行上述命令。
-
-处理规则：
-
-- 带文本层的 PDF 优先使用 `pypdf`，速度更快且保留文字准确性；
-- 无文本层或文字极少的扫描页使用 PyMuPDF 渲染，再交给 PaddleOCR；
-- 图片直接进入 PaddleOCR；
-- 当前本地模型为 PP-OCRv4 mobile CPU，支持简体中文和英文；
-- OCR 模型在第一次识别时下载到 `data/paddlex_cache`，后续离线复用。
-
-## 6. 测试
-
-全部测试使用模拟 DeepSeek 响应，不会联网，也不会消耗额度：
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
-真实 PDF/OCR 冒烟测试：
-
-```powershell
-python scripts\ocr_smoke_test.py
-```
-
-## 7. 代码结构
+### 生命周期
 
 ```text
-ops-knowledge-studio-public/
-├─ .env                         # DeepSeek API 填写位置
-├─ run.py                       # CLI / Web 入口
-├─ harness/
-│  ├─ config.py                 # 配置和密钥检查
-│  ├─ api_client.py             # DeepSeek Chat / JSON Output
-│  ├─ model.py                  # 模型客户端协议
-│  ├─ run_store.py              # Run、步骤、事件与检查点
-│  ├─ runtime.py                # Worker、预算、取消、恢复与审批
-│  ├─ tools.py                  # 工具注册、Schema 与风险等级
-│  └─ trace.py                  # JSONL 运行轨迹
-├─ change_management/
-│  ├─ schema.py                 # 变更单、步骤、验证、执行与反馈模型
-│  ├─ store.py                  # 变更状态机、校验和审计SQLite存储
-│  ├─ simulator.py              # 隔离的云网络路由表模拟器与操作日志
-│  ├─ service.py                # 生成、校验、执行、回退、报告和知识反馈
-│  └─ runtime_tasks.py          # change.generate_demo / change.execute_demo
-├─ knowledge_platform/
-│  ├─ documents.py              # 文档读取与分片
-│  ├─ schema.py                 # 知识卡片与状态模型
-│  ├─ store.py                  # SQLite 生命周期与审计
-│  ├─ retrieval.py              # 本地混合检索
-│  ├─ prompts.py                # 抽取、比较和回答约束
-│  ├─ runtime_tasks.py          # 知识任务到 Harness 的适配
-│  ├─ service.py                # 知识流水线
-│  ├─ web.py                    # 本地 HTTP API
-│  └─ static/                   # 网页工作台
-├─ docs/                        # 部署、安全与架构说明
-├─ sample_data/                 # 演示来源
-├─ knowledge_sources/           # 待加工文档目录
-├─ data/                        # SQLite 数据库
-└─ tests/                       # 离线集成测试
+原始文档
+  -> 文档分片与来源定位
+  -> DeepSeek 结构化抽取
+  -> 字段与证据质量校验
+  -> 重复 / 冲突 / 新版本比较
+  -> DRAFT / PENDING_REVIEW
+  -> 人工批准 / 驳回 / 替代
+  -> APPROVED 知识进入可信检索
 ```
 
-## 8. 安全边界
+常用命令：
 
-- 默认只监听 `127.0.0.1`，没有登录鉴权，不应直接暴露到公网；
-- `.env`、SQLite 数据库和运行轨迹已被 Git 忽略；
-- 方案生成只能读取 APPROVED 知识；
-- 平台不执行模型生成的系统命令；
-- 自动抽取结果不会自动发布。
+```powershell
+# 导入文档并抽取卡片
+python run.py ingest --file sample_data\demo_upgrade_sop.md
 
-DeepSeek 官方参考：
+# 查看知识库状态
+python run.py stats
+python run.py list
 
-- <https://api-docs.deepseek.com/api/create-chat-completion>
-- <https://api-docs.deepseek.com/guides/json_mode/>
-- <https://api-docs.deepseek.com/guides/tool_calls>
+# 本地检索，不调用模型
+python run.py search --query "路由切换 回退"
 
-## Harness Runtime v1
+# 基于已批准知识生成可信方案
+python run.py query --question "如何安全切换生产专线路由"
 
-知识治理能力现在运行在一个本地、持久化的 Harness Runtime 之上。它不需要 Redis、Docker 或外部队列；运行记录单独保存在 `data/runtime.db`，不会与知识库 `data/knowledge.db` 混用。
+# 有步骤上限的只读知识 Agent
+python run.py agent-query --question "生成生产专线路由切换建议"
+```
 
-每个 Run 都包含任务输入、预算、状态、步骤、事件、检查点、重试次数和最终结果。支持的状态为：
+使用 `python run.py <命令> --help` 查看完整参数。
+
+## 变更状态与审批安全
+
+变更单状态机：
 
 ```text
-QUEUED -> RUNNING -> SUCCEEDED / FAILED / CANCELLED
-                  -> CANCEL_REQUESTED -> CANCELLED
-                  -> WAITING_APPROVAL -> QUEUED
-RUNNING (程序异常退出后) -> INTERRUPTED -> 可恢复执行
+DRAFT
+  -> BLOCKED
+  -> READY_FOR_APPROVAL
+  -> WAITING_APPROVAL
+  -> REJECTED
+  -> APPROVED
+  -> EXECUTING
+  -> VERIFYING
+  -> SUCCEEDED / ROLLED_BACK / FAILED
 ```
 
-当前注册的知识任务：
+审批不是一个孤立的“同意”布尔值，而是绑定以下信息的规范化 SHA-256 摘要：
 
-- `knowledge.ingest_text`
-- `knowledge.ingest_file`（仅允许处理 Web 上传目录中的已保存文件）
-- `knowledge.query`
-- `knowledge.agent_query`
-- `knowledge.regrade`
+- `ticket_id`；
+- `revision`；
+- `plan_hash`；
+- `snapshot_version`；
+- 实际工具参数。
 
-Runtime 还提供：幂等键、并发 Worker 上限、排队上限、取消检查、步骤与 Token/工具调用预算、模型调用适配层，以及按风险等级拦截工具调用。当前知识任务只使用受控的本地知识能力；非只读工具必须显式获批后才允许执行。
+审批后若计划、资源、下一跳、故障注入参数或环境快照发生变化，旧审批自动失效。恢复执行会读取检查点和操作日志，已完成步骤不会重复应用。
 
-在 `.env` 中可调整：
+## 持久化运行时
+
+底层 Harness Runtime 使用独立 SQLite 保存 Run、事件、步骤、检查点和工具审批，可在进程中断后恢复。
+
+```powershell
+# 查看运行
+python run.py run-list
+python run.py run-show --id <run-id> --events
+
+# 取消或恢复
+python run.py run-cancel --id <run-id>
+python run.py run-resume --id <run-id>
+
+# 审批等待中的工具调用
+python run.py run-approve-tool --id <run-id> --tool-name <tool-name> --decision APPROVED --actor <actor>
+```
+
+运行时默认配置：
 
 ```dotenv
 HARNESS_RUNTIME_DB_PATH=data/runtime.db
@@ -317,50 +297,91 @@ HARNESS_MAX_QUEUED_RUNS=100
 HARNESS_SYNC_WAIT_SECONDS=900
 ```
 
-### Web Run API
+## 演示工件
 
-旧的同步知识接口继续保留。新接口用于需要可观察、可取消和可恢复的异步任务：
+每次 CLI 变更演示会在 `artifacts/change_demos/<run>/` 创建隔离目录：
+
+| 文件 | 内容 |
+| --- | --- |
+| `change_order.md` | 可供人工阅读的完整变更单 |
+| `change_package.json` | 工单、校验、执行、反馈和审计全集 |
+| `validation_report.json` | 生成前与执行后的验证证据 |
+| `execution_report.json` | 前后状态哈希、步骤、指标和回退记录 |
+| `feedback.md` | 实际结果、偏差、经验和知识候选 |
+| `runtime_events.json` | 生成 Run 与执行 Run 的持久化事件 |
+| `knowledge.db` / `changes.db` / `cloud_network.db` / `runtime.db` | 本次演示的隔离数据库 |
+
+Web 演示同样隔离运行数据；只有操作者在结果页明确选择“送入知识审核队列”后，才会向主知识库写入一张 `PENDING_REVIEW` 候选。
+
+## 项目结构
 
 ```text
-POST /api/runs
-GET  /api/runs
-GET  /api/runs/{run_id}
-GET  /api/runs/{run_id}/events
-POST /api/runs/{run_id}/cancel
-POST /api/runs/{run_id}/resume
-POST /api/runs/{run_id}/approvals
+ops-knowledge-studio-public/
+├─ change_management/      # 变更模型、案例、模拟器、存储与运行任务
+├─ harness/                # 持久化 Run、检查点、事件和工具审批
+├─ knowledge_platform/     # 知识抽取、检索、治理、Web 与 CLI
+│  └─ static/              # 单页工作台前端
+├─ sample_data/            # 可公开使用的演示文档
+├─ scripts/                # 服务启动、OCR 冒烟检查等辅助脚本
+├─ tests/                  # 回归、运行时、平台和变更闭环测试
+├─ docs/                   # 部署、变更演示和设计说明
+├─ run.py                  # 统一入口
+└─ pyproject.toml          # Python 包与依赖配置
 ```
 
-提交一个文本导入任务的请求体如下；可选的 `Idempotency-Key` 请求头可避免网络重试造成重复导入：
+关键设计选择：
 
-```json
-{
-  "task_type": "knowledge.ingest_text",
-  "input": {
-    "source_name": "core-network-change.md",
-    "source_ref": "change://CHG-2026-001",
-    "content": "原始 SOP 或工单复盘内容"
-  },
-  "budget": {
-    "max_steps": 12,
-    "timeout_seconds": 900,
-    "max_tool_calls": 20,
-    "max_total_tokens": 50000
-  }
-}
-```
+- 使用 SQLite 保持单机部署简单，无需 Redis、Docker 或外部消息队列；
+- 使用英数字词项、中文二元词和字段权重完成本地混合检索；
+- 使用固定知识卡片 Schema，覆盖场景、对象、版本、步骤、风险、回退、验证和证据；
+- 保留后续接入向量数据库、知识图谱、CMDB 或真实工具适配器的扩展位置。
 
-### CLI Run commands
+## 测试与 CI
+
+运行全部测试：
 
 ```powershell
-python run.py run-submit --task-type knowledge.regrade --input-json "{}"
-python run.py run-list
-python run.py run-show --id <run_id> --events
-python run.py run-cancel --id <run_id>
-python run.py run-resume --id <run_id>
-python run.py run-approve-tool --id <run_id> --tool-name <tool_name> --decision APPROVED --actor "reviewer"
+python -m unittest discover -s tests -v
 ```
 
-`run-submit` 和 `run-resume` 默认等待到任务完成或达到 `HARNESS_SYNC_WAIT_SECONDS`。`run-list`、`run-show`、`run-cancel` 和 `run-resume` 都直接读写同一个持久化 Run 存储，因此可用于排障和恢复。
+GitHub Actions 会在 Windows 和 Ubuntu、Python 3.10 环境中安装项目并运行同一套测试。建议在提交前至少执行：
 
-当未来任务注册了非只读工具时，Runtime 会先进入 `WAITING_APPROVAL`，并在 Run 详情中记录工具、原因和审批历史。审批接口的请求体为 `tool_name`、`decision`（`APPROVED` / `REJECTED`）、`actor` 和可选 `comment`；批准后任务会重新排队，任务处理器可通过 Run checkpoint 实现续跑语义；拒绝则以 `TOOL_APPROVAL_REJECTED` 结束。
+```powershell
+python run.py init
+python -m unittest discover -s tests -v
+python run.py demo-change --case-id nat-egress-bluegreen
+```
+
+最后一条命令会等待人工确认；若只想验证拒绝路径，可直接回车结束。
+
+## 部署与安全边界
+
+当前 Web 服务定位为本机或受控内网演示，尚未实现账号登录、租户隔离和公网级鉴权：
+
+- 保持 `PLATFORM_HOST=127.0.0.1`；
+- 不要直接将 8765 端口暴露到互联网；
+- 多人内网使用时，在前面增加 TLS、身份认证、访问日志和来源限制；
+- 不要把生产数据库、业务文档、上传目录、运行工件或 `.env` 上传到公开仓库；
+- 不要向本项目填入真实云凭据，当前代码没有真实云变更适配器；
+- 自动抽取和执行反馈都必须经人工审核后才能成为 `APPROVED` 知识。
+
+数据备份、后台启动、升级和 OCR 安装流程见 [部署指南](docs/deployment.md)。
+
+## 延伸文档
+
+- [部署指南](docs/deployment.md)
+- [云网络变更单最小闭环演示](docs/change-demo.md)
+- [第一阶段加固说明](docs/first-stage-hardening.md)
+- [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)
+
+## 当前边界与下一步
+
+当前版本已经可以完整演示“感知环境—复用经验—生成方案—硬校验—人工审批—模拟执行—验证回退—反馈沉淀”，但它仍然是本地验证平台。接入真实生产环境前，至少还需要补齐：
+
+- 企业身份认证、RBAC、职责分离和审批策略；
+- CMDB、监控、工单和云厂商 API 的只读适配器；
+- 凭据托管、网络隔离、审计归档和密钥轮换；
+- 沙箱/预生产验证、限流、熔断和双人复核；
+- 面向真实资源的幂等性、并发冲突和回退失败演练。
+
+在完成这些控制之前，请只把本项目用于本地研发、架构验证和演示。
