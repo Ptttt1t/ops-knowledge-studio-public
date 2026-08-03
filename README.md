@@ -53,13 +53,19 @@ flowchart LR
 
 ![变更案例库与方案生成](docs/images/change-case-library.png)
 
-### 2. 查看执行结果与完整审计
+### 2. 展开十几步复杂变更计划
+
+复杂案例会按 `CANARY / WAVE-1 / WAVE-2 / FINAL` 等波次生成长计划。下图为 14 步东西向防火墙服务链变更，包含 120 分钟窗口、51 项硬校验和逐路由表回退日志。
+
+![十四步复杂变更计划](docs/images/complex-change-plan.png)
+
+### 3. 查看执行结果与完整审计
 
 结果页集中展示工单终态、执行后有效下一跳、步骤验证、前后状态哈希、自动回退信息和审计时间线。
 
 ![变更执行结果与审计](docs/images/change-execution-result.png)
 
-### 3. 回到统一知识资产库
+### 4. 回到统一知识资产库
 
 历史案例以 `APPROVED` 知识参与下一次方案生成；新执行反馈仍停留在审核队列。
 
@@ -125,15 +131,20 @@ python run.py serve
 
 ## 内置云网络案例
 
-平台预置 5 个 `APPROVED` 合成历史案例。案例定义同时驱动环境模拟、知识检索、变更单生成和前端拓扑，避免界面与实际执行逻辑脱节。
+平台预置 10 个 `APPROVED` 合成历史案例。案例定义同时驱动环境模拟、知识检索、变更单生成和前端拓扑，避免界面与实际执行逻辑脱节。其中 3 个复杂案例分别包含 10、12、14 个可执行、可验证、可逆序回退的路由步骤。
 
-| 案例 ID | 变更单 | 场景 | 核心动作 |
-| --- | --- | --- | --- |
-| `dc-route-failover` | `CHG-DEMO-ROUTE-001` | 专线路由主备切换 | 双 AZ 路由从劣化主专线切至健康备用专线 |
-| `nat-egress-bluegreen` | `CHG-DEMO-NAT-002` | NAT 网关蓝绿切换 | 生产出口按 AZ 从旧 NAT 切至绿色 NAT |
-| `firewall-cluster-maintenance` | `CHG-DEMO-CFW-003` | 云防火墙集群维护切流 | 将流量切至备用防火墙节点完成维护 |
-| `cross-region-dr-activation` | `CHG-DEMO-DR-004` | 跨区域灾备链路启用 | 启用受控灾备路径并验证有效路由 |
-| `partner-extranet-migration` | `CHG-DEMO-B2B-005` | 合作方 VPN 外联迁移 | 将合作方访问迁移至新的双隧道链路 |
+| 案例 ID | 变更单 | 场景 | 执行步骤 | 核心动作 |
+| --- | --- | --- | ---: | --- |
+| `dc-route-failover` | `CHG-DEMO-ROUTE-001` | 专线路由主备切换 | 2 | 双 AZ 路由从劣化主专线切至健康备用专线 |
+| `nat-egress-bluegreen` | `CHG-DEMO-NAT-002` | NAT 网关蓝绿切换 | 2 | 生产出口按 AZ 从旧 NAT 切至绿色 NAT |
+| `firewall-cluster-maintenance` | `CHG-DEMO-CFW-003` | 云防火墙集群维护切流 | 2 | 将流量切至备用防火墙节点完成维护 |
+| `cross-region-dr-activation` | `CHG-DEMO-DR-004` | 跨区域灾备链路启用 | 2 | 启用受控灾备路径并验证有效路由 |
+| `partner-extranet-migration` | `CHG-DEMO-B2B-005` | 合作方 VPN 外联迁移 | 2 | 将合作方访问迁移至新的双隧道链路 |
+| `transit-hub-route-domain-migration` | `CHG-DEMO-TGW-006` | 云骨干路由域分批迁移 | 12 | 按运维、应用、数据、共享服务四波迁移 TGW 路由域 |
+| `east-west-firewall-service-chain` | `CHG-DEMO-EWFW-007` | 东西向防火墙服务链插入 | 14 | 分四波将七个业务域导入新版有状态防火墙 |
+| `kubernetes-egress-pool-migration` | `CHG-DEMO-K8S-008` | 多集群容器出口池迁移 | 10 | 按业务等级迁移五组双 AZ Kubernetes 出口路由 |
+| `dns-resolver-endpoint-migration` | `CHG-DEMO-DNS-009` | 混合云 DNS 出站端点迁移 | 6 | 逐域迁移共享、应用、数据 DNS 出站路径 |
+| `private-endpoint-service-cutover` | `CHG-DEMO-PES-010` | 私网终端节点服务切换 | 4 | 切换批处理与分析域 PrivateLink 路由 |
 
 所有案例都会检查资源存在性、CIDR、冲突路由、当前下一跳、备用链路健康度、容量、变更窗口和知识审批状态。执行阶段按案例阈值验证有效下一跳、连通率、丢包和时延；硬校验失败时阻断或按计划逆序回退。
 
@@ -151,6 +162,12 @@ python run.py demo-change
 python run.py demo-change --case-id nat-egress-bluegreen
 ```
 
+体验 14 步复杂计划：
+
+```powershell
+python run.py demo-change --case-id east-west-firewall-service-chain
+```
+
 程序会打印变更摘要、知识引用、风险、计划哈希、环境快照和校验结果，然后等待精确确认串。
 
 ### 故障注入与自动回退
@@ -162,7 +179,7 @@ python run.py demo-change --inject-failure route-switch-az-b
 也可以在指定案例中注入故障：
 
 ```powershell
-python run.py demo-change --case-id firewall-cluster-maintenance --inject-failure route-switch-az-a
+python run.py demo-change --case-id east-west-firewall-service-chain --inject-failure route-switch-ewfw-data-b
 ```
 
 ### 可选模型润色

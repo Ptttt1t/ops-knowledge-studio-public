@@ -122,8 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_change.add_argument(
         "--inject-failure",
-        choices=["route-switch-az-a", "route-switch-az-b"],
-        help="可选：在指定步骤注入验证失败以演示自动回退",
+        metavar="STEP_ID",
+        help="可选：使用当前案例的步骤ID注入验证失败并演示自动回退",
     )
     run_submit = subparsers.add_parser(
         "run-submit", help="Submit a durable Harness task and wait for its result"
@@ -245,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
                 model_client=DeepSeekClient(settings) if args.use_model else None,
                 case_id=args.case_id,
             )
+            if (
+                args.inject_failure
+                and args.inject_failure not in demo_service.case.execution_step_ids
+            ):
+                raise ValueError(
+                    f"故障注入点 {args.inject_failure} 不属于案例 {args.case_id}"
+                )
             runtime = create_change_runtime(demo_service)
             generation_run_id = ""
             execution_run_id = ""
@@ -269,11 +276,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"计划哈希: {ticket['plan_hash']}")
                 print(f"环境快照: v{ticket['environment_snapshot_version']} {ticket['environment_snapshot_hash']}")
                 print(f"知识证据: {', '.join('K' + str(item['card_id']) for item in ticket['knowledge_references'])}")
-                print(
-                    "执行顺序: "
-                    f"{ticket['plan_steps'][0]['route_table_id']} 灰度 -> 验证 -> "
-                    f"{ticket['plan_steps'][1]['route_table_id']} -> 验证"
-                )
+                step_tables = [
+                    str(item["route_table_id"]) for item in ticket["plan_steps"]
+                ]
+                if len(step_tables) > 5:
+                    sequence = " -> ".join(step_tables[:4] + ["…", step_tables[-1]])
+                else:
+                    sequence = " -> ".join(step_tables)
+                print(f"执行顺序: {len(step_tables)} 步 · {sequence}（逐步验证）")
                 failed_gates = [
                     item for item in package["validations"]
                     if item["hard_gate"] and item["status"] != "PASS"

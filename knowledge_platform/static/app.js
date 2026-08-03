@@ -106,6 +106,12 @@ function routeNextHop(network, tableId, destination) {
   return routes.find(route => route.destination === destination)?.next_hop || "unknown";
 }
 
+function summarizeStepIds(items) {
+  if (!items?.length) return "无";
+  if (items.length <= 6) return items.join("、");
+  return `${items.slice(0, 4).join("、")} 等 ${items.length} 步`;
+}
+
 function renderChangeTopology(network, targetId = "change-topology") {
   const target = document.getElementById(targetId);
   if (!target) return;
@@ -129,7 +135,7 @@ function renderChangeTopology(network, targetId = "change-topology") {
   const services = Object.values(state.services || {});
   const ports = services[0]?.ports || [443, 5432];
   target.innerHTML = `
-    <span class="topology-context">${escapeHtml(state.region)} / ${escapeHtml(state.vpc?.id)}</span>
+    <span class="topology-context">${escapeHtml(state.region)} / ${escapeHtml(state.vpc?.id)} · 展示 2 / ${routeTables.length} 张路由表</span>
     <div class="topology-line a ${hopA === targetHopId ? "active" : "degraded"}"></div>
     <div class="topology-line b ${hopB === targetHopId ? "active" : "degraded"}"></div>
     <div class="topology-node route-a"><div><strong>${escapeHtml(tableAId)}</strong><small>${escapeHtml(tableA.availability_zone)} · 下一跳 ${escapeHtml(hopA)}</small></div></div>
@@ -150,12 +156,23 @@ function renderChangeCases() {
       <span class="case-card-meta"><em>${escapeHtml(item.category)}</em><b>${escapeHtml(item.risk_level)} · ${item.risk_score}</b></span>
       <strong>${escapeHtml(item.label)}</strong>
       <small>${escapeHtml(item.description)}</small>
-      <span class="case-card-evidence">K${item.knowledge_card_id} · ${escapeHtml(item.knowledge_status)} · ${escapeHtml(item.ticket_id)}</span>
+      <span class="case-card-evidence">K${item.knowledge_card_id} · ${escapeHtml(item.knowledge_status)} · ${item.execution_step_count} 步 · ${escapeHtml(item.ticket_id)}</span>
     </button>`).join("");
   target.querySelectorAll(".change-case-card").forEach(button => button.addEventListener("click", () => {
     selectedChangeCaseId = button.dataset.caseId;
     renderChangeCases();
   }));
+  const selected = changeCases.find(item => item.case_id === selectedChangeCaseId);
+  const failureSelect = document.getElementById("change-failure");
+  if (failureSelect && selected) {
+    const previous = failureSelect.value;
+    failureSelect.innerHTML = `<option value="">正常闭环</option>`
+      + (selected.failure_injection_points || []).map((point, index) =>
+        `<option value="${escapeHtml(point.step_id)}">第 ${index + 1} 步失败：${escapeHtml(point.label)}</option>`
+      ).join("");
+    failureSelect.value = (selected.failure_injection_points || []).some(point => point.step_id === previous)
+      ? previous : "";
+  }
 }
 
 async function loadChangeCases() {
@@ -255,8 +272,8 @@ function renderChangeResults(session) {
 
   document.getElementById("result-summary").innerHTML = `
     <div class="result-summary-row"><span>变更对象</span><strong>${escapeHtml(ticket.region)} / ${escapeHtml(ticket.vpc_id)}</strong></div>
-    <div class="result-summary-row"><span>已应用步骤</span><strong>${escapeHtml(applied.join("、") || "无")}</strong></div>
-    <div class="result-summary-row"><span>回退步骤</span><strong>${escapeHtml(rolledBack.join("、") || "未触发")}</strong></div>
+    <div class="result-summary-row"><span>已应用步骤</span><strong title="${escapeHtml(applied.join("、"))}">${escapeHtml(summarizeStepIds(applied))}</strong></div>
+    <div class="result-summary-row"><span>回退步骤</span><strong title="${escapeHtml(rolledBack.join("、"))}">${escapeHtml(rolledBack.length ? summarizeStepIds(rolledBack) : "未触发")}</strong></div>
     <div class="result-summary-row"><span>变更前哈希</span><code title="${escapeHtml(beforeHash)}">${escapeHtml(beforeHash)}</code></div>
     <div class="result-summary-row"><span>变更后哈希</span><code title="${escapeHtml(afterHash)}">${escapeHtml(afterHash)}</code></div>`;
   document.getElementById("result-execution-validations").innerHTML = executionValidations.length
@@ -309,6 +326,7 @@ function renderChangeSession(session) {
     document.getElementById("change-ticket-summary").textContent = ticket.summary;
     const facts = [
       ["环境", `${ticket.region} / ${ticket.vpc_id}`], ["影响业务", ticket.affected_services.join("、")],
+      ["执行规模", `${ticket.plan_steps.length} 个可逆步骤 / ${ticket.change_window.duration_minutes} 分钟窗口`],
       ["环境快照", `v${ticket.environment_snapshot_version} / ${ticket.environment_snapshot_hash}`],
       ["不可变计划", ticket.plan_hash], ["生成模式", ticket.generator_mode],
     ];

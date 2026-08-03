@@ -10,15 +10,20 @@
 
 ## 案例目录
 
-平台预置 5 个明确标记为合成数据的历史变更案例，并以 `APPROVED` 卡片写入知识库：
+平台预置 10 个明确标记为合成数据的历史变更案例，并以 `APPROVED` 卡片写入知识库：
 
 - `dc-route-failover`：专线路由主备切换，`CHG-DEMO-ROUTE-001`；
 - `nat-egress-bluegreen`：NAT 网关蓝绿切换，`CHG-DEMO-NAT-002`；
 - `firewall-cluster-maintenance`：云防火墙集群维护切流，`CHG-DEMO-CFW-003`；
 - `cross-region-dr-activation`：跨区域灾备链路启用，`CHG-DEMO-DR-004`；
-- `partner-extranet-migration`：合作方 VPN 外联迁移，`CHG-DEMO-B2B-005`。
+- `partner-extranet-migration`：合作方 VPN 外联迁移，`CHG-DEMO-B2B-005`；
+- `transit-hub-route-domain-migration`：云骨干路由域四波次迁移，`CHG-DEMO-TGW-006`，12 个执行步骤；
+- `east-west-firewall-service-chain`：东西向防火墙服务链插入，`CHG-DEMO-EWFW-007`，14 个执行步骤；
+- `kubernetes-egress-pool-migration`：多集群容器出口池迁移，`CHG-DEMO-K8S-008`，10 个执行步骤；
+- `dns-resolver-endpoint-migration`：混合云 DNS 出站端点迁移，`CHG-DEMO-DNS-009`，6 个执行步骤；
+- `private-endpoint-service-cutover`：私网终端节点服务切换，`CHG-DEMO-PES-010`，4 个执行步骤。
 
-每个案例都提供独立的区域、VPC、双 AZ 路由表、源/目标下一跳、受影响服务、风险、历史结果和检索关键词。案例定义同时驱动环境模拟、知识检索、变更单生成和前端拓扑，避免界面选择与实际执行脱节。
+每个案例都提供独立的区域、VPC、多张路由表、源/目标下一跳、受影响服务、窗口、风险、历史结果和检索关键词。案例定义同时驱动环境模拟、知识检索、变更单生成、故障注入点和前端拓扑，避免界面选择与实际执行脱节。
 
 ### 默认场景
 
@@ -42,7 +47,7 @@ python run.py serve
 
 访问 <http://127.0.0.1:8765>，从左侧进入“变更方案生成”：
 
-1. 从知识案例库选择一个案例，再选择正常闭环或 AZ-A / AZ-B 故障注入并生成变更单；
+1. 从知识案例库选择一个案例，再选择正常闭环或任意具体执行步骤的故障注入并生成变更单；
 2. 查看七阶段进度、双 AZ 拓扑、有效下一跳、知识证据、不可变计划哈希和全部硬校验；
 3. 在人工门禁输入审批人和页面提示的精确确认串 `APPROVE <变更单号>`；
 4. 执行结束后进入独立“变更结果”页，观察执行后拓扑、指标验证、必要时的逆序回退和全量审计轨迹；
@@ -64,12 +69,18 @@ python run.py demo-change
 python run.py demo-change --case-id nat-egress-bluegreen
 ```
 
+运行 14 步东西向防火墙服务链案例：
+
+```powershell
+python run.py demo-change --case-id east-west-firewall-service-chain
+```
+
 审批前程序会打印工单摘要、计划哈希、环境快照哈希、知识引用和校验结果。只有输入与提示完全一致的批准串才会继续；直接回车、输入其他内容或标准输入结束都会拒绝执行，模拟网络保持不变。
 
 演示自动回退：
 
 ```powershell
-python run.py demo-change --inject-failure route-switch-az-b
+python run.py demo-change --case-id east-west-firewall-service-chain --inject-failure route-switch-ewfw-data-b
 ```
 
 尝试让 DeepSeek 润色叙述字段：

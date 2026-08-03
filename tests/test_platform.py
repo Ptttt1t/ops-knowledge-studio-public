@@ -944,10 +944,17 @@ class PlatformTests(unittest.TestCase):
             try:
                 with http_urlopen(f"{base}/api/change-cases", timeout=10) as response:
                     catalog = json.loads(response.read().decode("utf-8"))["cases"]
-                self.assertGreaterEqual(len(catalog), 5)
+                self.assertEqual(len(catalog), 10)
                 self.assertTrue(
                     all(item["knowledge_status"] == "APPROVED" for item in catalog)
                 )
+                complex_case = next(
+                    item
+                    for item in catalog
+                    if item["case_id"] == "east-west-firewall-service-chain"
+                )
+                self.assertEqual(complex_case["execution_step_count"], 14)
+                self.assertEqual(len(complex_case["failure_injection_points"]), 14)
                 created = post(
                     "/api/change-demos",
                     {

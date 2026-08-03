@@ -221,7 +221,7 @@ class DemoChangeService:
 
         now = datetime.now(timezone.utc)
         window_start = now + timedelta(minutes=15)
-        window_end = window_start + timedelta(minutes=30)
+        window_end = window_start + timedelta(minutes=self.case.window_minutes)
         thresholds = {
             "min_tcp_success_rate": 99.5,
             "max_packet_loss_percent": 1.0,
@@ -229,27 +229,17 @@ class DemoChangeService:
         }
         steps = [
             PlanStep(
-                step_id="route-switch-az-a",
-                phase="CANARY",
+                step_id=self.case.step_id(index),
+                phase=self.case.step_phase(index),
                 action="mod-route-next-hop",
-                route_table_id=self.case.route_tables[0]["id"],
-                availability_zone=self.case.route_tables[0]["az"],
+                route_table_id=table["id"],
+                availability_zone=table["az"],
                 destination=self.DESTINATION,
                 from_next_hop=self.case.from_next_hop,
                 to_next_hop=self.case.to_next_hop,
                 validation_thresholds=thresholds,
-            ),
-            PlanStep(
-                step_id="route-switch-az-b",
-                phase="ROLLOUT",
-                action="mod-route-next-hop",
-                route_table_id=self.case.route_tables[1]["id"],
-                availability_zone=self.case.route_tables[1]["az"],
-                destination=self.DESTINATION,
-                from_next_hop=self.case.from_next_hop,
-                to_next_hop=self.case.to_next_hop,
-                validation_thresholds=thresholds,
-            ),
+            )
+            for index, table in enumerate(self.case.route_tables)
         ]
         ticket = ChangeTicket(
             ticket_id=self.TICKET_ID,
@@ -268,7 +258,7 @@ class DemoChangeService:
             change_window={
                 "start": window_start.isoformat(),
                 "end": window_end.isoformat(),
-                "duration_minutes": "30",
+                "duration_minutes": str(self.case.window_minutes),
             },
             environment_snapshot_version=int(snapshot["version"]),
             environment_snapshot_hash=str(snapshot["state_hash"]),
@@ -282,8 +272,7 @@ class DemoChangeService:
             ],
             rollback_steps=[
                 "冻结尚未执行的路由步骤",
-                f"按 {self.case.route_tables[1]['az']}、{self.case.route_tables[0]['az']} "
-                f"逆序恢复 {self.case.from_next_hop}",
+                f"按操作日志逆序恢复已执行的路由步骤至 {self.case.from_next_hop}",
                 "重新核对有效下一跳、TCP连通性和回退状态哈希",
             ],
             communication_plan=list(self.case.communication_plan),
@@ -476,9 +465,13 @@ class DemoChangeService:
         end = datetime.fromisoformat(ticket.change_window["end"])
         add(
             "change_window",
-            end > start and end - start == timedelta(minutes=30),
-            "变更窗口为有效的30分钟计划窗口",
-            {"start": start.isoformat(), "end": end.isoformat()},
+            end > start and end - start == timedelta(minutes=self.case.window_minutes),
+            f"变更窗口为有效的{self.case.window_minutes}分钟计划窗口",
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "duration_minutes": self.case.window_minutes,
+            },
         )
         add(
             "snapshot_consistency",

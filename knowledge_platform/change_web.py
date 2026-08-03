@@ -148,7 +148,7 @@ class ChangeDemoWebManager:
             raise DemoChangeError(
                 f"当前变更状态不能提交审批: {package['ticket']['status']}"
             )
-        allowed_failures = {"", "route-switch-az-a", "route-switch-az-b"}
+        allowed_failures = {"", *session.service.case.execution_step_ids}
         if inject_failure not in allowed_failures:
             raise ValueError("不支持的故障注入点")
         run, _created = session.runtime.submit(

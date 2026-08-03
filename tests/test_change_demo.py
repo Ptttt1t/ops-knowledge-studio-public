@@ -73,9 +73,12 @@ class ChangeDemoTests(unittest.TestCase):
         return completed
 
     def test_case_catalog_is_approved_idempotent_and_drives_each_plan(self) -> None:
-        self.assertGreaterEqual(len(CHANGE_CASES), 5)
+        self.assertEqual(len(CHANGE_CASES), 10)
         self.assertEqual(len({item.case_id for item in CHANGE_CASES}), len(CHANGE_CASES))
         self.assertEqual(len({item.ticket_id for item in CHANGE_CASES}), len(CHANGE_CASES))
+        complex_cases = [item for item in CHANGE_CASES if len(item.route_tables) >= 10]
+        self.assertGreaterEqual(len(complex_cases), 3)
+        self.assertTrue(all(len(item.procedure_steps) >= 10 for item in complex_cases))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             store = KnowledgeStore(root / "main.db")
@@ -96,10 +99,61 @@ class ChangeDemoTests(unittest.TestCase):
                 self.assertEqual(ticket["vpc_id"], case.vpc_id)
                 self.assertEqual(ticket["plan_steps"][0]["route_table_id"], case.route_tables[0]["id"])
                 self.assertEqual(ticket["plan_steps"][0]["to_next_hop"], case.to_next_hop)
+                self.assertEqual(len(ticket["plan_steps"]), len(case.route_tables))
+                self.assertEqual(
+                    [item["step_id"] for item in ticket["plan_steps"]],
+                    list(case.execution_step_ids),
+                )
                 self.assertEqual(ticket["status"], ChangeStatus.READY_FOR_APPROVAL.value)
                 self.assertTrue(
                     all(ref["status"] == CardStatus.APPROVED.value for ref in ticket["knowledge_references"])
                 )
+
+    def test_complex_tgw_case_executes_all_twelve_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = DemoChangeService(
+                Path(temporary) / "tgw-demo",
+                case_id="transit-hub-route-domain-migration",
+            )
+            runtime, package = self.generate_with_runtime(service)
+            try:
+                self.assertEqual(len(package["ticket"]["plan_steps"]), 12)
+                execution = self.submit_execution(runtime, service)
+                completed = self.approve_and_wait(runtime, service, execution["id"])
+                self.assertEqual(completed["status"], "SUCCEEDED")
+                final = service.ticket_package(service.TICKET_ID)
+                self.assertEqual(len(final["execution"]["applied_steps"]), 12)
+                self.assertEqual(len(service.simulator.operation_rows(service.TICKET_ID)), 12)
+                snapshot = service.simulator.snapshot()["state"]
+                for table in service.case.route_tables:
+                    route = next(
+                        item
+                        for item in snapshot["route_tables"][table["id"]]["routes"]
+                        if item["destination"] == service.case.destination
+                    )
+                    self.assertEqual(route["next_hop"], service.case.to_next_hop)
+            finally:
+                runtime.stop()
+
+    def test_complex_firewall_case_rolls_back_ten_applied_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = DemoChangeService(
+                Path(temporary) / "ewfw-demo",
+                case_id="east-west-firewall-service-chain",
+            )
+            package = service.generate_ticket(requested_by="tester")
+            ticket = ChangeTicket.from_dict(package["ticket"])
+            before = service.simulator.snapshot()
+            failure_step = ticket.plan_steps[9].step_id
+            record = service.simulator.execute_plan(
+                ticket,
+                run_id="complex-rollback",
+                inject_failure=failure_step,
+            )
+            self.assertEqual(record.outcome, "ROLLED_BACK")
+            self.assertEqual(len(record.applied_steps), 10)
+            self.assertEqual(record.rollback_steps, list(reversed(record.applied_steps)))
+            self.assertEqual(record.after_state_hash, before["state_hash"])
 
     def test_non_default_nat_case_executes_to_selected_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

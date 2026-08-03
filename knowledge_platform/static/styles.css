@@ -198,7 +198,7 @@ dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 .ticket-facts { display: grid; grid-template-columns: 92px 1fr; gap: 8px 12px; margin: 18px 0; font-size: 11px; }
 .ticket-facts dt { color: var(--muted); }
 .ticket-facts dd { min-width: 0; margin: 0; overflow: hidden; font-family: Consolas, "Microsoft YaHei", monospace; text-overflow: ellipsis; white-space: nowrap; }
-.plan-list { display: grid; gap: 8px; }
+.plan-list { display: grid; gap: 8px; max-height: 440px; overflow: auto; padding-right: 3px; }
 .plan-step { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 9px; padding: 10px; border: 1px solid #e0e2dc; border-radius: 6px; background: #fafaf6; }
 .plan-step > span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: white; background: var(--green); font-size: 10px; }
 .plan-step strong, .plan-step small { display: block; }
