@@ -88,8 +88,9 @@ conda activate ops-knowledge-studio
 git clone https://github.com/Ptttt1t/ops-knowledge-studio-public.git
 cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -c constraints/base.txt -e .
 copy .env.example .env
+python run.py generate-access-token
 python run.py init
 python run.py serve
 ```
@@ -102,8 +103,9 @@ conda activate ops-knowledge-studio
 git clone https://github.com/Ptttt1t/ops-knowledge-studio-public.git
 cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -c constraints/base.txt -e .
 cp .env.example .env
+python run.py generate-access-token
 python run.py init
 python run.py serve
 ```
@@ -111,9 +113,9 @@ python run.py serve
 启动后访问：
 
 - Web 工作台：<http://127.0.0.1:8765>
-- 健康检查：<http://127.0.0.1:8765/api/health>
+- 无鉴权存活检查：<http://127.0.0.1:8765/api/health/live>
 
-日常启动只需要激活环境并执行 `python run.py serve`。`python -m pip install -e .` 仅在首次部署或依赖变化后重新运行。
+将令牌命令输出的 `PLATFORM_ACCESS_TOKEN_HASH=...` 写入 `.env`，浏览器首次打开时输入对应明文令牌。日常启动只需要激活环境并执行 `python run.py serve`。
 
 ## 三分钟体验变更闭环
 
@@ -373,11 +375,12 @@ python run.py demo-change --case-id nat-egress-bluegreen
 
 ## 部署与安全边界
 
-当前 Web 服务定位为本机或受控内网演示，尚未实现账号登录、租户隔离和公网级鉴权：
+当前 Web 服务定位为本机或受控内网演示，默认启用共享高熵令牌、Host/Origin 白名单、严格 Content-Type、模型调用额度和文档解析限制：
 
 - 保持 `PLATFORM_HOST=127.0.0.1`；
-- 不要直接将 8765 端口暴露到互联网；
-- 多人内网使用时，在前面增加 TLS、身份认证、访问日志和来源限制；
+- 不要直接将 8765 端口暴露到内网或互联网；
+- 多人内网使用时必须在前面增加 HTTPS 反向代理，并配置浏览器实际访问的 Host 与 Origin；
+- 共享令牌下所有 Web 审计主体固定为 `shared-operator`，它不提供个人身份或职责分离；
 - 不要把生产数据库、业务文档、上传目录、运行工件或 `.env` 上传到公开仓库；
 - 不要向本项目填入真实云凭据，当前代码没有真实云变更适配器；
 - 自动抽取和执行反馈都必须经人工审核后才能成为 `APPROVED` 知识。
@@ -389,6 +392,7 @@ python run.py demo-change --case-id nat-egress-bluegreen
 - [部署指南](docs/deployment.md)
 - [云网络变更单最小闭环演示](docs/change-demo.md)
 - [第一阶段加固说明](docs/first-stage-hardening.md)
+- [Web 与资源安全基线](docs/security-hardening.md)
 - [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)
 
 ## 当前边界与下一步

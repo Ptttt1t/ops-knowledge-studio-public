@@ -27,8 +27,9 @@ conda activate ops-knowledge-studio
 git clone https://github.com/Ptttt1t/ops-knowledge-studio-public.git
 cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -c constraints/base.txt -e .
 copy .env.example .env
+python run.py generate-access-token
 notepad .env
 ```
 
@@ -40,6 +41,10 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 PLATFORM_HOST=127.0.0.1
 PLATFORM_PORT=8765
+PLATFORM_AUTH_MODE=token
+PLATFORM_ACCESS_TOKEN_HASH=粘贴令牌命令输出的sha256值
+PLATFORM_ALLOWED_HOSTS=127.0.0.1,localhost,::1
+PLATFORM_ALLOWED_ORIGINS=http://127.0.0.1:8765,http://localhost:8765
 ```
 
 不要将真实 `.env` 提交到 Git；仓库已默认忽略该文件。
@@ -52,7 +57,7 @@ python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-浏览器访问 <http://127.0.0.1:8765>，健康检查访问 <http://127.0.0.1:8765/api/health>。
+浏览器访问 <http://127.0.0.1:8765> 并输入令牌明文；无鉴权存活检查访问 <http://127.0.0.1:8765/api/health/live>。详细 `/api/health` 需要 Bearer 令牌。
 
 ## 3. Linux 或 macOS 首次部署
 
@@ -62,8 +67,9 @@ conda activate ops-knowledge-studio
 git clone https://github.com/Ptttt1t/ops-knowledge-studio-public.git
 cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -c constraints/base.txt -e .
 cp .env.example .env
+python run.py generate-access-token
 python run.py init
 python -m unittest discover -s tests -v
 python run.py serve
@@ -121,7 +127,7 @@ python scripts/start_server.py
 
 ```text
 git pull --ff-only
-python -m pip install -e .
+python -m pip install -c constraints/base.txt -e .
 python run.py init
 python -m unittest discover -s tests -v
 python run.py serve
@@ -144,14 +150,33 @@ HARNESS_SYNC_WAIT_SECONDS=900
 
 ## 9. 安全边界
 
-当前 Web 服务没有账号登录、租户隔离和公网级鉴权，因此：
+当前 Web 服务使用共享令牌，而不是个人账号或租户体系，因此：
 
 - 保持 `PLATFORM_HOST=127.0.0.1`；
 - 不要直接将 8765 端口暴露到互联网；
-- 内网多人使用时，应在前面增加带 TLS、身份认证和访问日志的反向代理；
+- 内网多人使用时，必须使用 HTTPS 反向代理；可从 `docs/nginx-ops-knowledge-studio.conf.example` 开始配置；
+- 将代理域名加入 `PLATFORM_ALLOWED_HOSTS`，将完整 HTTPS Origin 加入 `PLATFORM_ALLOWED_ORIGINS`；
+- 共享令牌只通过受保护渠道分发，所有 Web 审计主体固定为 `shared-operator`；
 - 用防火墙限制来源地址；
 - 不要把生产数据库、业务文档或 `.env` 上传到 Issue、PR 或公开日志；
 - 自动抽取结果仍需人工审核，只有 `APPROVED` 卡片会进入可信回答。
+
+例如代理域名为 `opsstudio.internal.example` 时，应用仍监听回环地址，并将以下值写入 `.env`：
+
+```dotenv
+PLATFORM_HOST=127.0.0.1
+PLATFORM_ALLOWED_HOSTS=opsstudio.internal.example,127.0.0.1,localhost
+PLATFORM_ALLOWED_ORIGINS=https://opsstudio.internal.example
+```
+
+启用代理后用以下命令核对边界：
+
+```bash
+curl --fail http://127.0.0.1:8765/api/health/live
+sudo ss -lntp | grep 8765
+```
+
+第二条命令必须显示应用只监听 `127.0.0.1:8765`；云安全组和主机防火墙只开放 HTTPS 入口，不开放 8765。
 
 ## 10. 故障检查
 
@@ -165,4 +190,4 @@ python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-文档解析异常时访问 `/api/health`，检查 `document_processing` 中的 PDF/OCR 能力，再查看 `artifacts/server.err.log`。
+文档解析异常时携带 Bearer 令牌访问 `/api/health`，检查 `document_processing` 中的 PDF/OCR 能力，再查看 `artifacts/server.err.log`。

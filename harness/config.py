@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import os
 from pathlib import Path
+import string
 from typing import Mapping
+from urllib.parse import urlsplit
 
 
 PLACEHOLDERS = {
@@ -72,6 +75,20 @@ def _read_float(values: Mapping[str, str], name: str, default: float) -> float:
         raise ConfigurationError(f"{name} 必须是数字，当前值为 {raw!r}") from exc
 
 
+def _read_csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in _get(values, name, default).split(",") if item.strip())
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 def _resolve_path(project_root: Path, raw: str) -> Path:
     path = Path(raw)
     if not path.is_absolute():
@@ -106,6 +123,34 @@ class Settings:
     runtime_workers: int = 2
     runtime_max_queued_runs: int = 100
     runtime_sync_wait_seconds: int = 900
+    auth_mode: str = "disabled"
+    access_token_hash: str = ""
+    allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "::1")
+    allowed_origins: tuple[str, ...] = ()
+    shared_actor: str = "shared-operator"
+    request_rate_per_minute: int = 120
+    write_rate_per_minute: int = 30
+    expensive_rate_per_minute: int = 5
+    max_json_bytes: int = 256 * 1024
+    max_upload_bytes: int = 10 * 1024 * 1024
+    max_text_chars: int = 120_000
+    max_document_chunks: int = 20
+    max_model_calls_per_ingest: int = 60
+    max_cards_per_document: int = 30
+    max_concurrent_ingestions: int = 1
+    max_docx_entries: int = 1000
+    max_docx_uncompressed_bytes: int = 50 * 1024 * 1024
+    max_docx_xml_bytes: int = 10 * 1024 * 1024
+    max_archive_compression_ratio: int = 100
+    max_pdf_pages: int = 100
+    max_ocr_pages: int = 20
+    max_image_pixels: int = 25_000_000
+    document_parse_timeout_seconds: int = 120
+    model_max_response_bytes: int = 2 * 1024 * 1024
+    change_max_active_sessions: int = 3
+    change_max_retained_sessions: int = 20
+    change_active_ttl_seconds: int = 2 * 60 * 60
+    change_terminal_ttl_seconds: int = 24 * 60 * 60
 
     @property
     def api_configured(self) -> bool:
@@ -133,7 +178,43 @@ class Settings:
             "agent_max_steps": self.agent_max_steps,
             "runtime_workers": self.runtime_workers,
             "runtime_max_queued_runs": self.runtime_max_queued_runs,
+            "auth_mode": self.auth_mode,
+            "shared_actor": self.shared_actor,
+            "request_limits": {
+                "json_bytes": self.max_json_bytes,
+                "upload_bytes": self.max_upload_bytes,
+                "text_chars": self.max_text_chars,
+                "document_chunks": self.max_document_chunks,
+                "model_calls_per_ingest": self.max_model_calls_per_ingest,
+                "concurrent_ingestions": self.max_concurrent_ingestions,
+            },
+            "change_session_limits": {
+                "active": self.change_max_active_sessions,
+                "retained": self.change_max_retained_sessions,
+                "active_ttl_seconds": self.change_active_ttl_seconds,
+                "terminal_ttl_seconds": self.change_terminal_ttl_seconds,
+            },
         }
+
+    def validate_web_security(self, host: str | None = None) -> None:
+        bind_host = (host or self.host).strip()
+        if self.auth_mode not in {"token", "disabled"}:
+            raise ConfigurationError("PLATFORM_AUTH_MODE 只能是 token 或 disabled")
+        if self.auth_mode == "token":
+            digest = self.access_token_hash.removeprefix("sha256:")
+            if (
+                not self.access_token_hash.startswith("sha256:")
+                or len(digest) != 64
+                or any(character not in string.hexdigits for character in digest)
+            ):
+                raise ConfigurationError(
+                    "PLATFORM_ACCESS_TOKEN_HASH 缺失或格式无效；请先运行 "
+                    "python run.py generate-access-token"
+                )
+        elif not _is_loopback_host(bind_host):
+            raise ConfigurationError("关闭 Web 鉴权时只允许监听回环地址")
+        if not self.allowed_hosts:
+            raise ConfigurationError("PLATFORM_ALLOWED_HOSTS 不能为空")
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> "Settings":
@@ -145,8 +226,11 @@ class Settings:
         values = read_env_file(env_file) if env_file is not None else {}
 
         base_url = _get(values, "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        if not base_url.startswith(("http://", "https://")):
+        parsed_base_url = urlsplit(base_url)
+        if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.hostname:
             raise ConfigurationError("DEEPSEEK_BASE_URL 必须以 http:// 或 https:// 开头")
+        if parsed_base_url.scheme == "http" and not _is_loopback_host(parsed_base_url.hostname):
+            raise ConfigurationError("DEEPSEEK_BASE_URL 使用 HTTP 时只允许本机回环地址")
 
         thinking_mode = _get(values, "DEEPSEEK_THINKING", "disabled").lower()
         if thinking_mode not in {"", "enabled", "disabled"}:
@@ -178,6 +262,11 @@ class Settings:
                 "DEEPSEEK_RETRY_INITIAL_SECONDS 不能大于 DEEPSEEK_RETRY_MAX_SECONDS"
             )
 
+        platform_port = _read_int(values, "PLATFORM_PORT", 8765)
+        default_origins = (
+            f"http://127.0.0.1:{platform_port},http://localhost:{platform_port}"
+        )
+        auth_mode = _get(values, "PLATFORM_AUTH_MODE", "token").lower()
         settings = cls(
             project_root=project_root,
             api_key=_get(values, "DEEPSEEK_API_KEY", "YOUR_DEEPSEEK_API_KEY_HERE"),
@@ -203,14 +292,83 @@ class Settings:
             retrieval_min_coverage=retrieval_min_coverage,
             agent_max_steps=_read_int(values, "AGENT_MAX_STEPS", 4),
             host=_get(values, "PLATFORM_HOST", "127.0.0.1"),
-            port=_read_int(values, "PLATFORM_PORT", 8765),
+            port=platform_port,
             runtime_database_path=_resolve_path(
                 project_root, _get(values, "HARNESS_RUNTIME_DB_PATH", "data/runtime.db")
             ),
             runtime_workers=_read_int(values, "HARNESS_WORKERS", 2),
             runtime_max_queued_runs=_read_int(values, "HARNESS_MAX_QUEUED_RUNS", 100),
             runtime_sync_wait_seconds=_read_int(values, "HARNESS_SYNC_WAIT_SECONDS", 900),
+            auth_mode=auth_mode,
+            access_token_hash=_get(values, "PLATFORM_ACCESS_TOKEN_HASH", ""),
+            allowed_hosts=_read_csv(
+                values, "PLATFORM_ALLOWED_HOSTS", "127.0.0.1,localhost,::1"
+            ),
+            allowed_origins=_read_csv(
+                values, "PLATFORM_ALLOWED_ORIGINS", default_origins
+            ),
+            shared_actor=_get(values, "PLATFORM_SHARED_ACTOR", "shared-operator")
+            or "shared-operator",
+            request_rate_per_minute=_read_int(
+                values, "PLATFORM_REQUESTS_PER_MINUTE", 120
+            ),
+            write_rate_per_minute=_read_int(values, "PLATFORM_WRITES_PER_MINUTE", 30),
+            expensive_rate_per_minute=_read_int(
+                values, "PLATFORM_EXPENSIVE_PER_MINUTE", 5
+            ),
+            max_json_bytes=_read_int(values, "PLATFORM_MAX_JSON_BYTES", 256 * 1024),
+            max_upload_bytes=_read_int(
+                values, "DOCUMENT_MAX_UPLOAD_BYTES", 10 * 1024 * 1024
+            ),
+            max_text_chars=_read_int(values, "KNOWLEDGE_MAX_TEXT_CHARS", 120_000),
+            max_document_chunks=_read_int(
+                values, "KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT", 20
+            ),
+            max_model_calls_per_ingest=_read_int(
+                values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60
+            ),
+            max_cards_per_document=_read_int(
+                values, "KNOWLEDGE_MAX_CARDS_PER_DOCUMENT", 30
+            ),
+            max_concurrent_ingestions=_read_int(
+                values, "KNOWLEDGE_MAX_CONCURRENT_INGESTIONS", 1
+            ),
+            max_docx_entries=_read_int(values, "DOCUMENT_MAX_DOCX_ENTRIES", 1000),
+            max_docx_uncompressed_bytes=_read_int(
+                values, "DOCUMENT_MAX_DOCX_UNCOMPRESSED_BYTES", 50 * 1024 * 1024
+            ),
+            max_docx_xml_bytes=_read_int(
+                values, "DOCUMENT_MAX_DOCX_XML_BYTES", 10 * 1024 * 1024
+            ),
+            max_archive_compression_ratio=_read_int(
+                values, "DOCUMENT_MAX_COMPRESSION_RATIO", 100
+            ),
+            max_pdf_pages=_read_int(values, "DOCUMENT_MAX_PDF_PAGES", 100),
+            max_ocr_pages=_read_int(values, "DOCUMENT_MAX_OCR_PAGES", 20),
+            max_image_pixels=_read_int(values, "DOCUMENT_MAX_IMAGE_PIXELS", 25_000_000),
+            document_parse_timeout_seconds=_read_int(
+                values, "DOCUMENT_PARSE_TIMEOUT_SECONDS", 120
+            ),
+            model_max_response_bytes=_read_int(
+                values, "MODEL_MAX_RESPONSE_BYTES", 2 * 1024 * 1024
+            ),
+            change_max_active_sessions=_read_int(
+                values, "CHANGE_MAX_ACTIVE_SESSIONS", 3
+            ),
+            change_max_retained_sessions=_read_int(
+                values, "CHANGE_MAX_RETAINED_SESSIONS", 20
+            ),
+            change_active_ttl_seconds=_read_int(
+                values, "CHANGE_ACTIVE_TTL_SECONDS", 2 * 60 * 60
+            ),
+            change_terminal_ttl_seconds=_read_int(
+                values, "CHANGE_TERMINAL_TTL_SECONDS", 24 * 60 * 60
+            ),
         )
+        if settings.change_max_active_sessions > settings.change_max_retained_sessions:
+            raise ConfigurationError(
+                "CHANGE_MAX_ACTIVE_SESSIONS 不能大于 CHANGE_MAX_RETAINED_SESSIONS"
+            )
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
         if settings.runtime_database_path is not None:
             settings.runtime_database_path.parent.mkdir(parents=True, exist_ok=True)

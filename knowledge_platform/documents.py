@@ -18,6 +18,37 @@ class DocumentError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DocumentLimits:
+    max_file_bytes: int = 10 * 1024 * 1024
+    max_text_chars: int = 120_000
+    max_docx_entries: int = 1000
+    max_docx_uncompressed_bytes: int = 50 * 1024 * 1024
+    max_docx_xml_bytes: int = 10 * 1024 * 1024
+    max_archive_compression_ratio: int = 100
+    max_pdf_pages: int = 100
+    max_ocr_pages: int = 20
+    max_image_pixels: int = 25_000_000
+
+    @classmethod
+    def from_settings(cls, settings: object) -> "DocumentLimits":
+        return cls(
+            max_file_bytes=int(getattr(settings, "max_upload_bytes")),
+            max_text_chars=int(getattr(settings, "max_text_chars")),
+            max_docx_entries=int(getattr(settings, "max_docx_entries")),
+            max_docx_uncompressed_bytes=int(
+                getattr(settings, "max_docx_uncompressed_bytes")
+            ),
+            max_docx_xml_bytes=int(getattr(settings, "max_docx_xml_bytes")),
+            max_archive_compression_ratio=int(
+                getattr(settings, "max_archive_compression_ratio")
+            ),
+            max_pdf_pages=int(getattr(settings, "max_pdf_pages")),
+            max_ocr_pages=int(getattr(settings, "max_ocr_pages")),
+            max_image_pixels=int(getattr(settings, "max_image_pixels")),
+        )
+
+
+@dataclass(frozen=True)
 class SourceDocument:
     name: str
     source_type: str
@@ -203,8 +234,10 @@ def ground_evidence_quote(source_text: str, proposed_quote: str) -> EvidenceSpan
     )
 
 
-def _read_text_with_fallback(path: Path) -> str:
+def _read_text_with_fallback(path: Path, limits: DocumentLimits) -> str:
     raw = path.read_bytes()
+    if len(raw) > limits.max_file_bytes:
+        raise DocumentError(f"文件超过 {limits.max_file_bytes} 字节限制: {path.name}")
     for encoding in ("utf-8-sig", "utf-16", "gb18030"):
         try:
             return raw.decode(encoding)
@@ -213,14 +246,37 @@ def _read_text_with_fallback(path: Path) -> str:
     raise DocumentError(f"无法识别文本编码: {path.name}")
 
 
-def _read_docx(path: Path) -> str:
+def _read_docx(path: Path, limits: DocumentLimits) -> str:
     try:
         with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) > limits.max_docx_entries:
+                raise DocumentError("DOCX ZIP 条目数量超过安全限制")
+            total_uncompressed = sum(item.file_size for item in entries)
+            if total_uncompressed > limits.max_docx_uncompressed_bytes:
+                raise DocumentError("DOCX 解压后总大小超过安全限制")
+            for item in entries:
+                if item.file_size <= 0:
+                    continue
+                ratio = item.file_size / max(item.compress_size, 1)
+                if ratio > limits.max_archive_compression_ratio:
+                    raise DocumentError("DOCX 压缩比超过安全限制")
+            document_info = archive.getinfo("word/document.xml")
+            if document_info.file_size > limits.max_docx_xml_bytes:
+                raise DocumentError("DOCX document.xml 超过安全限制")
             xml = archive.read("word/document.xml")
+    except DocumentError:
+        raise
     except (zipfile.BadZipFile, KeyError) as exc:
         raise DocumentError(f"DOCX 文件损坏或格式不受支持: {path.name}") from exc
 
-    root = ElementTree.fromstring(xml)
+    lowered_xml = xml.lower()
+    if b"<!doctype" in lowered_xml or b"<!entity" in lowered_xml:
+        raise DocumentError("DOCX XML 包含被禁止的 DTD 或实体声明")
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError as exc:
+        raise DocumentError(f"DOCX XML 解析失败: {path.name}") from exc
     namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
     paragraphs: list[str] = []
     for paragraph in root.iter(f"{namespace}p"):
@@ -301,7 +357,9 @@ def _ocr_input(value: object) -> str:
     return "\n".join(_extract_ocr_lines(results)).strip()
 
 
-def _ocr_pdf_page(path: Path, page_index: int) -> str:
+def _ocr_pdf_page(
+    path: Path, page_index: int, *, max_image_pixels: int
+) -> str:
     try:
         import fitz  # type: ignore
         import numpy as np  # type: ignore
@@ -312,6 +370,9 @@ def _ocr_pdf_page(path: Path, page_index: int) -> str:
     try:
         with fitz.open(str(path)) as document:
             page = document.load_page(page_index)
+            rendered_pixels = int(page.rect.width * 2) * int(page.rect.height * 2)
+            if rendered_pixels > max_image_pixels:
+                raise DocumentError("PDF 页面渲染像素超过安全限制")
             pixmap = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
             image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
                 pixmap.height, pixmap.width, pixmap.n
@@ -323,14 +384,25 @@ def _ocr_pdf_page(path: Path, page_index: int) -> str:
         raise DocumentError(f"PDF 第 {page_index + 1} 页渲染失败：{exc}") from exc
 
 
-def _read_image(path: Path) -> str:
+def _read_image(path: Path, limits: DocumentLimits) -> str:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            width, height = image.size
+    except ImportError as exc:
+        raise DocumentError("读取图片尺寸需要 Pillow") from exc
+    except Exception as exc:
+        raise DocumentError(f"图像损坏或格式不受支持：{path.name}") from exc
+    if width <= 0 or height <= 0 or width * height > limits.max_image_pixels:
+        raise DocumentError("图像像素数量超过安全限制")
     text = _ocr_input(str(path))
     if not text:
         raise DocumentError(f"OCR 未从图像中识别到有效文字：{path.name}")
     return f"[OCR 图像：{path.name}]\n{text}"
 
 
-def _read_pdf(path: Path) -> str:
+def _read_pdf(path: Path, limits: DocumentLimits) -> str:
     try:
         from pypdf import PdfReader  # type: ignore
     except ImportError as exc:
@@ -341,7 +413,10 @@ def _read_pdf(path: Path) -> str:
         reader = PdfReader(str(path))
     except Exception as exc:
         raise DocumentError(f"PDF 文件损坏、加密或格式不受支持：{path.name}") from exc
+    if len(reader.pages) > limits.max_pdf_pages:
+        raise DocumentError(f"PDF 页数超过 {limits.max_pdf_pages} 页限制")
     pages = []
+    ocr_pages = 0
     for index, page in enumerate(reader.pages, start=1):
         try:
             text = (page.extract_text() or "").strip()
@@ -351,7 +426,12 @@ def _read_pdf(path: Path) -> str:
         if visible_chars >= OCR_MIN_TEXT_CHARS:
             pages.append(f"[第 {index} 页 | PDF 文本层]\n{text}")
             continue
-        ocr_text = _ocr_pdf_page(path, index - 1)
+        ocr_pages += 1
+        if ocr_pages > limits.max_ocr_pages:
+            raise DocumentError(f"PDF OCR 页数超过 {limits.max_ocr_pages} 页限制")
+        ocr_text = _ocr_pdf_page(
+            path, index - 1, max_image_pixels=limits.max_image_pixels
+        )
         if ocr_text:
             pages.append(f"[第 {index} 页 | PaddleOCR]\n{ocr_text}")
         elif text:
@@ -359,24 +439,29 @@ def _read_pdf(path: Path) -> str:
     return "\n\n".join(pages)
 
 
-def read_document(path: Path) -> SourceDocument:
+def read_document(
+    path: Path, *, limits: DocumentLimits | None = None
+) -> SourceDocument:
+    limits = limits or DocumentLimits()
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
         raise DocumentError(f"文件不存在: {resolved}")
+    if resolved.stat().st_size > limits.max_file_bytes:
+        raise DocumentError(f"文件超过 {limits.max_file_bytes} 字节限制: {resolved.name}")
     suffix = resolved.suffix.lower()
     if suffix in TEXT_EXTENSIONS:
-        content = _read_text_with_fallback(resolved)
+        content = _read_text_with_fallback(resolved, limits)
         if suffix == ".json":
             try:
                 content = json.dumps(json.loads(content), ensure_ascii=False, indent=2)
             except json.JSONDecodeError:
                 pass
     elif suffix == ".docx":
-        content = _read_docx(resolved)
+        content = _read_docx(resolved, limits)
     elif suffix == ".pdf":
-        content = _read_pdf(resolved)
+        content = _read_pdf(resolved, limits)
     elif suffix in IMAGE_EXTENSIONS:
-        content = _read_image(resolved)
+        content = _read_image(resolved, limits)
     else:
         raise DocumentError(
             f"暂不支持 {suffix or '无扩展名'}；支持 TXT、Markdown、CSV、JSON、YAML、"
@@ -385,6 +470,10 @@ def read_document(path: Path) -> SourceDocument:
     content = content.strip()
     if not content:
         raise DocumentError(f"文档没有可提取的文本: {resolved.name}")
+    if len(content) > limits.max_text_chars:
+        raise DocumentError(
+            f"文档提取文本超过 {limits.max_text_chars} 字符限制: {resolved.name}"
+        )
     return SourceDocument(
         name=resolved.name,
         source_type=suffix.lstrip(".") or "text",

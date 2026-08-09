@@ -19,6 +19,7 @@ from change_management.store import ChangeStoreError
 from .documents import DocumentError
 from .schema import CardStatus
 from .runtime_tasks import create_knowledge_runtime
+from .security import generate_access_token
 from .service import KnowledgeService, KnowledgeServiceError
 from .store import StoreError
 from .web import create_server
@@ -54,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("init", help="初始化 SQLite 知识库")
+    subparsers.add_parser(
+        "generate-access-token",
+        help="生成一次性显示的 Web 访问令牌及其 SHA-256 配置值",
+    )
 
     serve_parser = subparsers.add_parser("serve", help="启动本地网页平台")
     serve_parser.add_argument("--host", help="监听地址，默认读取 .env")
@@ -175,7 +180,16 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings.load(args.env)
         service = None if command == "demo-change" else KnowledgeService(settings)
 
-        if command == "init":
+        if command == "generate-access-token":
+            token, hashed = generate_access_token()
+            _print_json(
+                {
+                    "access_token": token,
+                    "env": f"PLATFORM_ACCESS_TOKEN_HASH={hashed}",
+                    "warning": "访问令牌只显示本次；请通过受保护渠道分发。",
+                }
+            )
+        elif command == "init":
             _print_json(
                 {
                     "initialized": True,

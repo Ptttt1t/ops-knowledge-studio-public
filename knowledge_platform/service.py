@@ -2,21 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from http import HTTPStatus
 from pathlib import Path
+import threading
 from typing import Any
 import unicodedata
+from uuid import uuid4
 
 from harness.api_client import APIError, DeepSeekClient
 from harness.config import Settings
 from harness.trace import TraceLogger
 
 from .documents import (
+    DocumentLimits,
     DocumentChunk,
     EvidenceSpan,
     SourceDocument,
     chunk_text,
     ground_evidence_quote,
-    read_document,
 )
 from .prompts import (
     ANSWER_SYSTEM_PROMPT,
@@ -28,11 +31,34 @@ from .prompts import (
 )
 from .retrieval import HybridRetriever, SearchHit
 from .schema import CardStatus, ComparisonResult, KnowledgeCardDraft
+from .safe_documents import read_document_safely
 from .store import KnowledgeStore
 
 
 class KnowledgeServiceError(RuntimeError):
     """Raised when a knowledge pipeline operation cannot be completed."""
+
+
+class KnowledgeRequestError(KnowledgeServiceError):
+    def __init__(self, message: str, *, status: int, code: str):
+        super().__init__(message)
+        self.status = int(status)
+        self.code = code
+
+
+@dataclass
+class ModelCallBudget:
+    maximum: int
+    used: int = 0
+
+    def consume(self, purpose: str) -> None:
+        if self.used >= self.maximum:
+            raise KnowledgeRequestError(
+                f"单次知识导入模型调用预算已用尽（{self.maximum} 次）",
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+                code="model_call_budget_exceeded",
+            )
+        self.used += 1
 
 
 @dataclass(frozen=True)
@@ -95,11 +121,18 @@ class KnowledgeService:
         self.client = client or DeepSeekClient(settings)
         self.trace = trace or TraceLogger(settings.project_root / "artifacts")
         self.retriever = HybridRetriever(self.store)
+        self._ingestion_slots = threading.BoundedSemaphore(
+            settings.max_concurrent_ingestions
+        )
 
     def ingest_file(
         self, path: Path, *, source_name: str | None = None
     ) -> dict[str, Any]:
-        document = read_document(path)
+        document = read_document_safely(
+            path,
+            limits=DocumentLimits.from_settings(self.settings),
+            timeout_seconds=self.settings.document_parse_timeout_seconds,
+        )
         if source_name and source_name.strip():
             document = SourceDocument(
                 name=source_name.strip(),
@@ -132,6 +165,12 @@ class KnowledgeService:
 
     def ingest_document(self, document: SourceDocument) -> dict[str, Any]:
         self.settings.require_api()
+        if len(document.content) > self.settings.max_text_chars:
+            raise KnowledgeRequestError(
+                f"文档文本超过 {self.settings.max_text_chars} 字符限制",
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                code="document_text_too_large",
+            )
         checksum = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
         existing = self.store.find_document_by_checksum(checksum)
         if existing is not None:
@@ -142,11 +181,66 @@ class KnowledgeService:
                 "message": "相同内容已经导入，本次未重复调用模型。",
             }
 
+        acquired = self._ingestion_slots.acquire(blocking=False)
+        if not acquired:
+            raise KnowledgeRequestError(
+                "知识导入并发额度已满，请稍后重试",
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+                code="ingestion_concurrency_exceeded",
+            )
+        owner_token = uuid4().hex
+        try:
+            claim = self.store.claim_ingestion(
+                checksum,
+                owner_token,
+                lease_seconds=max(7200, self.settings.timeout_seconds * 10),
+            )
+            if claim["state"] == "COMPLETED":
+                document_id = int(claim["document_id"])
+                return {
+                    "document_id": document_id,
+                    "duplicate_document": True,
+                    "card_ids": self.store.card_ids_for_document(document_id),
+                    "message": "相同内容已经导入，本次未重复调用模型。",
+                }
+            if claim["state"] == "PROCESSING":
+                raise KnowledgeRequestError(
+                    "相同文档正在处理，请等待当前导入完成",
+                    status=HTTPStatus.CONFLICT,
+                    code="ingestion_in_progress",
+                )
+            try:
+                return self._ingest_claimed_document(
+                    document,
+                    checksum=checksum,
+                    owner_token=owner_token,
+                )
+            except Exception as exc:
+                self.store.fail_ingestion(checksum, owner_token, str(exc))
+                raise
+        finally:
+            self._ingestion_slots.release()
+
+    def _ingest_claimed_document(
+        self,
+        document: SourceDocument,
+        *,
+        checksum: str,
+        owner_token: str,
+    ) -> dict[str, Any]:
+
         chunks = chunk_text(
             document.content,
             self.settings.chunk_size,
             self.settings.chunk_overlap,
         )
+        if len(chunks) > self.settings.max_document_chunks:
+            raise KnowledgeRequestError(
+                f"文档分片数 {len(chunks)} 超过 {self.settings.max_document_chunks} 个限制",
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                code="document_chunk_limit_exceeded",
+            )
+        budget = ModelCallBudget(self.settings.max_model_calls_per_ingest)
         extracted: list[ExtractedCard] = []
         batch_seen: dict[str, int] = {}
         batch_duplicates_skipped = 0
@@ -159,7 +253,7 @@ class KnowledgeService:
 
         for chunk in chunks:
             for extracted_chunk, payload, usage, split_depth in self._extract_chunk(
-                document.name, chunk
+                document.name, chunk, budget=budget
             ):
                 self.trace.log(
                     "knowledge_extraction_response",
@@ -239,8 +333,14 @@ class KnowledgeService:
                         )
                         continue
                     batch_seen[batch_key] = len(extracted)
+                    if len(extracted) >= self.settings.max_cards_per_document:
+                        raise KnowledgeRequestError(
+                            "单份文档生成的候选知识卡片超过限制",
+                            status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            code="document_card_limit_exceeded",
+                        )
                     score, issues = draft.quality(extracted_chunk.content)
-                    comparison = self._compare(draft)
+                    comparison = self._compare(draft, budget=budget)
                     extracted.append(
                         ExtractedCard(
                             chunk=extracted_chunk,
@@ -260,6 +360,7 @@ class KnowledgeService:
             document.content,
         )
         if not created:
+            self.store.complete_ingestion(checksum, owner_token, document_id)
             return {
                 "document_id": document_id,
                 "duplicate_document": True,
@@ -321,8 +422,10 @@ class KnowledgeService:
                 for card_id in card_ids
                 if self.store.get_card(card_id)["status"] == CardStatus.PENDING_REVIEW.value
             ),
+            "model_calls": budget.used,
             "message": "知识抽取完成，正式发布前必须人工审核。",
         }
+        self.store.complete_ingestion(checksum, owner_token, document_id)
         self.trace.log("knowledge_ingest_completed", **result)
         return result
 
@@ -402,9 +505,12 @@ class KnowledgeService:
         chunk: DocumentChunk,
         *,
         split_depth: int = 0,
+        budget: ModelCallBudget | None = None,
     ) -> list[tuple[DocumentChunk, Any, dict[str, Any] | None, int]]:
+        budget = budget or ModelCallBudget(self.settings.max_model_calls_per_ingest)
         locator = f"字符 {chunk.char_start}-{chunk.char_end}"
         try:
+            budget.consume("extract")
             payload, usage = self.client.chat_json(
                 EXTRACTION_SYSTEM_PROMPT,
                 extraction_user_prompt(source_name, locator, chunk.content),
@@ -444,11 +550,14 @@ class KnowledgeService:
                         source_name,
                         part,
                         split_depth=split_depth + 1,
+                        budget=budget,
                     )
                 )
             return results
 
-    def _compare(self, draft: KnowledgeCardDraft) -> ComparisonResult:
+    def _compare(
+        self, draft: KnowledgeCardDraft, *, budget: ModelCallBudget
+    ) -> ComparisonResult:
         query = " ".join(
             [
                 draft.title,
@@ -474,6 +583,7 @@ class KnowledgeService:
         if not hits:
             return ComparisonResult()
         candidates = [hit.card for hit in hits]
+        budget.consume("compare")
         payload, usage = self.client.chat_json(
             COMPARISON_SYSTEM_PROMPT,
             comparison_user_prompt(draft.to_dict(), candidates),
