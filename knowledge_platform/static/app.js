@@ -27,6 +27,8 @@ let changeExecutionSubmitting = false;
 let changeFailureMode = "";
 let changeCases = [];
 let selectedChangeCaseId = "dc-route-failover";
+const accessTokenKey = "ops-knowledge-studio-access-token";
+let accessToken = sessionStorage.getItem(accessTokenKey) || "";
 
 const statusLabels = {
   DRAFT: "草稿",
@@ -45,13 +47,26 @@ async function api(path, options = {}) {
   const headers = options.body instanceof FormData
     ? { ...(options.headers || {}) }
     : { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const response = await fetch(path, {
     ...options,
     headers,
   });
   const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+  if (response.status === 401) showAuthGate(payload.error || "访问令牌无效");
   if (!response.ok) throw new Error(payload.error || payload.detail || `HTTP ${response.status}`);
   return payload;
+}
+
+function showAuthGate(message = "") {
+  document.getElementById("auth-gate").hidden = false;
+  document.getElementById("auth-error").textContent = message;
+  document.getElementById("access-token").focus();
+}
+
+function hideAuthGate() {
+  document.getElementById("auth-gate").hidden = true;
+  document.getElementById("auth-error").textContent = "";
 }
 
 function toast(message, error = false) {
@@ -362,7 +377,6 @@ async function maybeSubmitChangeExecution(session) {
     return await api(`/api/change-demos/${encodeURIComponent(session.session_id)}/execute`, {
       method: "POST",
       body: JSON.stringify({
-        actor: document.getElementById("change-requester").value.trim() || "demo-operator",
         inject_failure: changeFailureMode,
       }),
     });
@@ -498,9 +512,7 @@ window.showDetail = async function showDetail(id) {
 };
 
 window.reviewCard = async function reviewCard(id, action) {
-  const reviewer = document.getElementById("reviewer").value.trim();
   const comment = document.getElementById("review-comment").value.trim();
-  if (!reviewer) return toast("请先填写审核人", true);
   let supersedesId = null;
   if (action === "supersede") {
     const raw = prompt("请输入要被替代的旧知识卡片 ID：");
@@ -510,7 +522,7 @@ window.reviewCard = async function reviewCard(id, action) {
   try {
     await api(`/api/cards/${id}/review`, {
       method: "POST",
-      body: JSON.stringify({ action, reviewer, comment, supersedes_id: supersedesId }),
+      body: JSON.stringify({ action, comment, supersedes_id: supersedesId }),
     });
     toast(`K${id} 审核完成`);
     await refreshAll();
@@ -545,7 +557,6 @@ document.getElementById("change-generate").addEventListener("click", async event
     const session = await api("/api/change-demos", {
       method: "POST",
       body: JSON.stringify({
-        requested_by: document.getElementById("change-requester").value.trim() || "demo-operator",
         use_model: document.getElementById("change-use-model").checked,
         case_id: selectedChangeCaseId,
       }),
@@ -559,15 +570,12 @@ document.getElementById("change-generate").addEventListener("click", async event
 
 async function decideChange(decision, button) {
   if (!activeChangeSession) return;
-  const actor = document.getElementById("change-approver").value.trim();
-  if (!actor) return toast("请填写审批人", true);
   setBusy(button, true, decision === "APPROVED" ? "正在提交审批……" : "正在拒绝……");
   try {
     const session = await api(`/api/change-demos/${encodeURIComponent(activeChangeSession.session_id)}/decision`, {
       method: "POST",
       body: JSON.stringify({
         decision,
-        actor,
         comment: document.getElementById("change-approval-comment").value.trim(),
         confirmation: document.getElementById("change-confirmation").value,
       }),
@@ -594,7 +602,7 @@ document.getElementById("change-publish-feedback").addEventListener("click", asy
   try {
     const session = await api(`/api/change-demos/${encodeURIComponent(activeChangeSession.session_id)}/publish-feedback`, {
       method: "POST",
-      body: JSON.stringify({ actor: document.getElementById("change-approver").value.trim() || "demo-operator" }),
+      body: JSON.stringify({}),
     });
     renderChangeSession(session);
     await refreshAll();
@@ -689,7 +697,39 @@ document.getElementById("query-form").addEventListener("submit", async event => 
   finally { setBusy(button, false); }
 });
 
-renderChangeStages(null);
-refreshAll();
-loadChangeCases().catch(error => toast(error.message, true));
-loadLatestChangeSession().catch(error => toast(error.message, true));
+async function bootstrap() {
+  renderChangeStages(null);
+  await refreshAll();
+  await loadChangeCases();
+  await loadLatestChangeSession();
+}
+
+document.getElementById("auth-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const candidate = document.getElementById("access-token").value.trim();
+  if (!candidate) return;
+  accessToken = candidate;
+  try {
+    await api("/api/health");
+    sessionStorage.setItem(accessTokenKey, accessToken);
+    document.getElementById("access-token").value = "";
+    hideAuthGate();
+    await bootstrap();
+  } catch (error) {
+    accessToken = "";
+    sessionStorage.removeItem(accessTokenKey);
+    showAuthGate(error.message);
+  }
+});
+
+document.getElementById("forget-token").addEventListener("click", () => {
+  accessToken = "";
+  sessionStorage.removeItem(accessTokenKey);
+  showAuthGate("访问令牌已从当前标签页清除");
+});
+
+if (accessToken) {
+  bootstrap().catch(error => showAuthGate(error.message));
+} else {
+  showAuthGate();
+}

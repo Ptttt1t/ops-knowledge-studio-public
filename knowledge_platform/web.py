@@ -19,7 +19,7 @@ from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunQueueFull
 from change_management.service import DemoChangeError
 from change_management.simulator import SimulationError
 
-from .change_web import ChangeDemoWebManager
+from .change_web import ChangeDemoWebManager, ChangeSessionLimitError
 from .documents import (
     DocumentError,
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -27,12 +27,11 @@ from .documents import (
 )
 from .schema import CardStatus
 from .runtime_tasks import create_knowledge_runtime
-from .service import KnowledgeService, KnowledgeServiceError
+from .security import WebSecurity, WebSecurityError
+from .service import KnowledgeRequestError, KnowledgeService, KnowledgeServiceError
 from .store import StoreError
 
 
-MAX_REQUEST_BYTES = 5 * 1024 * 1024
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 CARD_DETAIL_PATTERN = re.compile(r"^/api/cards/(\d+)$")
 CARD_REVIEW_PATTERN = re.compile(r"^/api/cards/(\d+)/review$")
 RUN_DETAIL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})$")
@@ -67,6 +66,7 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self.static_dir = static_dir
         self.runtime = runtime
         self.change_demos = ChangeDemoWebManager(service)
+        self.security = WebSecurity(service.settings)
 
     def server_close(self) -> None:
         self.change_demos.close()
@@ -80,12 +80,33 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         print(f"[web] {self.address_string()} - {format % args}")
 
-    def _send_json(self, payload: Any, status: int = HTTPStatus.OK) -> None:
+    def _security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
+
+    def _send_json(
+        self,
+        payload: Any,
+        status: int = HTTPStatus.OK,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -99,11 +120,23 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def _read_json(self) -> dict[str, Any]:
-        raw = self._read_body(MAX_REQUEST_BYTES, "请求体超过 5 MB 限制")
+        content_type = self.headers.get("Content-Type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            raise WebSecurityError(
+                "JSON 接口必须使用 application/json",
+                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                code="unsupported_content_type",
+            )
+        raw = self._read_body(
+            self.server.service.settings.max_json_bytes,
+            "JSON 请求体超过限制",
+        )
         if not raw:
             return {}
         payload = json.loads(raw.decode("utf-8"))
@@ -121,6 +154,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         return run
 
     def _read_body(self, maximum: int, too_large_message: str) -> bytes:
+        if self.headers.get("Transfer-Encoding"):
+            raise WebSecurityError(
+                "不支持 Transfer-Encoding 请求体",
+                status=HTTPStatus.BAD_REQUEST,
+                code="unsupported_transfer_encoding",
+            )
         raw_length = self.headers.get("Content-Length", "0")
         try:
             length = int(raw_length)
@@ -129,14 +168,28 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return b""
         if length > maximum:
-            raise ValueError(too_large_message)
-        return self.rfile.read(length)
+            raise WebSecurityError(
+                too_large_message,
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                code="request_too_large",
+            )
+        payload = self.rfile.read(length)
+        if len(payload) != length:
+            raise ValueError("请求体长度与 Content-Length 不一致")
+        return payload
 
     def _read_upload(self) -> tuple[str, bytes]:
         content_type = self.headers.get("Content-Type", "")
         if not content_type.lower().startswith("multipart/form-data"):
-            raise ValueError("文件上传必须使用 multipart/form-data")
-        raw = self._read_body(MAX_UPLOAD_BYTES, "上传文件超过 50 MB 限制")
+            raise WebSecurityError(
+                "文件上传必须使用 multipart/form-data",
+                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                code="unsupported_content_type",
+            )
+        raw = self._read_body(
+            self.server.service.settings.max_upload_bytes,
+            "上传文件超过大小限制",
+        )
         message = BytesParser(policy=email_policy).parsebytes(
             f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode(
                 "utf-8"
@@ -190,7 +243,20 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             ValueError,
             json.JSONDecodeError,
         )
-        if isinstance(exc, RunQueueFull):
+        if isinstance(
+            exc, (WebSecurityError, KnowledgeRequestError, ChangeSessionLimitError)
+        ):
+            headers = (
+                {"WWW-Authenticate": 'Bearer realm="Ops Knowledge Studio"'}
+                if exc.status == HTTPStatus.UNAUTHORIZED
+                else None
+            )
+            self._send_json(
+                {"error": str(exc), "code": exc.code},
+                exc.status,
+                headers=headers,
+            )
+        elif isinstance(exc, RunQueueFull):
             self._send_json({"error": str(exc), "code": exc.code}, HTTPStatus.TOO_MANY_REQUESTS)
         elif isinstance(exc, expected):
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -200,18 +266,38 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
+    def _authorize_api(self, path: str, method: str) -> str:
+        return self.server.security.authorize(
+            host=self.headers.get("Host", ""),
+            origin=self.headers.get("Origin", ""),
+            authorization=self.headers.get("Authorization", ""),
+            path=path,
+            method=method,
+            client_key=self.client_address[0] if self.client_address else "unknown",
+        )
+
+    def _validate_static_request(self) -> None:
+        self.server.security.validate_host(self.headers.get("Host", ""))
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         try:
             if path == "/":
+                self._validate_static_request()
                 self._send_static("index.html", "text/html; charset=utf-8")
                 return
             if path == "/app.js":
+                self._validate_static_request()
                 self._send_static("app.js", "application/javascript; charset=utf-8")
                 return
             if path == "/styles.css":
+                self._validate_static_request()
                 self._send_static("styles.css", "text/css; charset=utf-8")
+                return
+            self._authorize_api(path, "GET")
+            if path == "/api/health/live":
+                self._send_json({"status": "ok"})
                 return
             if path == "/api/health":
                 self._send_json(
@@ -296,6 +382,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         try:
+            principal = self._authorize_api(path, "POST")
             if path == "/api/ingest-file":
                 filename, file_payload = self._read_upload()
                 saved_path = self._save_upload(filename, file_payload)
@@ -323,7 +410,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if path == "/api/change-demos":
                 result = self.server.change_demos.create(
-                    requested_by=str(payload.get("requested_by") or "demo-operator"),
+                    requested_by=principal,
                     use_model=bool(payload.get("use_model", False)),
                     case_id=str(payload.get("case_id") or "dc-route-failover"),
                 )
@@ -333,7 +420,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             if execute_match:
                 result = self.server.change_demos.start_execution(
                     execute_match.group(1),
-                    actor=str(payload.get("actor") or "demo-operator"),
+                    actor=principal,
                     inject_failure=str(payload.get("inject_failure") or ""),
                 )
                 self._send_json(result, HTTPStatus.ACCEPTED)
@@ -343,7 +430,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.change_demos.decide(
                     decision_match.group(1),
                     decision=str(payload.get("decision") or ""),
-                    actor=str(payload.get("actor") or ""),
+                    actor=principal,
                     comment=str(payload.get("comment") or ""),
                     confirmation=str(payload.get("confirmation") or ""),
                 )
@@ -353,7 +440,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             if feedback_match:
                 result = self.server.change_demos.publish_feedback(
                     feedback_match.group(1),
-                    actor=str(payload.get("actor") or "demo-operator"),
+                    actor=principal,
                 )
                 self._send_json(result, HTTPStatus.CREATED)
                 return
@@ -408,7 +495,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     approval_match.group(1),
                     str(payload.get("tool_name") or ""),
                     decision=str(payload.get("decision") or ""),
-                    actor=str(payload.get("actor") or ""),
+                    actor=principal,
                     comment=str(payload.get("comment") or ""),
                 )
                 if run is None:
@@ -455,13 +542,25 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.service.review(
                     int(match.group(1)),
                     action=str(payload.get("action", "")),
-                    reviewer=str(payload.get("reviewer", "")),
+                    reviewer=principal,
                     comment=str(payload.get("comment", "")),
                     supersedes_id=supersedes_id,
                 )
                 self._send_json(result)
                 return
             self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except Exception as exc:
+            self._handle_error(exc)
+
+    def do_OPTIONS(self) -> None:
+        try:
+            self.server.security.validate_host(self.headers.get("Host", ""))
+            self.server.security.validate_origin(self.headers.get("Origin", ""))
+            raise WebSecurityError(
+                "跨域预检请求不受支持",
+                status=HTTPStatus.FORBIDDEN,
+                code="cors_not_allowed",
+            )
         except Exception as exc:
             self._handle_error(exc)
 
@@ -473,6 +572,7 @@ def create_server(
     port: int,
     runtime: HarnessRuntime | None = None,
 ) -> KnowledgeHTTPServer:
+    service.settings.validate_web_security(host)
     static_dir = Path(__file__).resolve().parent / "static"
     instance = runtime or create_knowledge_runtime(
         service,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -116,6 +116,21 @@ class KnowledgeStore:
             detail TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS ingestion_claims (
+            checksum TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            owner_token TEXT NOT NULL,
+            document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+            attempt INTEGER NOT NULL,
+            lease_expires_at TEXT NOT NULL,
+            error TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ingestion_claims_status
+            ON ingestion_claims(status, lease_expires_at);
         """
         with self.connect() as connection:
             connection.executescript(schema)
@@ -150,6 +165,93 @@ class KnowledgeStore:
                 "SELECT * FROM documents WHERE checksum = ?", (checksum,)
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def claim_ingestion(
+        self,
+        checksum: str,
+        owner_token: str,
+        *,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat(timespec="seconds")
+        lease_text = (now + timedelta(seconds=max(lease_seconds, 1))).isoformat(
+            timespec="seconds"
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM ingestion_claims WHERE checksum = ?", (checksum,)
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO ingestion_claims
+                        (checksum, status, owner_token, document_id, attempt,
+                         lease_expires_at, error, created_at, updated_at)
+                    VALUES (?, 'PROCESSING', ?, NULL, 1, ?, '', ?, ?)
+                    """,
+                    (checksum, owner_token, lease_text, now_text, now_text),
+                )
+                return {"state": "CLAIMED", "attempt": 1}
+
+            payload = dict(row)
+            status = str(payload["status"])
+            if status == "COMPLETED" and payload.get("document_id") is not None:
+                return {
+                    "state": "COMPLETED",
+                    "document_id": int(payload["document_id"]),
+                    "attempt": int(payload["attempt"]),
+                }
+            lease_raw = str(payload.get("lease_expires_at") or "")
+            try:
+                lease_expires = datetime.fromisoformat(lease_raw)
+            except ValueError:
+                lease_expires = now - timedelta(seconds=1)
+            if status == "PROCESSING" and lease_expires > now:
+                return {
+                    "state": "PROCESSING",
+                    "attempt": int(payload["attempt"]),
+                    "lease_expires_at": lease_raw,
+                }
+
+            attempt = int(payload["attempt"]) + 1
+            connection.execute(
+                """
+                UPDATE ingestion_claims
+                SET status = 'PROCESSING', owner_token = ?, document_id = NULL,
+                    attempt = ?, lease_expires_at = ?, error = '', updated_at = ?
+                WHERE checksum = ?
+                """,
+                (owner_token, attempt, lease_text, now_text, checksum),
+            )
+            return {"state": "CLAIMED", "attempt": attempt}
+
+    def complete_ingestion(
+        self, checksum: str, owner_token: str, document_id: int
+    ) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE ingestion_claims
+                SET status = 'COMPLETED', document_id = ?, error = '', updated_at = ?
+                WHERE checksum = ? AND owner_token = ? AND status = 'PROCESSING'
+                """,
+                (document_id, utc_now(), checksum, owner_token),
+            )
+            if cursor.rowcount != 1:
+                raise StoreError("知识导入声明已失效，不能提交结果")
+
+    def fail_ingestion(self, checksum: str, owner_token: str, error: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE ingestion_claims
+                SET status = 'FAILED', error = ?, updated_at = ?
+                WHERE checksum = ? AND owner_token = ? AND status = 'PROCESSING'
+                """,
+                (error[:2000], utc_now(), checksum, owner_token),
+            )
 
     def card_ids_for_document(self, document_id: int) -> list[int]:
         with self.connect() as connection:

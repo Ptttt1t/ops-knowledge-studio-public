@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 from urllib.request import Request, urlopen as http_urlopen
@@ -148,8 +149,9 @@ class FakeHTTPResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size=-1):
+        payload = json.dumps(self.payload).encode("utf-8")
+        return payload if size is None or size < 0 else payload[:size]
 
 
 class PlatformTests(unittest.TestCase):
@@ -941,6 +943,14 @@ class PlatformTests(unittest.TestCase):
                 ) as response:
                     return json.loads(response.read().decode("utf-8"))
 
+            def wait_for_session(session_id: str, predicate, *, timeout: float = 10.0):
+                deadline = time.monotonic() + timeout
+                current = get_session(session_id)
+                while not predicate(current) and time.monotonic() < deadline:
+                    threading.Event().wait(0.02)
+                    current = get_session(session_id)
+                return current
+
             try:
                 with http_urlopen(f"{base}/api/change-cases", timeout=10) as response:
                     catalog = json.loads(response.read().decode("utf-8"))["cases"]
@@ -965,13 +975,13 @@ class PlatformTests(unittest.TestCase):
                 )
                 self.assertEqual(created["case"]["ticket_id"], "CHG-DEMO-NAT-002")
                 session_id = str(created["session_id"])
-                generated = created
-                for _ in range(150):
-                    generated = get_session(session_id)
-                    ticket = (generated.get("package") or {}).get("ticket")
-                    if ticket and ticket["status"] == "READY_FOR_APPROVAL":
-                        break
-                    threading.Event().wait(0.02)
+                generated = wait_for_session(
+                    session_id,
+                    lambda item: (
+                        ((item.get("package") or {}).get("ticket") or {}).get("status")
+                        == "READY_FOR_APPROVAL"
+                    ),
+                )
                 self.assertEqual(
                     generated["package"]["ticket"]["status"],
                     "READY_FOR_APPROVAL",
@@ -982,12 +992,13 @@ class PlatformTests(unittest.TestCase):
                     f"/api/change-demos/{session_id}/execute",
                     {"actor": "web-tester", "inject_failure": ""},
                 )
-                waiting = generated
-                for _ in range(150):
-                    waiting = get_session(session_id)
-                    if waiting["runs"]["execute"]["status"] == "WAITING_APPROVAL":
-                        break
-                    threading.Event().wait(0.02)
+                waiting = wait_for_session(
+                    session_id,
+                    lambda item: (
+                        ((item.get("runs") or {}).get("execute") or {}).get("status")
+                        == "WAITING_APPROVAL"
+                    ),
+                )
                 self.assertEqual(waiting["package"]["ticket"]["status"], "WAITING_APPROVAL")
                 self.assertEqual(waiting["network"]["state_hash"], before_hash)
 
@@ -1013,16 +1024,18 @@ class PlatformTests(unittest.TestCase):
                         "confirmation": "APPROVE CHG-DEMO-NAT-002",
                     },
                 )
-                completed = waiting
-                for _ in range(150):
-                    completed = get_session(session_id)
-                    if (
-                        completed["package"]["ticket"]["status"]
-                        in {"SUCCEEDED", "ROLLED_BACK"}
-                        and completed["package"]["feedback"] is not None
-                    ) or completed["package"]["ticket"]["status"] == "FAILED":
-                        break
-                    threading.Event().wait(0.02)
+                completed = wait_for_session(
+                    session_id,
+                    lambda item: (
+                        (
+                            ((item.get("package") or {}).get("ticket") or {}).get("status")
+                            in {"SUCCEEDED", "ROLLED_BACK"}
+                            and (item.get("package") or {}).get("feedback") is not None
+                        )
+                        or ((item.get("package") or {}).get("ticket") or {}).get("status")
+                        == "FAILED"
+                    ),
+                )
                 self.assertEqual(completed["package"]["ticket"]["status"], "SUCCEEDED")
                 self.assertIsNotNone(completed["package"]["feedback"])
                 routes = completed["network"]["state"]["route_tables"]

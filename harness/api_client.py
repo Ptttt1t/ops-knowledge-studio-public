@@ -13,6 +13,22 @@ class APIError(RuntimeError):
     """Raised when a DeepSeek API request fails or is malformed."""
 
 
+def _read_limited(stream: Any, maximum: int, *, label: str) -> bytes:
+    headers = getattr(stream, "headers", None)
+    if headers is not None:
+        raw_length = headers.get("Content-Length")
+        if raw_length:
+            try:
+                if int(raw_length) > maximum:
+                    raise APIError(f"{label}超过 {maximum} 字节限制")
+            except ValueError:
+                pass
+    raw = stream.read(maximum + 1)
+    if len(raw) > maximum:
+        raise APIError(f"{label}超过 {maximum} 字节限制")
+    return raw
+
+
 def _extract_json(text: str) -> Any:
     value = text.strip()
     if value.startswith("```"):
@@ -88,10 +104,21 @@ class DeepSeekClient:
         for attempt in range(self.settings.api_max_retries + 1):
             try:
                 with urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                    raw = response.read().decode("utf-8")
+                    raw = _read_limited(
+                        response,
+                        self.settings.model_max_response_bytes,
+                        label="DeepSeek API 响应",
+                    ).decode("utf-8")
                 break
             except HTTPError as exc:
-                details = exc.read().decode("utf-8", errors="replace")
+                try:
+                    details = _read_limited(
+                        exc,
+                        self.settings.model_max_response_bytes,
+                        label="DeepSeek API 错误响应",
+                    ).decode("utf-8", errors="replace")
+                except APIError as size_error:
+                    details = str(size_error)
                 should_retry = (
                     exc.code in retryable_http_codes
                     and attempt < self.settings.api_max_retries

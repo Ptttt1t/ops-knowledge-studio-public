@@ -32,6 +32,18 @@ nav { display: grid; gap: 8px; }
 .sidebar-foot strong, .sidebar-foot small { display: block; }
 .sidebar-foot strong { font-size: 12px; }
 .sidebar-foot small { margin-top: 3px; color: #91a69b; font-size: 10px; }
+.token-forget { margin-left: auto; border: 0; padding: 4px; color: #a9bbb1; background: transparent; font-size: 10px; }
+.auth-gate { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgba(15,31,24,.94); }
+.auth-gate[hidden] { display: none; }
+.auth-card { width: min(440px, 100%); padding: 34px; border-radius: 12px; background: var(--panel); box-shadow: 0 28px 80px rgba(0,0,0,.28); }
+.auth-card h1 { margin-bottom: 12px; }
+.auth-card > p:not(.eyebrow) { color: var(--muted); line-height: 1.6; }
+.auth-card label { display: grid; gap: 8px; margin: 22px 0 12px; font-size: 12px; }
+.auth-card input { width: 100%; }
+.auth-error { min-height: 20px; color: var(--red) !important; font-size: 12px; }
+.trusted-actor { display: grid; align-content: center; gap: 4px; min-width: 150px; }
+.trusted-actor span { color: var(--muted); font-size: 11px; }
+.trusted-actor strong { font-size: 13px; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: #b66a62; box-shadow: 0 0 0 5px rgba(182,106,98,.13); }
 .status-dot.ok { background: #69b88e; box-shadow: 0 0 0 5px rgba(105,184,142,.13); }
 .main { min-width: 0; padding: 32px 42px 60px; }
