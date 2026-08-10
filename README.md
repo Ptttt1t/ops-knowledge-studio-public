@@ -17,12 +17,16 @@ Ops Knowledge Studio 将这些环节放进同一个可审计流程：
 flowchart LR
     A["SOP / 工单 / 复盘"] --> B["知识抽取与证据定位"]
     B --> C["人工审核"]
-    C -->|APPROVED| D["可信方案生成"]
-    D --> E["硬校验与风险决策"]
-    E --> F["人工审批"]
-    F --> G["模拟执行与验证"]
-    G --> H["执行反馈候选"]
-    H -->|PENDING_REVIEW| C
+    C -->|APPROVED| D["本地可信检索"]
+    D -->|直接命中| E["可信方案生成"]
+    D -->|无命中| M["MindMemOS 语义后备"]
+    M --> V["映射回本地卡片并复核 APPROVED"]
+    V --> E
+    E --> F["硬校验与风险决策"]
+    F --> G["人工审批"]
+    G --> H["模拟执行与验证"]
+    H --> I["执行反馈候选"]
+    I -->|PENDING_REVIEW| C
 ```
 
 核心原则：
@@ -39,11 +43,12 @@ flowchart LR
 | --- | --- | --- |
 | 知识采集 | 上传文档或粘贴文本，分片、抽取知识卡片并精确定位来源 | 抽取结果默认进入待审核状态 |
 | 知识治理 | 质量评分、重复/冲突/新版本比较、批准、驳回与替代 | 只有 `APPROVED` 可被可信检索 |
-| 可信方案 | 本地混合检索 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
+| 可信方案 | 本地混合检索、可选 MindMemOS 语义后备 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
 | 变更生成 | 环境感知、知识复用、风险评分、分步计划、验证与回退生成 | 所有云资源与网络均为隔离模拟 |
 | 审批执行 | 精确确认串、参数摘要、灰度执行、故障注入与自动回退 | 审批前不修改模拟网络 |
 | 运行时 | SQLite Run、事件、步骤、检查点、取消、恢复和幂等执行 | 参数漂移或快照漂移会使旧审批失效 |
 | 反馈闭环 | 将执行日志和结果整理为知识候选 | 必须再次人工审核 |
+| 长期记忆 | 可选接入 MindMemOS Vanilla，实现跨表述语义召回与反馈记忆 | 默认关闭且禁止内容外发；召回后必须通过阈值、对象/动作相关性和本地 `APPROVED` 状态复核 |
 
 ## 界面预览
 
@@ -75,7 +80,7 @@ flowchart LR
 
 ### 环境要求
 
-- Python 3.10 或更高版本；
+- Python 3.10～3.13；
 - Git；
 - Windows、Linux 或 macOS；
 - DeepSeek API Key 为可选项：离线变更演示、知识浏览和本地治理不需要 Key。
@@ -130,6 +135,101 @@ python run.py serve
 7. 可选择将执行经验送入知识审核队列，再由人工决定是否批准。
 
 直接拒绝、关闭标准输入或输入错误确认串都不会修改模拟网络。
+
+## 可选 MindMemOS 长期记忆
+
+平台现在支持把 [MindMemOS](https://github.com/mindscale-noah/MindMemOS) `vanilla` 模式作为实验性的可插拔语义记忆后端。本地检索仍是第一路径；只有本地没有可信命中时，才调用 MindMemOS 处理“含义相同、说法不同”的问题。该能力默认关闭，启用服务和允许知识内容外发是两个独立开关。
+
+### 接入架构与可信门禁
+
+```mermaid
+flowchart TD
+    Q["自然语言问题"] --> L["本地严格检索"]
+    L -->|有命中| A["读取本地 APPROVED 卡片"]
+    L -->|无命中| M["MindMemOS Vanilla 语义召回"]
+    M --> T{"rerank 分数达到阈值?"}
+    T -->|否| X["拒绝弱相关候选"]
+    T -->|是| I["memory_id 映射到本地 card_id"]
+    I --> C{"对象 / 动作 / 本地锚点一致?"}
+    C -->|否| X
+    C -->|是| S{"卡片仍为 APPROVED 且内容哈希一致?"}
+    S -->|否| X
+    S -->|是| A
+    A --> E["固定字段与证据指针校验"]
+    E --> R["生成带 K 编号引用的可信建议"]
+```
+
+MindMemOS 只负责扩展候选召回，不替代本地知识库和审核状态：
+
+- `MINDMEMOS_ENABLED=true` 只启用适配器；只有再显式设置 `MINDMEMOS_ALLOW_CONTENT_EXPORT=true` 才允许同步知识内容；
+- 外发采用字段白名单，不发送 `source_ref`、`evidence_locator`、原始证据正文或本地文件路径；
+- 只同步本地 `APPROVED` 卡片，草稿、待审核、已驳回和已替代知识不会进入长期记忆；卡片变化或退出批准状态时会排队回收旧记忆；
+- MindMemOS 返回的自由文本不进入答案，只使用 `memory_id` 查找本地持久映射；
+- 每次召回都重新读取本地卡片并复核状态和内容哈希，旧映射无法绕过审批；
+- 语义候选必须同时通过 MindMemOS rerank 分数、本地词项锚点、对象类别与动作意图检查；数据库、Kubernetes、证书、身份等相邻领域的弱相关问题会被拒绝；
+- 同步使用数据库租约和稳定幂等键；批处理会公平扫描全部待同步卡片，避免固定前 N 张长期占满批次；
+- MindMemOS 不可用、超时或返回异常时，自动降级到原有本地检索；
+- API Key 只保存在服务端 `.env`，不会进入健康接口、前端配置或日志。
+
+### 配置与体验
+
+先独立启动 MindMemOS，确认 `http://127.0.0.1:8000/healthz` 可用，然后在 Ops Knowledge Studio 的 `.env` 中配置：
+
+```dotenv
+MINDMEMOS_ENABLED=true
+MINDMEMOS_BASE_URL=http://127.0.0.1:8000
+MINDMEMOS_API_KEY=本地实验用的_vanilla_API_Key
+MINDMEMOS_USER_ID=ops-knowledge-studio
+MINDMEMOS_APP_ID=ops-knowledge-studio
+MINDMEMOS_TIMEOUT_SECONDS=60
+MINDMEMOS_TOP_K=10
+MINDMEMOS_MAX_SYNC_CARDS=20
+MINDMEMOS_MIN_RELEVANCE_SCORE=0.65
+MINDMEMOS_MIN_LOCAL_ANCHORS=2
+MINDMEMOS_MAX_SEMANTIC_CARDS=1
+# 确认外发字段白名单和数据边界后再显式开启
+MINDMEMOS_ALLOW_CONTENT_EXPORT=true
+```
+
+远程 MindMemOS 地址必须使用 HTTPS；明文 HTTP 只允许回环主机。随后执行：
+
+```powershell
+# 检查服务健康与本地映射统计
+python run.py memory-status --probe
+
+# 幂等同步已批准卡片
+python run.py memory-sync
+
+# 观察本地结果、语义后备和最终合并诊断
+python run.py search --query "第二阶段失败后应从哪一侧开始撤销"
+```
+
+Web 概览页会显示 MindMemOS 健康状态、已同步卡片数和记忆映射数；知识查询结果会标明本地命中、是否启用语义后备、映射到的已批准卡片和最终采用的证据。
+
+### 当前实验与验收口径
+
+历史本地实验使用 10 张合成 `APPROVED` 云网络卡片，形成 22 条记忆映射，并选取 3 个刻意避开原词的跨表述问题做 Top-1 检查：
+
+| 检索方式 | Top-1 命中预期卡片 | 结果 |
+| --- | ---: | ---: |
+| 原有本地严格检索 | 1 / 3 | 33.3% |
+| 本地检索 + MindMemOS 语义后备 | 3 / 3 | 100% |
+
+这个结果只说明语义后备在当时的小规模合成样本上补回了跨表述召回，不是通用性能基准。当前验收脚本还加入 4 个困难负例：数据库主从回退、Kubernetes Ingress 证书轮换、IAM 权限回退和无关生活问题；只有正例全部命中且困难负例误接受率为 0，脚本才返回成功。实验同时发现 Schema 模式容易改写运维事实且写入明显更慢，因此适配器固定使用 Vanilla 模式；任何外部记忆仍必须通过本地审批、相关性和证据门禁。
+
+MindMemOS 默认关闭，不影响原有离线演示。完整部署、故障降级和实验说明见 [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)。
+
+## 当前可靠性与安全加固
+
+本分支针对 Web 信任边界、资源耗尽和长时记忆集成补充了以下防线：
+
+- **一致性读取**：变更中心读取 Runtime 与变更库时会校验状态组合；遇到跨库提交窗口会短暂重试，仍无法获得一致快照时返回 503，不展示自相矛盾的工单状态；
+- **真实硬超时**：非只读云网络工具在独立 Python 子进程中执行，超时会终止整个子进程，避免后台线程在响应超时后继续修改模拟环境；
+- **审计轨迹保护**：问题、提示词、正文和 Bearer 凭据默认脱敏；轨迹按天数与文件数双重轮转，并使用 SHA-256 哈希链或可选 HMAC-SHA256 校验完整性；
+- **同步并发控制**：MindMemOS 同步使用租约、内容哈希、幂等键和退休队列；并发刷新不会重复写入，卡片被替代或退出批准状态后会回收对应远端记忆；
+- **依赖与兼容性**：支持范围明确为 Python 3.10～3.13；CI 覆盖 Windows、Ubuntu 的全部支持版本，并单独安装 OCR 可选依赖做能力冒烟检查。
+
+这些控制让项目更适合受控演示和继续研发，但不等于已经满足生产环境的企业身份、双人复核、凭据托管和真实云变更要求。
 
 ## 内置云网络案例
 
@@ -252,7 +352,7 @@ python run.py ingest --file sample_data\demo_upgrade_sop.md
 python run.py stats
 python run.py list
 
-# 本地检索，不调用模型
+# 治理检索；默认本地，启用 MindMemOS 后可在无命中时使用语义后备
 python run.py search --query "路由切换 回退"
 
 # 基于已批准知识生成可信方案
@@ -339,6 +439,7 @@ ops-knowledge-studio-public/
 ├─ change_management/      # 变更模型、案例、模拟器、存储与运行任务
 ├─ harness/                # 持久化 Run、检查点、事件和工具审批
 ├─ knowledge_platform/     # 知识抽取、检索、治理、Web 与 CLI
+│  ├─ long_term_memory.py  # MindMemOS HTTP 适配、持久映射和可信状态复核
 │  └─ static/              # 单页工作台前端
 ├─ sample_data/            # 可公开使用的演示文档
 ├─ scripts/                # 服务启动、OCR 冒烟检查等辅助脚本
@@ -350,7 +451,7 @@ ops-knowledge-studio-public/
 
 关键设计选择：
 
-- 使用 SQLite 保持单机部署简单，无需 Redis、Docker 或外部消息队列；
+- 基础模式使用 SQLite 保持单机部署简单，无需 Redis、Docker 或外部消息队列；启用 MindMemOS 时再按需增加其外部依赖；
 - 使用英数字词项、中文二元词和字段权重完成本地混合检索；
 - 使用固定知识卡片 Schema，覆盖场景、对象、版本、步骤、风险、回退、验证和证据；
 - 保留后续接入向量数据库、知识图谱、CMDB 或真实工具适配器的扩展位置。
@@ -363,7 +464,7 @@ ops-knowledge-studio-public/
 python -m unittest discover -s tests -v
 ```
 
-GitHub Actions 会在 Windows 和 Ubuntu、Python 3.10 环境中安装项目并运行同一套测试。建议在提交前至少执行：
+GitHub Actions 会在 Windows 和 Ubuntu、Python 3.10、3.11、3.12、3.13 环境中安装项目并运行同一套测试；另有 Ubuntu / Python 3.10 OCR 可选依赖冒烟任务。建议在提交前至少执行：
 
 ```powershell
 python run.py init
@@ -383,6 +484,8 @@ python run.py demo-change --case-id nat-egress-bluegreen
 - 共享令牌下所有 Web 审计主体固定为 `shared-operator`，它不提供个人身份或职责分离；
 - 不要把生产数据库、业务文档、上传目录、运行工件或 `.env` 上传到公开仓库；
 - 不要向本项目填入真实云凭据，当前代码没有真实云变更适配器；
+- MindMemOS 即使已启用也默认禁止内容外发；只有确认字段白名单和外部服务数据边界后才设置 `MINDMEMOS_ALLOW_CONTENT_EXPORT=true`；
+- 生产环境应设置独立高熵 `TRACE_HMAC_KEY`，并根据审计制度调整 `TRACE_RETENTION_DAYS` 与 `TRACE_MAX_FILES`；
 - 自动抽取和执行反馈都必须经人工审核后才能成为 `APPROVED` 知识。
 
 数据备份、后台启动、升级和 OCR 安装流程见 [部署指南](docs/deployment.md)。
@@ -394,6 +497,7 @@ python run.py demo-change --case-id nat-egress-bluegreen
 - [第一阶段加固说明](docs/first-stage-hardening.md)
 - [Web 与资源安全基线](docs/security-hardening.md)
 - [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)
+- [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)
 
 ## 当前边界与下一步
 

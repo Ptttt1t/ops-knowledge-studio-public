@@ -311,7 +311,21 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                             "worker_count": self.server.runtime.worker_count,
                             "max_queued_runs": self.server.runtime.max_queued_runs,
                         },
+                        "long_term_memory": (
+                            self.server.service.long_term_memory_status(probe=False)
+                        ),
                     }
+                )
+                return
+            if path == "/api/memory/status":
+                query = parse_qs(parsed.query)
+                probe = query.get("probe", ["false"])[0].lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                self._send_json(
+                    self.server.service.long_term_memory_status(probe=probe)
                 )
                 return
             if path == "/api/stats":
@@ -516,14 +530,18 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(result, HTTPStatus.CREATED)
                 return
+            if path == "/api/memory/sync":
+                result = self.server.service.sync_long_term_memory()
+                self._send_json(result)
+                return
             if path == "/api/search":
                 status = str(payload.get("status", CardStatus.APPROVED.value))
-                result = self.server.service.search(
+                result = self.server.service.search_with_diagnostics(
                     str(payload.get("query", "")),
                     status=status,
                     top_k=int(payload.get("top_k", self.server.service.settings.retrieval_top_k)),
                 )
-                self._send_json({"hits": result})
+                self._send_json(result)
                 return
             if path == "/api/query":
                 result = self.server.service.query(str(payload.get("question", "")))

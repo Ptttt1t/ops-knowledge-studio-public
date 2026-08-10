@@ -19,6 +19,9 @@ jobs:
           - windows-latest
         python-version:
           - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
@@ -46,3 +49,28 @@ jobs:
           python -m pip install pip-audit
           python -m pip check
           python -m pip_audit
+
+  ocr-import-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install OCR optional dependencies
+        run: |
+          python -m pip install --upgrade pip "setuptools>=83"
+          python -m pip install -c constraints/base.txt -e ".[ocr]"
+
+      - name: Smoke OCR imports and advertised capabilities
+        run: |
+          python -c "import fitz, paddle, paddleocr; from knowledge_platform.documents import document_capabilities; caps=document_capabilities(); assert caps['paddleocr'] and caps['pdf_page_rendering']; print(caps)"
+          python -m pip check

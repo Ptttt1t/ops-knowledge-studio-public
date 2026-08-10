@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 import json
+import subprocess
+import sys
+import tempfile
+import time
 from typing import Any, Callable, Protocol
 
 
@@ -53,9 +57,13 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any]
     risk_level: RiskLevel = RiskLevel.READ_ONLY
-    timeout_seconds: int = 120
+    timeout_seconds: float | None = None
     max_output_bytes: int = 64 * 1024
-    handler: ToolHandler = field(repr=False, compare=False, default=lambda _args, _ctx: None)
+    handler: ToolHandler | None = field(repr=False, compare=False, default=None)
+    isolated_entrypoint: str = ""
+    isolated_context: dict[str, Any] = field(
+        repr=False, compare=False, default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -88,8 +96,19 @@ class ToolRegistry:
             raise ToolError("工具名称不能为空")
         if name in self._tools:
             raise ToolError(f"工具已注册: {name}")
-        if spec.timeout_seconds <= 0 or spec.max_output_bytes <= 0:
-            raise ToolError("工具超时和输出上限必须大于 0")
+        if spec.max_output_bytes <= 0:
+            raise ToolError("工具输出上限必须大于 0")
+        if spec.timeout_seconds is not None and spec.timeout_seconds <= 0:
+            raise ToolError("工具超时必须大于 0")
+        if spec.isolated_entrypoint:
+            if spec.timeout_seconds is None:
+                raise ToolError("隔离工具必须配置硬超时")
+            if ":" not in spec.isolated_entrypoint:
+                raise ToolError("隔离工具入口必须是 module:function")
+        elif spec.timeout_seconds is not None:
+            raise ToolError("硬超时只适用于可终止的隔离工具")
+        elif spec.handler is None:
+            raise ToolError("内联工具必须配置处理器")
         if spec.input_schema.get("type", "object") != "object":
             raise ToolError("工具输入 Schema 必须是 object")
         self._tools[name] = spec
@@ -166,7 +185,15 @@ class ToolRegistry:
             if spec.risk_level is not RiskLevel.READ_ONLY and not approved:
                 raise ToolApprovalRequired(f"工具 {name} 需要人工批准")
             context.check_cancelled()
-            output = spec.handler(payload, context)
+            if spec.isolated_entrypoint:
+                isolated = self._execute_isolated(spec, payload, context)
+                if not isolated.ok:
+                    return isolated
+                output = isolated.output
+            else:
+                if spec.handler is None:
+                    raise ToolError("工具处理器未配置")
+                output = spec.handler(payload, context)
             context.check_cancelled()
             output, truncated = self._truncate(output, spec.max_output_bytes)
             return ToolResult(True, output=output, truncated=truncated)
@@ -176,3 +203,91 @@ class ToolRegistry:
             return ToolResult(False, error_code="TOOL_VALIDATION_ERROR", error_message=str(exc))
         except Exception as exc:
             return ToolResult(False, error_code="TOOL_EXECUTION_ERROR", error_message=str(exc))
+
+    @staticmethod
+    def _execute_isolated(
+        spec: ToolSpec,
+        payload: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        envelope = json.dumps(
+            {
+                "arguments": payload,
+                "context": {
+                    "run_id": str(getattr(context, "run_id", "")),
+                    "static": spec.isolated_context,
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "harness.tool_worker", spec.isolated_entrypoint],
+                stdin=subprocess.PIPE,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                creationflags=creation_flags,
+            )
+            assert process.stdin is not None
+            process.stdin.write(envelope)
+            process.stdin.close()
+            deadline = time.monotonic() + float(spec.timeout_seconds or 0)
+            try:
+                while process.poll() is None:
+                    context.check_cancelled()
+                    if time.monotonic() >= deadline:
+                        process.kill()
+                        process.wait(timeout=5)
+                        return ToolResult(
+                            False,
+                            error_code="TOOL_TIMEOUT",
+                            error_message=(
+                                f"工具 {spec.name} 超过 {spec.timeout_seconds:g} 秒硬超时，"
+                                "隔离进程已终止"
+                            ),
+                        )
+                    time.sleep(0.02)
+            except Exception:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+                raise
+            stdout_file.seek(0)
+            raw = stdout_file.read(spec.max_output_bytes * 2 + 4096)
+            stderr_file.seek(0)
+            stderr = stderr_file.read(4096).decode("utf-8", errors="replace")
+        if len(raw) > spec.max_output_bytes * 2 + 2048:
+            return ToolResult(
+                False,
+                error_code="TOOL_OUTPUT_LIMIT",
+                error_message="隔离工具响应超过协议大小限制",
+            )
+        if process.returncode != 0:
+            return ToolResult(
+                False,
+                error_code="TOOL_PROCESS_ERROR",
+                error_message=(stderr.strip() or f"隔离工具退出码 {process.returncode}")[:1000],
+            )
+        try:
+            result = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return ToolResult(
+                False,
+                error_code="TOOL_PROTOCOL_ERROR",
+                error_message=f"隔离工具返回无效 JSON: {exc}",
+            )
+        if not isinstance(result, dict):
+            return ToolResult(
+                False,
+                error_code="TOOL_PROTOCOL_ERROR",
+                error_message="隔离工具响应必须是 JSON 对象",
+            )
+        if not bool(result.get("ok")):
+            return ToolResult(
+                False,
+                error_code=str(result.get("error_code") or "TOOL_PROCESS_ERROR"),
+                error_message=str(result.get("error_message") or "隔离工具执行失败")[:2000],
+            )
+        return ToolResult(True, output=result.get("output"))

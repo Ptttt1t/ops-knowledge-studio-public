@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 
 from harness.run_store import RunStore
 from harness.runtime import HarnessRuntime, RunStatus
-from harness.tools import RiskLevel, ToolRegistry, ToolSpec
+from harness.tools import RiskLevel, ToolError, ToolRegistry, ToolSpec
 from knowledge_platform.cli import main as cli_main
 
 
@@ -314,6 +315,55 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertFalse(needs_approval.ok)
         self.assertEqual(needs_approval.error_code, "APPROVAL_REQUIRED")
         self.assertTrue(approved.ok)
+
+    def test_isolated_tool_timeout_kills_worker_before_late_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "late-write.txt"
+            tools = ToolRegistry()
+            tools.register(
+                ToolSpec(
+                    name="isolated_slow_write",
+                    description="A write that must be killed at the hard timeout.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "delay_seconds": {"type": "number"},
+                            "marker_path": {"type": "string"},
+                        },
+                        "required": ["delay_seconds", "marker_path"],
+                        "additionalProperties": False,
+                    },
+                    risk_level=RiskLevel.LOCAL_WRITE,
+                    timeout_seconds=0.2,
+                    isolated_entrypoint="tests.tool_worker_fixture:delayed_write",
+                )
+            )
+            started = time.monotonic()
+            result = tools.execute(
+                "isolated_slow_write",
+                {"delay_seconds": 1.0, "marker_path": str(marker)},
+                _ToolContext(),
+                approved=True,
+            )
+            elapsed = time.monotonic() - started
+            self.assertFalse(result.ok)
+            self.assertEqual(result.error_code, "TOOL_TIMEOUT")
+            self.assertLess(elapsed, 0.8)
+            time.sleep(1.0)
+            self.assertFalse(marker.exists())
+
+    def test_inline_tool_cannot_claim_a_hard_timeout(self) -> None:
+        tools = ToolRegistry()
+        with self.assertRaises(ToolError):
+            tools.register(
+                ToolSpec(
+                    name="false_timeout",
+                    description="Invalid inline timeout declaration.",
+                    input_schema={"type": "object", "properties": {}},
+                    timeout_seconds=1,
+                    handler=lambda _arguments, _context: {"ok": True},
+                )
+            )
 
 
 class RuntimeCliTests(unittest.TestCase):

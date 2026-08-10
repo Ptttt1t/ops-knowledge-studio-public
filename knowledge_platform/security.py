@@ -88,6 +88,7 @@ class WebSecurity:
         "/api/ingest-text",
         "/api/query",
         "/api/agent-query",
+        "/api/memory/sync",
     }
 
     def __init__(self, settings: Settings):
