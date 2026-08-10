@@ -131,6 +131,29 @@ class KnowledgeStore:
 
         CREATE INDEX IF NOT EXISTS idx_ingestion_claims_status
             ON ingestion_claims(status, lease_expires_at);
+
+        CREATE TABLE IF NOT EXISTS memory_sync_state (
+            card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+            backend TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            memory_count INTEGER NOT NULL DEFAULT 0,
+            detail TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(card_id, backend)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_links (
+            backend TEXT NOT NULL,
+            memory_id TEXT NOT NULL,
+            card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+            content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(backend, memory_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_links_card
+            ON memory_links(card_id, backend);
         """
         with self.connect() as connection:
             connection.executescript(schema)
@@ -673,4 +696,158 @@ class KnowledgeStore:
             "relations": relation_count,
             "average_quality": round(float(average_quality), 1),
             "statuses": statuses,
+        }
+
+    def get_memory_sync_state(
+        self, card_id: int, backend: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM memory_sync_state WHERE card_id = ? AND backend = ?",
+                (card_id, backend),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["detail"] = json.loads(result["detail"] or "{}")
+        return result
+
+    def record_memory_sync_success(
+        self,
+        card_id: int,
+        *,
+        backend: str,
+        content_hash: str,
+        memory_ids: list[str],
+        detail: dict[str, Any],
+    ) -> None:
+        unique_ids = list(dict.fromkeys(item.strip() for item in memory_ids if item.strip()))
+        if not unique_ids:
+            raise StoreError("长期记忆同步结果缺少 memory_id")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT id FROM cards WHERE id = ?", (card_id,)
+            ).fetchone() is None:
+                raise StoreError(f"知识卡片不存在: {card_id}")
+            connection.execute(
+                "DELETE FROM memory_links WHERE card_id = ? AND backend = ?",
+                (card_id, backend),
+            )
+            connection.executemany(
+                """
+                INSERT INTO memory_links
+                    (backend, memory_id, card_id, content_hash, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(backend, memory_id) DO UPDATE SET
+                    card_id = excluded.card_id,
+                    content_hash = excluded.content_hash,
+                    created_at = excluded.created_at
+                """,
+                [
+                    (backend, memory_id, card_id, content_hash, now)
+                    for memory_id in unique_ids
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_sync_state
+                    (card_id, backend, content_hash, status, memory_count, detail, updated_at)
+                VALUES (?, ?, ?, 'SUCCEEDED', ?, ?, ?)
+                ON CONFLICT(card_id, backend) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    status = excluded.status,
+                    memory_count = excluded.memory_count,
+                    detail = excluded.detail,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    card_id,
+                    backend,
+                    content_hash,
+                    len(unique_ids),
+                    json.dumps(detail, ensure_ascii=False),
+                    now,
+                ),
+            )
+
+    def record_memory_sync_failure(
+        self,
+        card_id: int,
+        *,
+        backend: str,
+        content_hash: str,
+        error: str,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM memory_links WHERE card_id = ? AND backend = ?",
+                (card_id, backend),
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_sync_state
+                    (card_id, backend, content_hash, status, memory_count, detail, updated_at)
+                VALUES (?, ?, ?, 'FAILED', 0, ?, ?)
+                ON CONFLICT(card_id, backend) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    status = excluded.status,
+                    memory_count = 0,
+                    detail = excluded.detail,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    card_id,
+                    backend,
+                    content_hash,
+                    json.dumps({"error": error[:2000]}, ensure_ascii=False),
+                    now,
+                ),
+            )
+
+    def card_ids_for_memory_ids(
+        self, memory_ids: list[str], *, backend: str
+    ) -> dict[str, int]:
+        unique_ids = list(dict.fromkeys(item for item in memory_ids if item))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT memory_id, card_id FROM memory_links
+                WHERE backend = ? AND memory_id IN ({placeholders})
+                """,
+                [backend, *unique_ids],
+            ).fetchall()
+        return {str(row["memory_id"]): int(row["card_id"]) for row in rows}
+
+    def memory_sync_stats(self, backend: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM memory_sync_state WHERE backend = ? GROUP BY status
+                """,
+                (backend,),
+            ).fetchall()
+            link_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM memory_links WHERE backend = ?",
+                    (backend,),
+                ).fetchone()["count"]
+            )
+            latest = connection.execute(
+                "SELECT MAX(updated_at) AS value FROM memory_sync_state WHERE backend = ?",
+                (backend,),
+            ).fetchone()["value"]
+        statuses = {str(row["status"]): int(row["count"]) for row in rows}
+        return {
+            "cards": sum(statuses.values()),
+            "memory_links": link_count,
+            "statuses": statuses,
+            "last_updated_at": latest,
         }

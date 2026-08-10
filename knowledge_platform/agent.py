@@ -78,13 +78,11 @@ class TrustedKnowledgeAgent:
         self.max_steps = max(1, min(max_steps, 12))
 
     def _search(self, query: str, top_k: int) -> list[SearchHit]:
-        return self.service.retriever.search(
+        hits, _diagnostics = self.service.trusted_search_hits(
             query,
-            statuses=[CardStatus.APPROVED],
             top_k=min(max(top_k, 1), self.service.settings.retrieval_top_k),
-            min_score=self.service.settings.retrieval_min_score,
-            min_query_coverage=self.service.settings.retrieval_min_coverage,
         )
+        return hits
 
     @staticmethod
     def _compact_hit(hit: SearchHit) -> dict[str, Any]:

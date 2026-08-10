@@ -73,6 +73,20 @@
             </ol>
           </article>
         </div>
+        <article class="panel memory-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">LONG-TERM MEMORY</p><h2>MindMemOS 语义记忆</h2></div>
+            <span id="memory-health-badge" class="tag">检查中</span>
+          </div>
+          <p class="muted-copy">MindMemOS 只负责跨表述语义召回；召回结果必须重新映射到本地卡片，并再次通过 APPROVED 状态与原始证据校验。</p>
+          <div class="memory-status-grid">
+            <div><span>连接配置</span><strong id="memory-config">—</strong></div>
+            <div><span>已同步卡片</span><strong id="memory-synced-cards">0</strong></div>
+            <div><span>记忆映射</span><strong id="memory-links">0</strong></div>
+            <div><span>可信策略</span><strong id="memory-policy">本地审批优先</strong></div>
+          </div>
+          <button id="memory-sync" class="button secondary" type="button">同步全部已批准知识</button>
+        </article>
         <article class="panel">
           <div class="panel-head"><div><p class="eyebrow">RECENT KNOWLEDGE</p><h2>最近知识</h2></div></div>
           <div id="recent-cards" class="card-list empty">暂无知识卡片</div>
@@ -182,6 +196,7 @@
             <div class="panel-head"><div><p class="eyebrow">EVIDENCE ANSWER</p><h2>研判结果</h2></div></div>
             <div id="answer-content" class="answer-content empty">等待问题</div>
             <div id="answer-agent-meta" class="hint"></div>
+            <div id="answer-memory-meta" class="hint"></div>
             <div id="answer-sources" class="source-list"></div>
           </article>
         </div>

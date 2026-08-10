@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 PLACEHOLDERS = {
     "",
+    "MINDMEMOS_API_KEY_HERE",
     "PASTE_YOUR_API_KEY_HERE",
     "YOUR_DEEPSEEK_API_KEY_HERE",
     "YOUR_MODEL_NAME_HERE",
@@ -73,6 +74,15 @@ def _read_float(values: Mapping[str, str], name: str, default: float) -> float:
         return float(raw)
     except ValueError as exc:
         raise ConfigurationError(f"{name} 必须是数字，当前值为 {raw!r}") from exc
+
+
+def _read_bool(values: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = _get(values, name, "true" if default else "false").lower()
+    if raw in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    raise ConfigurationError(f"{name} 必须是 true 或 false，当前值为 {raw!r}")
 
 
 def _read_csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
@@ -151,10 +161,27 @@ class Settings:
     change_max_retained_sessions: int = 20
     change_active_ttl_seconds: int = 2 * 60 * 60
     change_terminal_ttl_seconds: int = 24 * 60 * 60
+    mindmemos_enabled: bool = False
+    mindmemos_base_url: str = "http://127.0.0.1:8000"
+    mindmemos_api_key: str = ""
+    mindmemos_user_id: str = "ops-knowledge-studio"
+    mindmemos_app_id: str = "ops-knowledge-studio"
+    mindmemos_timeout_seconds: int = 60
+    mindmemos_top_k: int = 10
+    mindmemos_max_sync_cards: int = 20
+    mindmemos_max_semantic_cards: int = 1
 
     @property
     def api_configured(self) -> bool:
         return self.api_key not in PLACEHOLDERS and self.model not in PLACEHOLDERS
+
+    @property
+    def mindmemos_configured(self) -> bool:
+        return (
+            self.mindmemos_enabled
+            and self.mindmemos_api_key not in PLACEHOLDERS
+            and bool(self.mindmemos_base_url)
+        )
 
     def require_api(self) -> None:
         if not self.api_configured:
@@ -194,6 +221,20 @@ class Settings:
                 "active_ttl_seconds": self.change_active_ttl_seconds,
                 "terminal_ttl_seconds": self.change_terminal_ttl_seconds,
             },
+            "long_term_memory": {
+                "enabled": self.mindmemos_enabled,
+                "configured": self.mindmemos_configured,
+                "backend": "mindmemos:vanilla",
+                "base_url": self.mindmemos_base_url,
+                "user_id": self.mindmemos_user_id,
+                "app_id": self.mindmemos_app_id,
+                "timeout_seconds": self.mindmemos_timeout_seconds,
+                "top_k": self.mindmemos_top_k,
+                "max_sync_cards": self.mindmemos_max_sync_cards,
+                "max_semantic_cards": self.mindmemos_max_semantic_cards,
+                "recall_policy": "fallback_only",
+                "trust_policy": "local_approved_only",
+            },
         }
 
     def validate_web_security(self, host: str | None = None) -> None:
@@ -231,6 +272,25 @@ class Settings:
             raise ConfigurationError("DEEPSEEK_BASE_URL 必须以 http:// 或 https:// 开头")
         if parsed_base_url.scheme == "http" and not _is_loopback_host(parsed_base_url.hostname):
             raise ConfigurationError("DEEPSEEK_BASE_URL 使用 HTTP 时只允许本机回环地址")
+
+        mindmemos_base_url = _get(
+            values, "MINDMEMOS_BASE_URL", "http://127.0.0.1:8000"
+        ).rstrip("/")
+        parsed_mindmemos_url = urlsplit(mindmemos_base_url)
+        if (
+            parsed_mindmemos_url.scheme not in {"http", "https"}
+            or not parsed_mindmemos_url.hostname
+        ):
+            raise ConfigurationError(
+                "MINDMEMOS_BASE_URL 必须以 http:// 或 https:// 开头"
+            )
+        if (
+            parsed_mindmemos_url.scheme == "http"
+            and not _is_loopback_host(parsed_mindmemos_url.hostname)
+        ):
+            raise ConfigurationError(
+                "MINDMEMOS_BASE_URL 使用 HTTP 时只允许本机回环地址"
+            )
 
         thinking_mode = _get(values, "DEEPSEEK_THINKING", "disabled").lower()
         if thinking_mode not in {"", "enabled", "disabled"}:
@@ -363,6 +423,27 @@ class Settings:
             ),
             change_terminal_ttl_seconds=_read_int(
                 values, "CHANGE_TERMINAL_TTL_SECONDS", 24 * 60 * 60
+            ),
+            mindmemos_enabled=_read_bool(values, "MINDMEMOS_ENABLED", False),
+            mindmemos_base_url=mindmemos_base_url,
+            mindmemos_api_key=_get(values, "MINDMEMOS_API_KEY", ""),
+            mindmemos_user_id=_get(
+                values, "MINDMEMOS_USER_ID", "ops-knowledge-studio"
+            )
+            or "ops-knowledge-studio",
+            mindmemos_app_id=_get(
+                values, "MINDMEMOS_APP_ID", "ops-knowledge-studio"
+            )
+            or "ops-knowledge-studio",
+            mindmemos_timeout_seconds=_read_int(
+                values, "MINDMEMOS_TIMEOUT_SECONDS", 60
+            ),
+            mindmemos_top_k=_read_int(values, "MINDMEMOS_TOP_K", 10),
+            mindmemos_max_sync_cards=_read_int(
+                values, "MINDMEMOS_MAX_SYNC_CARDS", 20
+            ),
+            mindmemos_max_semantic_cards=_read_int(
+                values, "MINDMEMOS_MAX_SEMANTIC_CARDS", 1
             ),
         )
         if settings.change_max_active_sessions > settings.change_max_retained_sessions:

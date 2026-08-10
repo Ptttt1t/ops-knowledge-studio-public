@@ -29,6 +29,7 @@ from .prompts import (
     comparison_user_prompt,
     extraction_user_prompt,
 )
+from .long_term_memory import MindMemOSBridge, MindMemOSError
 from .retrieval import HybridRetriever, SearchHit
 from .schema import CardStatus, ComparisonResult, KnowledgeCardDraft
 from .safe_documents import read_document_safely
@@ -114,6 +115,7 @@ class KnowledgeService:
         store: KnowledgeStore | None = None,
         client: Any | None = None,
         trace: TraceLogger | None = None,
+        memory_bridge: MindMemOSBridge | None = None,
     ):
         self.settings = settings
         self.store = store or KnowledgeStore(settings.database_path)
@@ -121,6 +123,7 @@ class KnowledgeService:
         self.client = client or DeepSeekClient(settings)
         self.trace = trace or TraceLogger(settings.project_root / "artifacts")
         self.retriever = HybridRetriever(self.store)
+        self.memory = memory_bridge or MindMemOSBridge(settings, self.store)
         self._ingestion_slots = threading.BoundedSemaphore(
             settings.max_concurrent_ingestions
         )
@@ -608,14 +611,117 @@ class KnowledgeService:
     ) -> list[dict[str, Any]]:
         if not query.strip():
             raise KnowledgeServiceError("检索问题不能为空")
-        hits = self.retriever.search(
-            query,
-            statuses=[status],
-            top_k=top_k or self.settings.retrieval_top_k,
+        limit = top_k or self.settings.retrieval_top_k
+        normalized_status = (
+            status.value if isinstance(status, CardStatus) else str(status).upper()
+        )
+        if normalized_status == CardStatus.APPROVED.value:
+            hits, _diagnostics = self.trusted_search_hits(query, top_k=limit)
+        else:
+            hits = self.retriever.search(
+                query,
+                statuses=[normalized_status],
+                top_k=limit,
+                min_score=self.settings.retrieval_min_score,
+                min_query_coverage=self.settings.retrieval_min_coverage,
+            )
+        return [hit.to_dict() for hit in hits]
+
+    def trusted_search_hits(
+        self, query: str, *, top_k: int | None = None
+    ) -> tuple[list[SearchHit], dict[str, Any]]:
+        """Combine local lexical recall with governed MindMemOS recall.
+
+        MindMemOS may only contribute IDs already linked to local cards.  Every
+        linked card is loaded again and must still be APPROVED before it can be
+        returned to the answer generator.
+        """
+
+        text = query.strip()
+        if not text:
+            raise KnowledgeServiceError("检索问题不能为空")
+        limit = max(1, min(top_k or self.settings.retrieval_top_k, 50))
+        lexical = self.retriever.search(
+            text,
+            statuses=[CardStatus.APPROVED],
+            top_k=limit,
             min_score=self.settings.retrieval_min_score,
             min_query_coverage=self.settings.retrieval_min_coverage,
         )
-        return [hit.to_dict() for hit in hits]
+        if lexical:
+            diagnostics = {
+                "backend": "mindmemos:vanilla",
+                "enabled": self.memory.enabled,
+                "configured": self.memory.configured,
+                "used": False,
+                "status": "SKIPPED_LOCAL_SUFFICIENT",
+                "memory_hits": 0,
+                "mapped_approved_cards": 0,
+                "card_ids": [],
+                "lexical_card_ids": [int(hit.card["id"]) for hit in lexical],
+                "semantic_added_card_ids": [],
+                "final_card_ids": [int(hit.card["id"]) for hit in lexical],
+            }
+            self.trace.log("governed_memory_retrieval", question=text, **diagnostics)
+            return lexical, diagnostics
+        recall = self.memory.recall(text)
+        hits = list(lexical)
+        seen = {int(hit.card["id"]) for hit in hits}
+        semantic_added: list[int] = []
+        for rank, card_id in enumerate(recall.card_ids):
+            if (
+                card_id in seen
+                or len(hits) >= limit
+                or len(semantic_added)
+                >= self.settings.mindmemos_max_semantic_cards
+            ):
+                continue
+            card = self.store.get_card(card_id)
+            if card is None or card["status"] != CardStatus.APPROVED.value:
+                continue
+            hits.append(
+                SearchHit(
+                    card=card,
+                    score=max(self.settings.retrieval_min_score, 1.0)
+                    + max(0.001, 0.5 - rank * 0.001),
+                    matched_terms=["mindmemos:semantic"],
+                    query_coverage=0.0,
+                )
+            )
+            seen.add(card_id)
+            semantic_added.append(card_id)
+        diagnostics = {
+            **recall.diagnostics,
+            "lexical_card_ids": [int(hit.card["id"]) for hit in lexical],
+            "semantic_added_card_ids": semantic_added,
+            "final_card_ids": [int(hit.card["id"]) for hit in hits],
+        }
+        self.trace.log("governed_memory_retrieval", question=text, **diagnostics)
+        return hits, diagnostics
+
+    def search_with_diagnostics(
+        self,
+        query: str,
+        *,
+        status: CardStatus | str = CardStatus.APPROVED,
+        top_k: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_status = (
+            status.value if isinstance(status, CardStatus) else str(status).upper()
+        )
+        if normalized_status != CardStatus.APPROVED.value:
+            return {
+                "hits": self.search(query, status=normalized_status, top_k=top_k),
+                "memory_retrieval": {
+                    "used": False,
+                    "status": "SKIPPED_NON_APPROVED_SEARCH",
+                },
+            }
+        hits, diagnostics = self.trusted_search_hits(query, top_k=top_k)
+        return {
+            "hits": [hit.to_dict() for hit in hits],
+            "memory_retrieval": diagnostics,
+        }
 
     def _validate_answer_claims(
         self, payload: Any, retrieved_cards: dict[int, dict[str, Any]]
@@ -791,6 +897,12 @@ class KnowledgeService:
                 "evidence_locator": card["evidence_locator"],
                 "evidence_quote": card["evidence_quote"],
                 "retrieval_score": round(hit_by_id[int(card["id"])].score, 4),
+                "retrieval_channel": (
+                    "mindmemos_semantic"
+                    if "mindmemos:semantic"
+                    in hit_by_id[int(card["id"])].matched_terms
+                    else "local_lexical"
+                ),
             }
             for card in cited_cards
         ]
@@ -810,14 +922,12 @@ class KnowledgeService:
 
     def query(self, question: str) -> dict[str, Any]:
         self.settings.require_api()
-        hits = self.retriever.search(
-            question,
-            statuses=[CardStatus.APPROVED],
-            top_k=self.settings.retrieval_top_k,
-            min_score=self.settings.retrieval_min_score,
-            min_query_coverage=self.settings.retrieval_min_coverage,
+        hits, diagnostics = self.trusted_search_hits(
+            question, top_k=self.settings.retrieval_top_k
         )
-        return self._answer_from_hits(question, hits)
+        result = self._answer_from_hits(question, hits)
+        result["memory_retrieval"] = diagnostics
+        return result
 
     def agent_query(self, question: str) -> dict[str, Any]:
         from .agent import TrustedKnowledgeAgent
@@ -835,13 +945,39 @@ class KnowledgeService:
         comment: str = "",
         supersedes_id: int | None = None,
     ) -> dict[str, Any]:
-        return self.store.review_card(
+        card = self.store.review_card(
             card_id,
             action=action,
             reviewer=reviewer,
             comment=comment,
             supersedes_id=supersedes_id,
         )
+        if card["status"] == CardStatus.APPROVED.value:
+            try:
+                memory_sync = self.memory.sync_card(card)
+            except MindMemOSError as exc:
+                memory_sync = {
+                    "status": "FAILED",
+                    "card_id": card_id,
+                    "error": str(exc),
+                }
+                self.trace.log(
+                    "mindmemos_sync_degraded", card_id=card_id, error=str(exc)
+                )
+            card["memory_sync"] = memory_sync
+        return card
+
+    def sync_long_term_memory(self) -> dict[str, Any]:
+        result = self.memory.sync_approved()
+        self.trace.log(
+            "mindmemos_bulk_sync_completed",
+            processed=result["processed"],
+            stats=result["stats"],
+        )
+        return result
+
+    def long_term_memory_status(self, *, probe: bool = False) -> dict[str, Any]:
+        return self.memory.status(probe=probe)
 
     def regrade_existing_cards(self) -> dict[str, Any]:
         """Apply current grounding and type-aware quality rules without an API call."""
@@ -914,9 +1050,13 @@ class KnowledgeService:
             return None
         card["relations"] = self.store.list_relations(card_id)
         card["audit_log"] = self.store.list_audit(card_id)
+        card["memory_sync"] = self.store.get_memory_sync_state(
+            card_id, MindMemOSBridge.BACKEND
+        )
         return card
 
     def stats(self) -> dict[str, Any]:
         result = self.store.stats()
         result["config"] = self.settings.public_config()
+        result["long_term_memory"] = self.long_term_memory_status(probe=False)
         return result

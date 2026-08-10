@@ -447,11 +447,23 @@ async function refreshStats() {
 }
 
 async function refreshHealth() {
-  const data = await api("/api/health");
+  const [data, memory] = await Promise.all([
+    api("/api/health"),
+    api("/api/memory/status?probe=true"),
+  ]);
   const configured = data.config.api_configured;
   document.getElementById("api-dot").classList.toggle("ok", configured);
   document.getElementById("api-status").textContent = configured ? "API 已配置" : "等待填写 API";
   document.getElementById("model-name").textContent = data.config.model;
+  const healthy = memory.health === "OK";
+  const badge = document.getElementById("memory-health-badge");
+  badge.textContent = healthy ? "服务可用" : memory.health;
+  badge.className = `tag ${healthy ? "APPROVED" : "REJECTED"}`;
+  document.getElementById("memory-config").textContent = memory.configured ? "Vanilla 已启用" : memory.enabled ? "等待 API Key" : "未启用";
+  document.getElementById("memory-synced-cards").textContent = memory.stats?.statuses?.SUCCEEDED || 0;
+  document.getElementById("memory-links").textContent = memory.stats?.memory_links || 0;
+  document.getElementById("memory-policy").textContent = "仅本地 APPROVED";
+  document.getElementById("memory-sync").disabled = !memory.configured;
 }
 
 async function loadRecent() {
@@ -689,9 +701,17 @@ document.getElementById("query-form").addEventListener("submit", async event => 
     agentMeta.textContent = result.agent
       ? `只读 Agent：${result.agent.steps}/${result.agent.max_steps} 步，${result.agent.tool_calls.length} 次工具调用，候选 K${result.agent.selected_card_ids.join(", K") || "无"}`
       : "直接检索模式";
+    const memory = result.memory_retrieval;
+    const memoryMeta = document.getElementById("answer-memory-meta");
+    if (memory) {
+      memoryMeta.textContent = `长期记忆：${memory.status} · 召回 ${memory.memory_hits || 0} 条 · 映射 ${memory.mapped_approved_cards || 0} 张已批准卡片 · 新增候选 K${(memory.semantic_added_card_ids || []).join(", K") || "无"}`;
+    } else {
+      const semanticSources = (result.sources || []).filter(source => source.retrieval_channel === "mindmemos_semantic").length;
+      memoryMeta.textContent = `长期记忆语义来源：${semanticSources} 条`;
+    }
     document.getElementById("answer-sources").innerHTML = (result.sources || []).map(source => `
       <div class="source-item"><strong>[K${source.card_id}] ${escapeHtml(source.title)}</strong>
-      <p>${escapeHtml(source.evidence_locator)} · ${escapeHtml(source.source_ref)}</p>
+      <p>${source.retrieval_channel === "mindmemos_semantic" ? "MindMemOS 语义召回" : "本地词法召回"} · ${escapeHtml(source.evidence_locator)} · ${escapeHtml(source.source_ref)}</p>
       <p>“${escapeHtml(source.evidence_quote)}”</p></div>`).join("");
   } catch (error) { toast(error.message, true); }
   finally { setBusy(button, false); }
@@ -728,8 +748,29 @@ document.getElementById("forget-token").addEventListener("click", () => {
   showAuthGate("访问令牌已从当前标签页清除");
 });
 
+document.getElementById("memory-sync").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  setBusy(button, true, "正在同步……");
+  try {
+    const result = await api("/api/memory/sync", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const succeeded = (result.results || []).filter(item => ["SUCCEEDED", "ALREADY_SYNCED"].includes(item.status)).length;
+    const failed = (result.results || []).filter(item => item.status === "FAILED").length;
+    toast(`长期记忆同步完成：${succeeded} 张成功，${failed} 张失败`, failed > 0);
+    await refreshHealth();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false);
+  }
+});
+
 if (accessToken) {
   bootstrap().catch(error => showAuthGate(error.message));
 } else {
-  showAuthGate();
+  bootstrap()
+    .then(() => hideAuthGate())
+    .catch(error => showAuthGate(error.message));
 }

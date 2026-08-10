@@ -87,7 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--comment", default="")
     review_parser.add_argument("--supersedes-id", type=int)
 
-    search_parser = subparsers.add_parser("search", help="本地检索知识，不调用 API")
+    search_parser = subparsers.add_parser(
+        "search",
+        help="治理检索；默认使用本地索引，无命中时可选用 MindMemOS 语义后备",
+    )
     search_parser.add_argument("--query", required=True)
     search_parser.add_argument(
         "--status",
@@ -105,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
     agent_query_parser.add_argument("--question", required=True)
 
     subparsers.add_parser("stats", help="查看知识库统计")
+    memory_status = subparsers.add_parser(
+        "memory-status", help="查看 MindMemOS 长期记忆连接与同步状态"
+    )
+    memory_status.add_argument(
+        "--probe", action="store_true", help="实际探测 MindMemOS 健康接口"
+    )
+    subparsers.add_parser(
+        "memory-sync", help="将全部 APPROVED 知识幂等同步到 MindMemOS"
+    )
     subparsers.add_parser(
         "regrade",
         help="不调用 API，按当前证据回定位和分类质量规则重新评分已有卡片",
@@ -236,13 +248,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif command == "search":
             _print_json(
-                {
-                    "hits": service.search(
-                        args.query,
-                        status=args.status,
-                        top_k=args.top_k,
-                    )
-                }
+                service.search_with_diagnostics(
+                    args.query,
+                    status=args.status,
+                    top_k=args.top_k,
+                )
             )
         elif command == "query":
             _print_json(service.query(args.question))
@@ -250,6 +260,10 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(service.agent_query(args.question))
         elif command == "stats":
             _print_json(service.stats())
+        elif command == "memory-status":
+            _print_json(service.long_term_memory_status(probe=args.probe))
+        elif command == "memory-sync":
+            _print_json(service.sync_long_term_memory())
         elif command == "regrade":
             _print_json(service.regrade_existing_cards())
         elif command == "demo-change":
