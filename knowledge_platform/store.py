@@ -139,6 +139,9 @@ class KnowledgeStore:
             status TEXT NOT NULL,
             memory_count INTEGER NOT NULL DEFAULT 0,
             detail TEXT NOT NULL,
+            owner_token TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            attempt INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
             PRIMARY KEY(card_id, backend)
         );
@@ -154,9 +157,40 @@ class KnowledgeStore:
 
         CREATE INDEX IF NOT EXISTS idx_memory_links_card
             ON memory_links(card_id, backend);
+
+        CREATE TABLE IF NOT EXISTS memory_retirements (
+            backend TEXT NOT NULL,
+            memory_id TEXT NOT NULL,
+            card_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(backend, memory_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_retirements_status
+            ON memory_retirements(backend, status, updated_at);
         """
         with self.connect() as connection:
             connection.executescript(schema)
+            # Compatibility migration for databases created before sync leases
+            # were introduced. Column names and declarations are constants.
+            existing_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(memory_sync_state)"
+                ).fetchall()
+            }
+            for column, declaration in (
+                ("owner_token", "TEXT NOT NULL DEFAULT ''"),
+                ("lease_expires_at", "TEXT NOT NULL DEFAULT ''"),
+                ("attempt", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column not in existing_columns:
+                    connection.execute(
+                        f"ALTER TABLE memory_sync_state ADD COLUMN {column} {declaration}"
+                    )
 
     def add_document(
         self,
@@ -712,6 +746,90 @@ class KnowledgeStore:
         result["detail"] = json.loads(result["detail"] or "{}")
         return result
 
+    def claim_memory_sync(
+        self,
+        card_id: int,
+        *,
+        backend: str,
+        content_hash: str,
+        owner_token: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat(timespec="seconds")
+        lease_text = (now + timedelta(seconds=max(lease_seconds, 1))).isoformat(
+            timespec="seconds"
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            card = connection.execute(
+                "SELECT status FROM cards WHERE id = ?", (card_id,)
+            ).fetchone()
+            if card is None:
+                raise StoreError(f"知识卡片不存在: {card_id}")
+            if str(card["status"]) != CardStatus.APPROVED.value:
+                return {"state": "NOT_APPROVED"}
+            row = connection.execute(
+                "SELECT * FROM memory_sync_state WHERE card_id = ? AND backend = ?",
+                (card_id, backend),
+            ).fetchone()
+            if row is not None:
+                current = dict(row)
+                if (
+                    str(current["status"]) == "SUCCEEDED"
+                    and str(current["content_hash"]) == content_hash
+                    and int(current["memory_count"]) > 0
+                ):
+                    return {
+                        "state": "ALREADY_SYNCED",
+                        "memory_count": int(current["memory_count"]),
+                    }
+                lease_raw = str(current.get("lease_expires_at") or "")
+                try:
+                    lease_expires = datetime.fromisoformat(lease_raw)
+                except ValueError:
+                    lease_expires = now - timedelta(seconds=1)
+                if str(current["status"]) == "SYNCING" and lease_expires > now:
+                    return {
+                        "state": "SYNC_IN_PROGRESS",
+                        "lease_expires_at": lease_raw,
+                        "attempt": int(current.get("attempt") or 0),
+                    }
+                attempt = int(current.get("attempt") or 0) + 1
+            else:
+                attempt = 1
+            connection.execute(
+                """
+                INSERT INTO memory_sync_state
+                    (card_id, backend, content_hash, status, memory_count, detail,
+                     owner_token, lease_expires_at, attempt, updated_at)
+                VALUES (?, ?, ?, 'SYNCING', 0, '{}', ?, ?, ?, ?)
+                ON CONFLICT(card_id, backend) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    status = 'SYNCING',
+                    memory_count = 0,
+                    detail = '{}',
+                    owner_token = excluded.owner_token,
+                    lease_expires_at = excluded.lease_expires_at,
+                    attempt = excluded.attempt,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    card_id,
+                    backend,
+                    content_hash,
+                    owner_token,
+                    lease_text,
+                    attempt,
+                    now_text,
+                ),
+            )
+            return {
+                "state": "CLAIMED",
+                "attempt": attempt,
+                "lease_expires_at": lease_text,
+            }
+
     def record_memory_sync_success(
         self,
         card_id: int,
@@ -720,7 +838,8 @@ class KnowledgeStore:
         content_hash: str,
         memory_ids: list[str],
         detail: dict[str, Any],
-    ) -> None:
+        owner_token: str,
+    ) -> dict[str, Any]:
         unique_ids = list(dict.fromkeys(item.strip() for item in memory_ids if item.strip()))
         if not unique_ids:
             raise StoreError("长期记忆同步结果缺少 memory_id")
@@ -731,6 +850,47 @@ class KnowledgeStore:
                 "SELECT id FROM cards WHERE id = ?", (card_id,)
             ).fetchone() is None:
                 raise StoreError(f"知识卡片不存在: {card_id}")
+            claim = connection.execute(
+                """
+                SELECT status, owner_token, content_hash FROM memory_sync_state
+                WHERE card_id = ? AND backend = ?
+                """,
+                (card_id, backend),
+            ).fetchone()
+            if (
+                claim is None
+                or str(claim["status"]) != "SYNCING"
+                or str(claim["owner_token"]) != owner_token
+                or str(claim["content_hash"]) != content_hash
+            ):
+                return {"applied": False, "retired_memory_ids": []}
+            previous_ids = {
+                str(row["memory_id"])
+                for row in connection.execute(
+                    "SELECT memory_id FROM memory_links WHERE card_id = ? AND backend = ?",
+                    (card_id, backend),
+                ).fetchall()
+            }
+            retired_ids = sorted(previous_ids - set(unique_ids))
+            for memory_id in retired_ids:
+                connection.execute(
+                    """
+                    INSERT INTO memory_retirements
+                        (backend, memory_id, card_id, status, attempts, last_error, updated_at)
+                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                    ON CONFLICT(backend, memory_id) DO UPDATE SET
+                        card_id = excluded.card_id,
+                        status = 'PENDING',
+                        last_error = '',
+                        updated_at = excluded.updated_at
+                    """,
+                    (backend, memory_id, card_id, now),
+                )
+            for memory_id in unique_ids:
+                connection.execute(
+                    "DELETE FROM memory_retirements WHERE backend = ? AND memory_id = ?",
+                    (backend, memory_id),
+                )
             connection.execute(
                 "DELETE FROM memory_links WHERE card_id = ? AND backend = ?",
                 (card_id, backend),
@@ -753,13 +913,16 @@ class KnowledgeStore:
             connection.execute(
                 """
                 INSERT INTO memory_sync_state
-                    (card_id, backend, content_hash, status, memory_count, detail, updated_at)
-                VALUES (?, ?, ?, 'SUCCEEDED', ?, ?, ?)
+                    (card_id, backend, content_hash, status, memory_count, detail,
+                     owner_token, lease_expires_at, attempt, updated_at)
+                VALUES (?, ?, ?, 'SUCCEEDED', ?, ?, '', '', 1, ?)
                 ON CONFLICT(card_id, backend) DO UPDATE SET
                     content_hash = excluded.content_hash,
                     status = excluded.status,
                     memory_count = excluded.memory_count,
                     detail = excluded.detail,
+                    owner_token = '',
+                    lease_expires_at = '',
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -771,6 +934,7 @@ class KnowledgeStore:
                     now,
                 ),
             )
+        return {"applied": True, "retired_memory_ids": retired_ids}
 
     def record_memory_sync_failure(
         self,
@@ -779,33 +943,102 @@ class KnowledgeStore:
         backend: str,
         content_hash: str,
         error: str,
-    ) -> None:
+        owner_token: str,
+    ) -> bool:
         now = utc_now()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                "DELETE FROM memory_links WHERE card_id = ? AND backend = ?",
-                (card_id, backend),
-            )
-            connection.execute(
+            cursor = connection.execute(
                 """
-                INSERT INTO memory_sync_state
-                    (card_id, backend, content_hash, status, memory_count, detail, updated_at)
-                VALUES (?, ?, ?, 'FAILED', 0, ?, ?)
-                ON CONFLICT(card_id, backend) DO UPDATE SET
-                    content_hash = excluded.content_hash,
-                    status = excluded.status,
-                    memory_count = 0,
-                    detail = excluded.detail,
-                    updated_at = excluded.updated_at
+                UPDATE memory_sync_state
+                SET status = 'FAILED', memory_count = 0, detail = ?,
+                    owner_token = '', lease_expires_at = '', updated_at = ?
+                WHERE card_id = ? AND backend = ? AND status = 'SYNCING'
+                  AND owner_token = ? AND content_hash = ?
                 """,
                 (
-                    card_id,
-                    backend,
-                    content_hash,
                     json.dumps({"error": error[:2000]}, ensure_ascii=False),
                     now,
+                    card_id,
+                    backend,
+                    owner_token,
+                    content_hash,
                 ),
+            )
+        return cursor.rowcount == 1
+
+    def retire_unapproved_memory_links(self, *, backend: str) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT links.memory_id, links.card_id
+                FROM memory_links AS links
+                JOIN cards ON cards.id = links.card_id
+                WHERE links.backend = ? AND cards.status != ?
+                """,
+                (backend, CardStatus.APPROVED.value),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    INSERT INTO memory_retirements
+                        (backend, memory_id, card_id, status, attempts, last_error, updated_at)
+                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                    ON CONFLICT(backend, memory_id) DO UPDATE SET
+                        status = 'PENDING', updated_at = excluded.updated_at
+                    """,
+                    (backend, str(row["memory_id"]), int(row["card_id"]), now),
+                )
+            if rows:
+                connection.executemany(
+                    "DELETE FROM memory_links WHERE backend = ? AND memory_id = ?",
+                    [(backend, str(row["memory_id"])) for row in rows],
+                )
+                connection.executemany(
+                    """
+                    UPDATE memory_sync_state SET status = 'RETIRED', memory_count = 0,
+                        owner_token = '', lease_expires_at = '', updated_at = ?
+                    WHERE card_id = ? AND backend = ?
+                    """,
+                    [(now, int(row["card_id"]), backend) for row in rows],
+                )
+        return len(rows)
+
+    def list_memory_retirements(
+        self, *, backend: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM memory_retirements
+                WHERE backend = ? AND status IN ('PENDING', 'FAILED')
+                ORDER BY updated_at ASC, memory_id ASC LIMIT ?
+                """,
+                (backend, max(1, min(limit, 1000))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_memory_retirement(
+        self, *, backend: str, memory_id: str, error: str = ""
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not error:
+                connection.execute(
+                    "DELETE FROM memory_retirements WHERE backend = ? AND memory_id = ?",
+                    (backend, memory_id),
+                )
+                return
+            connection.execute(
+                """
+                UPDATE memory_retirements
+                SET status = 'FAILED', attempts = attempts + 1,
+                    last_error = ?, updated_at = ?
+                WHERE backend = ? AND memory_id = ?
+                """,
+                (error[:2000], utc_now(), backend, memory_id),
             )
 
     def card_ids_for_memory_ids(
@@ -818,8 +1051,12 @@ class KnowledgeStore:
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT memory_id, card_id FROM memory_links
-                WHERE backend = ? AND memory_id IN ({placeholders})
+                SELECT links.memory_id, links.card_id FROM memory_links AS links
+                JOIN memory_sync_state AS state
+                  ON state.card_id = links.card_id AND state.backend = links.backend
+                WHERE links.backend = ? AND links.memory_id IN ({placeholders})
+                  AND state.status = 'SUCCEEDED'
+                  AND state.content_hash = links.content_hash
                 """,
                 [backend, *unique_ids],
             ).fetchall()
@@ -844,10 +1081,17 @@ class KnowledgeStore:
                 "SELECT MAX(updated_at) AS value FROM memory_sync_state WHERE backend = ?",
                 (backend,),
             ).fetchone()["value"]
+            retirement_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM memory_retirements WHERE backend = ?",
+                    (backend,),
+                ).fetchone()["count"]
+            )
         statuses = {str(row["status"]): int(row["count"]) for row in rows}
         return {
             "cards": sum(statuses.values()),
             "memory_links": link_count,
+            "pending_retirements": retirement_count,
             "statuses": statuses,
             "last_updated_at": latest,
         }

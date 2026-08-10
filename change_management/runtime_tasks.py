@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from harness.run_store import RunStore
@@ -7,6 +8,22 @@ from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunContext
 from harness.tools import RiskLevel, ToolSpec
 
 from .service import DemoChangeService
+
+
+def apply_plan_in_isolated_worker(
+    arguments: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    static = context.get("static")
+    if not isinstance(static, dict):
+        raise HarnessRuntimeError("隔离工具缺少静态上下文")
+    workspace = Path(str(static.get("workspace") or "")).resolve()
+    case_id = str(static.get("case_id") or "").strip()
+    if not workspace.name or not case_id:
+        raise HarnessRuntimeError("隔离工具缺少工作区或案例标识")
+    service = DemoChangeService(workspace, case_id=case_id)
+    return service.apply_plan(
+        arguments, run_id=str(context.get("run_id") or "unknown-run")
+    )
 
 
 def register_change_tasks(runtime: HarnessRuntime, service: DemoChangeService) -> None:
@@ -38,9 +55,14 @@ def register_change_tasks(runtime: HarnessRuntime, service: DemoChangeService) -
                 "additionalProperties": False,
             },
             risk_level=RiskLevel.LOCAL_WRITE,
-            handler=lambda arguments, context: service.apply_plan(
-                arguments, run_id=str(getattr(context, "run_id", "unknown-run"))
+            timeout_seconds=120,
+            isolated_entrypoint=(
+                "change_management.runtime_tasks:apply_plan_in_isolated_worker"
             ),
+            isolated_context={
+                "workspace": str(service.workspace),
+                "case_id": service.case.case_id,
+            },
         )
     )
 

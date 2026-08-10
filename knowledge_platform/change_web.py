@@ -39,6 +39,11 @@ class ChangeSessionLimitError(DemoChangeError):
     code = "change_session_limit_exceeded"
 
 
+class ChangeSnapshotUnavailableError(DemoChangeError):
+    status = int(HTTPStatus.SERVICE_UNAVAILABLE)
+    code = "change_snapshot_temporarily_inconsistent"
+
+
 class ChangeDemoWebManager:
     """Own isolated synthetic demo sessions used by the integrated workbench."""
 
@@ -136,9 +141,7 @@ class ChangeDemoWebManager:
         self.cleanup()
         session = self._require(session_id)
         session.last_accessed_at = time.time()
-        package = None
-        if session.service.change_store.get_ticket(session.service.TICKET_ID) is not None:
-            package = session.service.ticket_package(session.service.TICKET_ID)
+        package, generate_run, execute_run = self._consistent_snapshot(session)
         try:
             network = session.service.simulator.snapshot()
         except SimulationError:
@@ -163,9 +166,10 @@ class ChangeDemoWebManager:
                 else []
             ),
             "runs": {
-                "generate": self._run_detail(session, session.generate_run_id),
-                "execute": self._run_detail(session, session.execute_run_id),
+                "generate": generate_run,
+                "execute": execute_run,
             },
+            "snapshot_consistent": True,
             "published_feedback": published,
         }
         if package is not None and self._is_terminal_status(
@@ -175,6 +179,53 @@ class ChangeDemoWebManager:
                 session.terminal_at = time.time()
             self._stop_session_runtime(session)
         return payload
+
+    def _consistent_snapshot(
+        self, session: ChangeDemoSession
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+        """Read runtime first, then the ticket DB, and reject impossible pairs.
+
+        The approval transition writes the ticket before it requests the runtime
+        approval. Reading in this order guarantees that an observed runtime
+        WAITING_APPROVAL cannot be paired with an older READY_FOR_APPROVAL
+        ticket. A short retry also covers the rejection transition, which writes
+        the runtime decision before the ticket audit row.
+        """
+
+        for _attempt in range(8):
+            generate_run = self._run_detail(session, session.generate_run_id)
+            execute_run = self._run_detail(session, session.execute_run_id)
+            package = None
+            if (
+                session.service.change_store.get_ticket(session.service.TICKET_ID)
+                is not None
+            ):
+                package = session.service.ticket_package(session.service.TICKET_ID)
+            if self._snapshot_pair_is_consistent(package, execute_run):
+                return package, generate_run, execute_run
+            time.sleep(0.005)
+        raise ChangeSnapshotUnavailableError(
+            "变更工单与运行时正在切换状态，请稍后重试"
+        )
+
+    @staticmethod
+    def _snapshot_pair_is_consistent(
+        package: dict[str, Any] | None, execute_run: dict[str, Any] | None
+    ) -> bool:
+        if execute_run is None:
+            return True
+        run_status = str(execute_run.get("status") or "")
+        ticket_status = str(((package or {}).get("ticket") or {}).get("status") or "")
+        if run_status == "WAITING_APPROVAL":
+            return ticket_status == "WAITING_APPROVAL"
+        if run_status == "SUCCEEDED":
+            return ticket_status in {"SUCCEEDED", "ROLLED_BACK", "FAILED"}
+        if (
+            run_status == "FAILED"
+            and str(execute_run.get("error_code") or "") == "TOOL_APPROVAL_REJECTED"
+        ):
+            return ticket_status == "REJECTED"
+        return True
 
     def start_execution(
         self,

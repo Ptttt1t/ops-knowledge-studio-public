@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import hmac
 from http.client import HTTPConnection
 import json
 from pathlib import Path
@@ -15,6 +17,7 @@ import zipfile
 
 from harness.api_client import APIError, DeepSeekClient
 from harness.config import ConfigurationError, Settings
+from harness.trace import TraceLogger
 from knowledge_platform.change_web import ChangeDemoWebManager, ChangeSessionLimitError
 from knowledge_platform.documents import DocumentError, DocumentLimits, read_document
 from knowledge_platform.security import (
@@ -115,6 +118,95 @@ class EmptyClient:
 
 
 class SecurityHardeningTests(unittest.TestCase):
+    def test_change_snapshot_retries_ready_ticket_seen_with_waiting_run(self):
+        class FakeChangeStore:
+            @staticmethod
+            def get_ticket(_ticket_id):
+                return {"ticket_id": "CHG-TEST"}
+
+        class FakeService:
+            TICKET_ID = "CHG-TEST"
+            change_store = FakeChangeStore()
+
+            def __init__(self):
+                self.reads = 0
+
+            def ticket_package(self, _ticket_id):
+                self.reads += 1
+                status = "READY_FOR_APPROVAL" if self.reads == 1 else "WAITING_APPROVAL"
+                return {"ticket": {"status": status}}
+
+        class FakeSession:
+            service = FakeService()
+            generate_run_id = "generate"
+            execute_run_id = "execute"
+
+        manager = object.__new__(ChangeDemoWebManager)
+        manager._run_detail = lambda _session, run_id: {
+            "status": "SUCCEEDED" if run_id == "generate" else "WAITING_APPROVAL"
+        }
+        package, _generate, execute = manager._consistent_snapshot(FakeSession())
+        self.assertEqual(execute["status"], "WAITING_APPROVAL")
+        self.assertEqual(package["ticket"]["status"], "WAITING_APPROVAL")
+        self.assertEqual(FakeSession.service.reads, 2)
+
+    def test_trace_redacts_queries_rotates_and_hash_chains_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                stale = root / f"session-20000101-00000{index}-stale.jsonl"
+                stale.write_text(
+                    json.dumps(
+                        {
+                            "event": "legacy",
+                            "question": "旧日志中的明文业务查询",
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                stale.touch()
+                time.sleep(0.01)
+            logger = TraceLogger(
+                root, retention_days=1, max_files=2, hmac_key="trace-test-key"
+            )
+            logger.log(
+                "search",
+                question="包含敏感业务名称的完整问题",
+                authorization="Bearer top-secret-value",
+                diagnostics={"query": "另一个明文查询"},
+            )
+            logger.log("search.completed", result_count=1)
+
+            raw = logger.path.read_text(encoding="utf-8")
+            self.assertNotIn("敏感业务名称", raw)
+            self.assertNotIn("top-secret-value", raw)
+            self.assertNotIn("另一个明文查询", raw)
+            records = [json.loads(line) for line in raw.splitlines()]
+            self.assertEqual(records[0]["question"]["redacted"], True)
+            self.assertEqual(records[1]["previous_hash"], records[0]["record_hash"])
+            first = dict(records[0])
+            expected_hash = first.pop("record_hash")
+            canonical = json.dumps(
+                first,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.assertEqual(
+                expected_hash,
+                hmac.new(b"trace-test-key", canonical, hashlib.sha256).hexdigest(),
+            )
+            self.assertLessEqual(len(list(root.glob("session-*.jsonl"))), 2)
+            self.assertTrue(
+                all(
+                    "旧日志中的明文业务查询"
+                    not in path.read_text(encoding="utf-8")
+                    for path in root.glob("session-*.jsonl")
+                )
+            )
+
     def test_token_host_origin_content_type_and_actor_are_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

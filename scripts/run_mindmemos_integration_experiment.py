@@ -33,6 +33,13 @@ DEFAULT_QUERIES = [
     },
 ]
 
+DIFFICULT_NEGATIVE_QUERIES = [
+    "数据库主从切换失败后如何回退？",
+    "Kubernetes Ingress 的 TLS 证书轮换需要哪些步骤？",
+    "员工 IAM 账号权限开通失败后如何撤销授权？",
+    "请推荐一份周末晚餐菜单并说明明天的天气。",
+]
+
 
 def _hit_summary(hits: list[Any]) -> list[dict[str, Any]]:
     return [
@@ -125,6 +132,27 @@ def main() -> int:
             flush=True,
         )
 
+    negative_results: list[dict[str, Any]] = []
+    for query in DIFFICULT_NEGATIVE_QUERIES:
+        enhanced_hits, diagnostics = service.trusted_search_hits(
+            query, top_k=settings.retrieval_top_k
+        )
+        negative_results.append(
+            {
+                "query": query,
+                "accepted": bool(enhanced_hits),
+                "enhanced": _hit_summary(enhanced_hits),
+                "memory_retrieval": diagnostics,
+            }
+        )
+        print(
+            f"[experiment] negative accepted={bool(enhanced_hits)} "
+            f"semantic_rejected={len(diagnostics.get('semantic_rejected', []))}",
+            flush=True,
+        )
+
+    false_accepts = sum(1 for item in negative_results if item["accepted"])
+
     report = {
         "synthetic": True,
         "database_path": str(settings.database_path),
@@ -136,13 +164,19 @@ def main() -> int:
         "sync_results": sync_results,
         "memory_status": service.long_term_memory_status(probe=True),
         "comparisons": comparisons,
+        "difficult_negatives": negative_results,
+        "false_acceptance_rate": (
+            false_accepts / len(negative_results) if negative_results else 0.0
+        ),
     }
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"[experiment] report={args.report}", flush=True)
-    return 0 if all(item["status"] != "FAILED" for item in sync_results) else 1
+    sync_ok = all(item["status"] != "FAILED" for item in sync_results)
+    positives_ok = all(item["enhanced_top_correct"] for item in comparisons)
+    return 0 if sync_ok and positives_ok and false_accepts == 0 else 1
 
 
 if __name__ == "__main__":

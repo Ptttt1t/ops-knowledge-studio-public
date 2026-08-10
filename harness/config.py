@@ -170,6 +170,12 @@ class Settings:
     mindmemos_top_k: int = 10
     mindmemos_max_sync_cards: int = 20
     mindmemos_max_semantic_cards: int = 1
+    mindmemos_min_relevance_score: float = 0.65
+    mindmemos_min_local_anchors: int = 2
+    mindmemos_allow_content_export: bool = False
+    trace_retention_days: int = 7
+    trace_max_files: int = 50
+    trace_hmac_key: str = ""
 
     @property
     def api_configured(self) -> bool:
@@ -232,8 +238,32 @@ class Settings:
                 "top_k": self.mindmemos_top_k,
                 "max_sync_cards": self.mindmemos_max_sync_cards,
                 "max_semantic_cards": self.mindmemos_max_semantic_cards,
+                "min_relevance_score": self.mindmemos_min_relevance_score,
+                "min_local_anchors": self.mindmemos_min_local_anchors,
+                "content_export_allowed": self.mindmemos_allow_content_export,
                 "recall_policy": "fallback_only",
-                "trust_policy": "local_approved_only",
+                "trust_policy": "local_approved_and_relevance_gated",
+                "exported_fields": [
+                    "card_id",
+                    "title",
+                    "summary",
+                    "scenario",
+                    "object_type",
+                    "object_name",
+                    "applicable_versions",
+                    "prerequisites",
+                    "procedure_steps",
+                    "risks",
+                    "rollback_steps",
+                    "validation_steps",
+                    "keywords",
+                ],
+            },
+            "trace_policy": {
+                "query_text": "redacted",
+                "retention_days": self.trace_retention_days,
+                "max_files": self.trace_max_files,
+                "integrity": "hmac-sha256" if self.trace_hmac_key else "sha256-chain",
             },
         }
 
@@ -309,6 +339,13 @@ class Settings:
         retrieval_min_coverage = _read_float(values, "KNOWLEDGE_MIN_COVERAGE", 0.15)
         if not 0 <= retrieval_min_coverage <= 1:
             raise ConfigurationError("KNOWLEDGE_MIN_COVERAGE 必须在 0 到 1 之间")
+        mindmemos_min_relevance_score = _read_float(
+            values, "MINDMEMOS_MIN_RELEVANCE_SCORE", 0.65
+        )
+        if not 0 <= mindmemos_min_relevance_score <= 1:
+            raise ConfigurationError(
+                "MINDMEMOS_MIN_RELEVANCE_SCORE 必须在 0 到 1 之间"
+            )
         api_retry_initial_seconds = _read_float(
             values, "DEEPSEEK_RETRY_INITIAL_SECONDS", 0.5
         )
@@ -445,11 +482,25 @@ class Settings:
             mindmemos_max_semantic_cards=_read_int(
                 values, "MINDMEMOS_MAX_SEMANTIC_CARDS", 1
             ),
+            mindmemos_min_relevance_score=mindmemos_min_relevance_score,
+            mindmemos_min_local_anchors=_read_int(
+                values, "MINDMEMOS_MIN_LOCAL_ANCHORS", 2
+            ),
+            mindmemos_allow_content_export=_read_bool(
+                values, "MINDMEMOS_ALLOW_CONTENT_EXPORT", False
+            ),
+            trace_retention_days=_read_int(values, "TRACE_RETENTION_DAYS", 7),
+            trace_max_files=_read_int(values, "TRACE_MAX_FILES", 50),
+            trace_hmac_key=_get(values, "TRACE_HMAC_KEY", ""),
         )
         if settings.change_max_active_sessions > settings.change_max_retained_sessions:
             raise ConfigurationError(
                 "CHANGE_MAX_ACTIVE_SESSIONS 不能大于 CHANGE_MAX_RETAINED_SESSIONS"
             )
+        if settings.mindmemos_min_local_anchors <= 0:
+            raise ConfigurationError("MINDMEMOS_MIN_LOCAL_ANCHORS 必须大于 0")
+        if settings.trace_retention_days <= 0 or settings.trace_max_files <= 0:
+            raise ConfigurationError("TRACE_RETENTION_DAYS 和 TRACE_MAX_FILES 必须大于 0")
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
         if settings.runtime_database_path is not None:
             settings.runtime_database_path.parent.mkdir(parents=True, exist_ok=True)

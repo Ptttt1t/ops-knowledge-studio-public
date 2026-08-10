@@ -7,6 +7,7 @@ import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from harness.config import Settings
 
@@ -45,6 +46,7 @@ class MindMemOSClient:
         *,
         payload: dict[str, Any] | None = None,
         authenticated: bool = True,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         body = None
         headers = {"Accept": "application/json"}
@@ -57,6 +59,7 @@ class MindMemOSClient:
             if not self.api_key:
                 raise MindMemOSError("MindMemOS API Key 未配置")
             headers["Authorization"] = f"Bearer {self.api_key}"
+        headers.update(extra_headers or {})
         request = Request(
             f"{self.base_url}{path}",
             data=body,
@@ -98,6 +101,7 @@ class MindMemOSClient:
         app_id: str,
         text: str,
         metadata: dict[str, Any],
+        idempotency_key: str,
     ) -> dict[str, Any]:
         return self._request(
             "/v1/memory/add",
@@ -109,6 +113,13 @@ class MindMemOSClient:
                 "prompt_language": "ZH",
                 "mode": "sync",
             },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def delete(self, *, memory_id: str) -> dict[str, Any]:
+        return self._request(
+            "/v1/memory/delete",
+            payload={"memory_id": memory_id, "hard": False},
         )
 
     def search(
@@ -118,6 +129,7 @@ class MindMemOSClient:
         app_id: str,
         query: str,
         top_k: int,
+        score_threshold: float,
     ) -> dict[str, Any]:
         return self._request(
             "/v1/memory/search",
@@ -127,7 +139,8 @@ class MindMemOSClient:
                 "query": query,
                 "top_k": top_k,
                 "search_strategy": "fast",
-                "rerank": False,
+                "rerank": True,
+                "score_threshold": score_threshold,
             },
         )
 
@@ -174,6 +187,7 @@ class MindMemOSBridge:
             f"标题：{card['title']}",
             f"摘要：{card['summary']}",
             f"场景：{card['scenario']}",
+            f"对象类型：{card['object_type']}",
             f"对象：{card['object_name']}",
         ]
         labels = (
@@ -189,13 +203,6 @@ class MindMemOSBridge:
             values = card.get(field) or []
             if values:
                 lines.append(f"{label}：" + "；".join(str(value) for value in values))
-        lines.extend(
-            [
-                f"本地状态：{card['status']}",
-                f"来源：{card['source_ref']}",
-                f"证据定位：{card['evidence_locator']}",
-            ]
-        )
         return "\n".join(lines)
 
     @classmethod
@@ -218,24 +225,49 @@ class MindMemOSBridge:
                 "card_id": card_id,
                 "memory_count": 0,
             }
+        if not self.settings.mindmemos_allow_content_export:
+            return {
+                "status": "EXPORT_NOT_ALLOWED",
+                "card_id": card_id,
+                "memory_count": 0,
+            }
 
         content_hash = self._content_hash(card)
-        existing = self.store.get_memory_sync_state(card_id, self.BACKEND)
-        if (
-            existing
-            and existing["status"] == "SUCCEEDED"
-            and existing["content_hash"] == content_hash
-            and int(existing["memory_count"]) > 0
-        ):
+        owner_token = uuid4().hex
+        claim = self.store.claim_memory_sync(
+            card_id,
+            backend=self.BACKEND,
+            content_hash=content_hash,
+            owner_token=owner_token,
+            lease_seconds=max(30, self.settings.mindmemos_timeout_seconds * 2 + 10),
+        )
+        if claim["state"] == "ALREADY_SYNCED":
             return {
                 "status": "ALREADY_SYNCED",
                 "card_id": card_id,
-                "memory_count": int(existing["memory_count"]),
+                "memory_count": int(claim["memory_count"]),
                 "content_hash": content_hash,
+            }
+        if claim["state"] == "SYNC_IN_PROGRESS":
+            return {
+                "status": "SYNC_IN_PROGRESS",
+                "card_id": card_id,
+                "memory_count": 0,
+                "content_hash": content_hash,
+                "lease_expires_at": claim.get("lease_expires_at"),
+            }
+        if claim["state"] != "CLAIMED":
+            return {
+                "status": "SKIPPED_NOT_APPROVED",
+                "card_id": card_id,
+                "memory_count": 0,
             }
 
         started = time.monotonic()
         try:
+            idempotency_key = hashlib.sha256(
+                f"{self.BACKEND}:{card_id}:{content_hash}".encode("utf-8")
+            ).hexdigest()
             response = self.client.add(
                 user_id=self.settings.mindmemos_user_id,
                 app_id=self.settings.mindmemos_app_id,
@@ -245,8 +277,9 @@ class MindMemOSBridge:
                     "card_id": card_id,
                     "local_status": CardStatus.APPROVED.value,
                     "content_hash": content_hash,
-                    "source_checksum": str(card.get("source_checksum") or ""),
+                    "idempotency_key": idempotency_key,
                 },
+                idempotency_key=idempotency_key,
             )
             data = response.get("data") or {}
             raw_memories = data.get("memories") if isinstance(data, dict) else []
@@ -258,7 +291,7 @@ class MindMemOSBridge:
             if not memory_ids:
                 raise MindMemOSError("MindMemOS 写入成功响应中没有 memory_id")
             elapsed_ms = round((time.monotonic() - started) * 1000, 1)
-            self.store.record_memory_sync_success(
+            recorded = self.store.record_memory_sync_success(
                 card_id,
                 backend=self.BACKEND,
                 content_hash=content_hash,
@@ -266,7 +299,14 @@ class MindMemOSBridge:
                 detail={
                     "request_id": response.get("request_id"),
                     "elapsed_ms": elapsed_ms,
+                    "idempotency_key": idempotency_key,
                 },
+                owner_token=owner_token,
+            )
+            if not recorded["applied"]:
+                raise MindMemOSError("长期记忆同步租约已失效，结果未写入本地映射")
+            cleanup = self.cleanup_retired_memories(
+                limit=max(1, len(recorded["retired_memory_ids"]))
             )
             return {
                 "status": "SUCCEEDED",
@@ -274,6 +314,8 @@ class MindMemOSBridge:
                 "memory_count": len(memory_ids),
                 "content_hash": content_hash,
                 "elapsed_ms": elapsed_ms,
+                "retired_memory_ids": recorded["retired_memory_ids"],
+                "retirement_cleanup": cleanup,
             }
         except Exception as exc:
             self.store.record_memory_sync_failure(
@@ -281,6 +323,7 @@ class MindMemOSBridge:
                 backend=self.BACKEND,
                 content_hash=content_hash,
                 error=str(exc),
+                owner_token=owner_token,
             )
             if isinstance(exc, MindMemOSError):
                 raise
@@ -288,10 +331,33 @@ class MindMemOSBridge:
 
     def sync_approved(self) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
-        for card in self.store.list_cards(
-            CardStatus.APPROVED,
-            limit=self.settings.mindmemos_max_sync_cards,
-        ):
+        current = 0
+        pending: list[dict[str, Any]] = []
+        offset = 0
+        page_size = 200
+        while True:
+            page = self.store.list_cards(
+                CardStatus.APPROVED, limit=page_size, offset=offset
+            )
+            if not page:
+                break
+            for card in page:
+                state = self.store.get_memory_sync_state(int(card["id"]), self.BACKEND)
+                content_hash = self._content_hash(card)
+                if (
+                    state
+                    and state["status"] == "SUCCEEDED"
+                    and state["content_hash"] == content_hash
+                    and int(state["memory_count"]) > 0
+                ):
+                    current += 1
+                else:
+                    pending.append(card)
+            offset += len(page)
+            if len(page) < page_size:
+                break
+        limit = self.settings.mindmemos_max_sync_cards
+        for card in pending[:limit]:
             try:
                 results.append(self.sync_card(card))
             except MindMemOSError as exc:
@@ -302,14 +368,44 @@ class MindMemOSBridge:
                         "error": str(exc),
                     }
                 )
+        retired_unapproved = self.store.retire_unapproved_memory_links(
+            backend=self.BACKEND
+        )
+        cleanup = self.cleanup_retired_memories(limit=max(20, limit * 5))
         return {
             "enabled": self.enabled,
             "configured": self.configured,
             "processed": len(results),
             "limit": self.settings.mindmemos_max_sync_cards,
+            "already_current": current,
+            "remaining": max(0, len(pending) - len(results)),
             "results": results,
+            "retired_unapproved_links": retired_unapproved,
+            "retirement_cleanup": cleanup,
             "stats": self.store.memory_sync_stats(self.BACKEND),
         }
+
+    def cleanup_retired_memories(self, *, limit: int = 100) -> dict[str, Any]:
+        removed = 0
+        failed = 0
+        for item in self.store.list_memory_retirements(
+            backend=self.BACKEND, limit=limit
+        ):
+            memory_id = str(item["memory_id"])
+            try:
+                self.client.delete(memory_id=memory_id)
+                self.store.record_memory_retirement(
+                    backend=self.BACKEND, memory_id=memory_id
+                )
+                removed += 1
+            except Exception as exc:
+                self.store.record_memory_retirement(
+                    backend=self.BACKEND,
+                    memory_id=memory_id,
+                    error=str(exc),
+                )
+                failed += 1
+        return {"processed": removed + failed, "removed": removed, "failed": failed}
 
     def recall(self, query: str) -> MemoryRecall:
         base = {
@@ -331,6 +427,7 @@ class MindMemOSBridge:
                 app_id=self.settings.mindmemos_app_id,
                 query=query,
                 top_k=self.settings.mindmemos_top_k,
+                score_threshold=self.settings.mindmemos_min_relevance_score,
             )
             data = response.get("data") or {}
             raw_memories = data.get("memories") if isinstance(data, dict) else []
@@ -358,6 +455,7 @@ class MindMemOSBridge:
                 "memory_hits": len(memory_ids),
                 "mapped_approved_cards": len(card_ids),
                 "card_ids": card_ids,
+                "score_threshold": self.settings.mindmemos_min_relevance_score,
                 "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
             }
             return MemoryRecall(card_ids, diagnostics)
@@ -382,6 +480,24 @@ class MindMemOSBridge:
             "user_id": self.settings.mindmemos_user_id,
             "app_id": self.settings.mindmemos_app_id,
             "stats": self.store.memory_sync_stats(self.BACKEND),
+            "content_export_allowed": self.settings.mindmemos_allow_content_export,
+            "min_relevance_score": self.settings.mindmemos_min_relevance_score,
+            "min_local_anchors": self.settings.mindmemos_min_local_anchors,
+            "exported_fields": [
+                "card_id",
+                "title",
+                "summary",
+                "scenario",
+                "object_type",
+                "object_name",
+                "applicable_versions",
+                "prerequisites",
+                "procedure_steps",
+                "risks",
+                "rollback_steps",
+                "validation_steps",
+                "keywords",
+            ],
             "health": "NOT_PROBED",
         }
         if not self.enabled:
