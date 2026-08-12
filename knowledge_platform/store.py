@@ -132,6 +132,28 @@ class KnowledgeStore:
         CREATE INDEX IF NOT EXISTS idx_ingestion_claims_status
             ON ingestion_claims(status, lease_expires_at);
 
+        CREATE TABLE IF NOT EXISTS extraction_reports (
+            document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+            strategy TEXT NOT NULL,
+            report TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS card_lineage (
+            card_id INTEGER PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,
+            case_id TEXT NOT NULL,
+            extraction_strategy TEXT NOT NULL,
+            unit_role TEXT NOT NULL,
+            unit_pointer TEXT NOT NULL,
+            source_pointers TEXT NOT NULL,
+            source_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_card_lineage_case
+            ON card_lineage(case_id, source_order);
+
         CREATE TABLE IF NOT EXISTS memory_sync_state (
             card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
             backend TEXT NOT NULL,
@@ -222,6 +244,91 @@ class KnowledgeStore:
                 "SELECT * FROM documents WHERE checksum = ?", (checksum,)
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def save_extraction_report(
+        self, document_id: int, strategy: str, report: dict[str, Any]
+    ) -> None:
+        now = utc_now()
+        serialized = json.dumps(report, ensure_ascii=False, sort_keys=True)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO extraction_reports
+                    (document_id, strategy, report, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(document_id) DO UPDATE SET
+                    strategy = excluded.strategy,
+                    report = excluded.report,
+                    updated_at = excluded.updated_at
+                """,
+                (document_id, strategy, serialized, now, now),
+            )
+
+    def get_extraction_report(self, document_id: int) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT strategy, report, created_at, updated_at "
+                "FROM extraction_reports WHERE document_id = ?",
+                (document_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = json.loads(str(row["report"]) or "{}")
+        if not isinstance(result, dict):
+            result = {"report": result}
+        result.setdefault("strategy", str(row["strategy"]))
+        result["created_at"] = str(row["created_at"])
+        result["updated_at"] = str(row["updated_at"])
+        return result
+
+    def save_card_lineage(
+        self,
+        card_id: int,
+        *,
+        case_id: str,
+        extraction_strategy: str,
+        unit_role: str,
+        unit_pointer: str,
+        source_pointers: list[str],
+        source_order: int,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO card_lineage
+                    (card_id, case_id, extraction_strategy, unit_role, unit_pointer,
+                     source_pointers, source_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(card_id) DO UPDATE SET
+                    case_id = excluded.case_id,
+                    extraction_strategy = excluded.extraction_strategy,
+                    unit_role = excluded.unit_role,
+                    unit_pointer = excluded.unit_pointer,
+                    source_pointers = excluded.source_pointers,
+                    source_order = excluded.source_order
+                """,
+                (
+                    card_id,
+                    case_id,
+                    extraction_strategy,
+                    unit_role,
+                    unit_pointer,
+                    json.dumps(source_pointers, ensure_ascii=False),
+                    source_order,
+                    utc_now(),
+                ),
+            )
+
+    def get_card_lineage(self, card_id: int) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM card_lineage WHERE card_id = ?", (card_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["source_pointers"] = json.loads(result["source_pointers"] or "[]")
+        return result
 
     def claim_ingestion(
         self,
@@ -590,7 +697,8 @@ class KnowledgeStore:
         now = utc_now()
         with self.connect() as connection:
             current = connection.execute(
-                "SELECT id, status, evidence_quote, quality_issues FROM cards WHERE id = ?",
+                "SELECT id, status, evidence_quote, quality_issues, source_document_id "
+                "FROM cards WHERE id = ?",
                 (card_id,),
             ).fetchone()
             if current is None:
@@ -611,6 +719,35 @@ class KnowledgeStore:
                     raise StoreError(
                         "该知识缺少可定位的原文证据，不能批准发布；请补充来源后重新抽取。"
                     )
+                blocking_issues = [
+                    str(issue)
+                    for issue in quality_issues
+                    if str(issue).startswith("阻断：")
+                ]
+                if blocking_issues:
+                    raise StoreError(
+                        "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
+                        + "；".join(blocking_issues)
+                    )
+                report_row = connection.execute(
+                    "SELECT report FROM extraction_reports WHERE document_id = ?",
+                    (int(current["source_document_id"]),),
+                ).fetchone()
+                if report_row is not None:
+                    report = json.loads(str(report_row["report"]) or "{}")
+                    change_report = (
+                        report.get("change_order") if isinstance(report, dict) else None
+                    )
+                    if (
+                        isinstance(change_report, dict)
+                        and change_report.get("matched") is True
+                        and not change_report.get("safe_to_publish", False)
+                    ):
+                        blockers = change_report.get("blockers") or ["结构完整性检查未通过"]
+                        raise StoreError(
+                            "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
+                            + "；".join(str(item) for item in blockers)
+                        )
 
             if action == "SUPERSEDE":
                 if supersedes_id is None or supersedes_id == card_id:

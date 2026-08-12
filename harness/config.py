@@ -144,7 +144,10 @@ class Settings:
     max_json_bytes: int = 256 * 1024
     max_upload_bytes: int = 10 * 1024 * 1024
     max_text_chars: int = 120_000
+    max_change_order_json_chars: int = 500_000
     max_document_chunks: int = 20
+    max_change_order_chunks: int = 40
+    change_order_chunk_size: int = 12_000
     max_model_calls_per_ingest: int = 60
     max_cards_per_document: int = 30
     max_concurrent_ingestions: int = 1
@@ -217,7 +220,10 @@ class Settings:
                 "json_bytes": self.max_json_bytes,
                 "upload_bytes": self.max_upload_bytes,
                 "text_chars": self.max_text_chars,
+                "change_order_json_chars": self.max_change_order_json_chars,
                 "document_chunks": self.max_document_chunks,
+                "change_order_chunks": self.max_change_order_chunks,
+                "change_order_chunk_size": self.change_order_chunk_size,
                 "model_calls_per_ingest": self.max_model_calls_per_ingest,
                 "concurrent_ingestions": self.max_concurrent_ingestions,
             },
@@ -418,8 +424,17 @@ class Settings:
                 values, "DOCUMENT_MAX_UPLOAD_BYTES", 10 * 1024 * 1024
             ),
             max_text_chars=_read_int(values, "KNOWLEDGE_MAX_TEXT_CHARS", 120_000),
+            max_change_order_json_chars=_read_int(
+                values, "KNOWLEDGE_MAX_CHANGE_ORDER_JSON_CHARS", 500_000
+            ),
             max_document_chunks=_read_int(
                 values, "KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT", 20
+            ),
+            max_change_order_chunks=_read_int(
+                values, "KNOWLEDGE_MAX_CHANGE_ORDER_CHUNKS", 40
+            ),
+            change_order_chunk_size=_read_int(
+                values, "KNOWLEDGE_CHANGE_ORDER_CHUNK_SIZE", 12_000
             ),
             max_model_calls_per_ingest=_read_int(
                 values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60

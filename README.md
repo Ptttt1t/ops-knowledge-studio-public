@@ -333,7 +333,8 @@ python scripts/ocr_smoke_test.py
 
 ```text
 原始文档
-  -> 文档分片与来源定位
+  -> JSON 结构识别 / 普通文档分片与来源定位
+  -> TaskRecord 双视图对账与覆盖率检查（匹配的变更单）
   -> DeepSeek 结构化抽取
   -> 字段与证据质量校验
   -> 重复 / 冲突 / 新版本比较
@@ -363,6 +364,8 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 ```
 
 使用 `python run.py <命令> --help` 查看完整参数。
+
+对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v1`：按 TaskRecord、四组 ProcedureStep 和独立 ExecutionResult 的结构边界抽取，严格对账重复任务视图，并返回可审计的覆盖率报告。无关的普通 JSON 仍使用原有通用流程；同时命中多类变更单特征但关键结构不完整的输入会在模型调用前阻断。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
 
 ## 变更状态与审批安全
 
@@ -494,6 +497,7 @@ python run.py demo-change --case-id nat-egress-bluegreen
 
 - [部署指南](docs/deployment.md)
 - [云网络变更单最小闭环演示](docs/change-demo.md)
+- [结构化变更单知识抽取](docs/structured-change-order-extraction.md)
 - [第一阶段加固说明](docs/first-stage-hardening.md)
 - [Web 与资源安全基线](docs/security-hardening.md)
 - [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)

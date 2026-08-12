@@ -36,6 +36,44 @@ JSON 格式：
 没有可复用知识时返回 {"knowledge_cards": []}。"""
 
 
+CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT = """你是运维变更知识工程师。输入是程序从同一份 JSON 变更单中按结构边界切出的一个连续原文单元。
+你必须只输出合法 JSON 对象，禁止输出 Markdown，也不能补充来源中没有的事实。
+
+抽取原则：
+1. 每个结构单元最多输出 1 张知识卡片；不要为每条 TaskRecord、每个 ProcedureStep 或每个字段分别建卡。
+2. 合并同一阶段内连续、相关的内容，并严格保持源数组顺序。数组可超过 6 项，不得为了缩短而遗漏明确步骤。
+3. role=TASKS_CANONICAL 是任务主视图；分组副本已由程序对账，不要臆造分组语义。
+4. role=ROLLBACK_STEPS 的明确步骤写入 rollback_steps；role=VALIDATION_STEPS 的明确步骤写入 validation_steps。
+5. PROCEDURE_GROUP_A 和 PROCEDURE_GROUP_C 的语义仍未知，不得仅凭它们在四组中的位置命名阶段；只能根据单元内明确字段和值描述事实。
+6. EXECUTION_RESULT 是实际执行结果，必须与计划 Procedure 分开理解，优先抽取为 case 或验证事实，不能把结果反写成计划。
+7. 缺失、null、空字符串、空数组和有值必须区别理解；没有明确内容时保持空字段，不能猜测。
+8. evidence_quote 必须逐字复制本单元中的一段连续原文，控制在 20 至 300 字符；没有可定位证据时不要生成卡片。
+9. 纯标识、状态码堆积或无可复用含义的元数据可以不生成卡片。宁可返回空数组，也不要制造碎片化低价值知识。
+
+JSON 格式：
+{
+  "knowledge_cards": [
+    {
+      "title": "简明标题",
+      "summary": "事实摘要",
+      "knowledge_type": "procedure|constraint|risk|case|compatibility|rollback",
+      "scenario": "适用场景",
+      "object_type": "网元/设备/软件/流程等",
+      "object_name": "具体对象",
+      "applicable_versions": ["版本或适用范围"],
+      "prerequisites": ["前置条件"],
+      "procedure_steps": ["按源顺序排列的操作步骤"],
+      "risks": ["风险和影响"],
+      "rollback_steps": ["按源顺序排列的回退步骤"],
+      "validation_steps": ["按源顺序排列的验证方法"],
+      "keywords": ["检索关键词"],
+      "evidence_quote": "来源中的连续原文"
+    }
+  ]
+}
+没有足够的可复用知识时返回 {"knowledge_cards": []}。"""
+
+
 COMPARISON_SYSTEM_PROMPT = """你是知识治理审核助手。比较一张新知识卡片与候选知识，只能输出合法 JSON 对象。
 decision 只能是 NEW、DUPLICATE、CONFLICT、NEW_VERSION：
 - NEW：没有实质相同或矛盾知识；
@@ -77,6 +115,17 @@ def extraction_user_prompt(source_name: str, locator: str, content: str) -> str:
     return (
         f"来源名称：{source_name}\n来源位置：{locator}\n"
         "请将下列内容抽取为上述 JSON 知识卡片：\n\n"
+        f"{content}"
+    )
+
+
+def change_order_extraction_user_prompt(
+    source_name: str, locator: str, structural_context: str, content: str
+) -> str:
+    return (
+        f"来源名称：{source_name}\n来源位置：{locator}\n{structural_context}\n"
+        "以下内容是来源 JSON 的连续原文，不是完整工单。请按结构角色抽取，"
+        "不得补全本单元之外的信息：\n\n"
         f"{content}"
     )
 

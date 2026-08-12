@@ -21,6 +21,7 @@ class DocumentError(RuntimeError):
 class DocumentLimits:
     max_file_bytes: int = 10 * 1024 * 1024
     max_text_chars: int = 120_000
+    max_json_text_chars: int = 500_000
     max_docx_entries: int = 1000
     max_docx_uncompressed_bytes: int = 50 * 1024 * 1024
     max_docx_xml_bytes: int = 10 * 1024 * 1024
@@ -34,6 +35,9 @@ class DocumentLimits:
         return cls(
             max_file_bytes=int(getattr(settings, "max_upload_bytes")),
             max_text_chars=int(getattr(settings, "max_text_chars")),
+            max_json_text_chars=int(
+                getattr(settings, "max_change_order_json_chars", 500_000)
+            ),
             max_docx_entries=int(getattr(settings, "max_docx_entries")),
             max_docx_uncompressed_bytes=int(
                 getattr(settings, "max_docx_uncompressed_bytes")
@@ -89,6 +93,7 @@ _OCR_RUN_LOCK = threading.Lock()
 def document_capabilities() -> dict[str, object]:
     return {
         "supported_extensions": sorted(SUPPORTED_DOCUMENT_EXTENSIONS),
+        "structured_change_order_json": "change_order_shape_v1",
         "pdf_text_extraction": importlib.util.find_spec("pypdf") is not None,
         "pdf_page_rendering": importlib.util.find_spec("fitz") is not None,
         "paddleocr": importlib.util.find_spec("paddleocr") is not None,
@@ -244,6 +249,28 @@ def _read_text_with_fallback(path: Path, limits: DocumentLimits) -> str:
         except UnicodeDecodeError:
             continue
     raise DocumentError(f"无法识别文本编码: {path.name}")
+
+
+def _validate_json_document(content: str, source_name: str) -> None:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DocumentError(f"JSON 含重复 Key，无法可靠抽取: {key}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise DocumentError(f"JSON 包含非标准数值常量: {value}")
+
+    try:
+        json.loads(
+            content,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise DocumentError(f"JSON 格式无效: {source_name}") from exc
 
 
 def _read_docx(path: Path, limits: DocumentLimits) -> str:
@@ -452,10 +479,7 @@ def read_document(
     if suffix in TEXT_EXTENSIONS:
         content = _read_text_with_fallback(resolved, limits)
         if suffix == ".json":
-            try:
-                content = json.dumps(json.loads(content), ensure_ascii=False, indent=2)
-            except json.JSONDecodeError:
-                pass
+            _validate_json_document(content, resolved.name)
     elif suffix == ".docx":
         content = _read_docx(resolved, limits)
     elif suffix == ".pdf":
@@ -470,9 +494,12 @@ def read_document(
     content = content.strip()
     if not content:
         raise DocumentError(f"文档没有可提取的文本: {resolved.name}")
-    if len(content) > limits.max_text_chars:
+    text_limit = (
+        limits.max_json_text_chars if suffix == ".json" else limits.max_text_chars
+    )
+    if len(content) > text_limit:
         raise DocumentError(
-            f"文档提取文本超过 {limits.max_text_chars} 字符限制: {resolved.name}"
+            f"文档提取文本超过 {text_limit} 字符限制: {resolved.name}"
         )
     return SourceDocument(
         name=resolved.name,

@@ -21,11 +21,18 @@ from .documents import (
     chunk_text,
     ground_evidence_quote,
 )
+from .change_order_adapter import (
+    ChangeOrderExtractionPlan,
+    ChangeOrderExtractionUnit,
+    build_change_order_extraction_plan,
+)
 from .prompts import (
     ANSWER_SYSTEM_PROMPT,
+    CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT,
     COMPARISON_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
     answer_user_prompt,
+    change_order_extraction_user_prompt,
     comparison_user_prompt,
     extraction_user_prompt,
 )
@@ -279,19 +286,55 @@ class KnowledgeService:
 
     def ingest_document(self, document: SourceDocument) -> dict[str, Any]:
         self.settings.require_api()
+        json_candidate = document.source_type.lower() == "json" or document.content.lstrip().startswith(
+            "{"
+        )
         if len(document.content) > self.settings.max_text_chars:
-            raise KnowledgeRequestError(
-                f"文档文本超过 {self.settings.max_text_chars} 字符限制",
-                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                code="document_text_too_large",
+            if (
+                not json_candidate
+                or len(document.content) > self.settings.max_change_order_json_chars
+            ):
+                raise KnowledgeRequestError(
+                    f"文档文本超过 {self.settings.max_text_chars} 字符限制；"
+                    "只有结构指纹匹配的变更单 JSON 可使用更高边界",
+                    status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    code="document_text_too_large",
+                )
+            preflight_plan, preflight_report = build_change_order_extraction_plan(
+                document.content,
+                chunk_size=self.settings.change_order_chunk_size,
             )
+            if preflight_plan is None:
+                raise KnowledgeRequestError(
+                    "大 JSON 未通过变更单结构指纹识别，不能进入模型抽取："
+                    + str(preflight_report.get("reason") or "结构未知"),
+                    status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    code="large_json_schema_not_recognized",
+                )
         checksum = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
         existing = self.store.find_document_by_checksum(checksum)
         if existing is not None:
+            extraction_report = self.store.get_extraction_report(int(existing["id"]))
             return {
                 "document_id": existing["id"],
                 "duplicate_document": True,
                 "card_ids": self.store.card_ids_for_document(int(existing["id"])),
+                "case_id": (
+                    extraction_report.get("case_id")
+                    if extraction_report is not None
+                    else None
+                ),
+                "cards_by_role": (
+                    extraction_report.get("cards_by_role", {})
+                    if extraction_report is not None
+                    else {}
+                ),
+                "extraction_strategy": (
+                    extraction_report.get("strategy")
+                    if extraction_report is not None
+                    else "unknown"
+                ),
+                "extraction_report": extraction_report,
                 "message": "相同内容已经导入，本次未重复调用模型。",
             }
 
@@ -311,10 +354,27 @@ class KnowledgeService:
             )
             if claim["state"] == "COMPLETED":
                 document_id = int(claim["document_id"])
+                extraction_report = self.store.get_extraction_report(document_id)
                 return {
                     "document_id": document_id,
                     "duplicate_document": True,
                     "card_ids": self.store.card_ids_for_document(document_id),
+                    "case_id": (
+                        extraction_report.get("case_id")
+                        if extraction_report is not None
+                        else None
+                    ),
+                    "cards_by_role": (
+                        extraction_report.get("cards_by_role", {})
+                        if extraction_report is not None
+                        else {}
+                    ),
+                    "extraction_strategy": (
+                        extraction_report.get("strategy")
+                        if extraction_report is not None
+                        else "unknown"
+                    ),
+                    "extraction_report": extraction_report,
                     "message": "相同内容已经导入，本次未重复调用模型。",
                 }
             if claim["state"] == "PROCESSING":
@@ -343,14 +403,73 @@ class KnowledgeService:
         owner_token: str,
     ) -> dict[str, Any]:
 
-        chunks = chunk_text(
-            document.content,
-            self.settings.chunk_size,
-            self.settings.chunk_overlap,
+        change_order_plan: ChangeOrderExtractionPlan | None = None
+        adapter_diagnostics: dict[str, Any] | None = None
+        if document.source_type.lower() == "json" or document.content.lstrip().startswith(
+            "{"
+        ):
+            change_order_plan, adapter_diagnostics = build_change_order_extraction_plan(
+                document.content,
+                chunk_size=self.settings.change_order_chunk_size,
+            )
+            if (
+                document.source_type.lower() == "json"
+                and adapter_diagnostics.get("valid_json") is False
+            ):
+                raise KnowledgeRequestError(
+                    "JSON 格式无效或含重复 Key，不能可靠抽取："
+                    + str(adapter_diagnostics.get("reason") or "解析失败"),
+                    status=HTTPStatus.BAD_REQUEST,
+                    code="invalid_or_ambiguous_json",
+                )
+            if (
+                change_order_plan is None
+                and adapter_diagnostics.get("possible_change_order") is True
+            ):
+                raise KnowledgeRequestError(
+                    "JSON 疑似变更单，但关键结构缺失或候选不唯一，已在调用模型前阻断："
+                    + str(adapter_diagnostics.get("reason") or "结构不确定"),
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    code="change_order_schema_ambiguous",
+                )
+        if change_order_plan is not None:
+            chunks = [unit.chunk for unit in change_order_plan.units]
+            extraction_units = {
+                unit.chunk.index: unit for unit in change_order_plan.units
+            }
+            extraction_strategy = "change_order_shape_v1"
+        else:
+            chunks = chunk_text(
+                document.content,
+                self.settings.chunk_size,
+                self.settings.chunk_overlap,
+            )
+            extraction_units = {}
+            extraction_strategy = "generic_text_v1"
+
+        def apply_structural_blockers(
+            score: float, issues: list[str]
+        ) -> tuple[float, list[str]]:
+            if change_order_plan is None or change_order_plan.report.get(
+                "safe_to_publish", False
+            ):
+                return score, issues
+            updated = list(issues)
+            updated.extend(
+                f"阻断：{blocker}"
+                for blocker in change_order_plan.report.get("blockers", [])
+                if f"阻断：{blocker}" not in updated
+            )
+            return min(score, 64.0), updated
+
+        chunk_limit = (
+            self.settings.max_change_order_chunks
+            if change_order_plan is not None
+            else self.settings.max_document_chunks
         )
-        if len(chunks) > self.settings.max_document_chunks:
+        if len(chunks) > chunk_limit:
             raise KnowledgeRequestError(
-                f"文档分片数 {len(chunks)} 超过 {self.settings.max_document_chunks} 个限制",
+                f"文档分片数 {len(chunks)} 超过 {chunk_limit} 个限制",
                 status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 code="document_chunk_limit_exceeded",
             )
@@ -363,11 +482,14 @@ class KnowledgeService:
             source_name=document.name,
             checksum=checksum,
             chunks=len(chunks),
+            extraction_strategy=extraction_strategy,
+            change_order_adapter=adapter_diagnostics,
         )
 
         for chunk in chunks:
+            unit = extraction_units.get(chunk.index)
             for extracted_chunk, payload, usage, split_depth in self._extract_chunk(
-                document.name, chunk, budget=budget
+                document.name, chunk, budget=budget, structural_unit=unit
             ):
                 self.trace.log(
                     "knowledge_extraction_response",
@@ -385,7 +507,17 @@ class KnowledgeService:
                 if not isinstance(raw_cards, list):
                     raise KnowledgeServiceError("模型返回的 knowledge_cards 不是数组")
 
-                for raw_card in raw_cards[: self.MAX_CARDS_PER_EXTRACTION]:
+                card_limit = 1 if unit is not None else self.MAX_CARDS_PER_EXTRACTION
+                if unit is not None and len(raw_cards) > card_limit:
+                    self.trace.log(
+                        "change_order_unit_card_limit_applied",
+                        source_name=document.name,
+                        chunk_index=chunk.index,
+                        unit_role=unit.role,
+                        returned_cards=len(raw_cards),
+                        kept_cards=card_limit,
+                    )
+                for raw_card in raw_cards[:card_limit]:
                     draft = KnowledgeCardDraft.from_dict(raw_card)
                     evidence_span = ground_evidence_quote(
                         extracted_chunk.content, draft.evidence_quote
@@ -414,7 +546,9 @@ class KnowledgeService:
                         existing_index = batch_seen[batch_key]
                         existing_item = extracted[existing_index]
                         batch_duplicates_skipped += 1
-                        score, issues = draft.quality(extracted_chunk.content)
+                        score, issues = apply_structural_blockers(
+                            *draft.quality(extracted_chunk.content)
+                        )
                         replace_existing = (
                             evidence_span is not None,
                             score,
@@ -453,7 +587,9 @@ class KnowledgeService:
                             status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                             code="document_card_limit_exceeded",
                         )
-                    score, issues = draft.quality(extracted_chunk.content)
+                    score, issues = apply_structural_blockers(
+                        *draft.quality(extracted_chunk.content)
+                    )
                     comparison = self._compare(draft, budget=budget)
                     extracted.append(
                         ExtractedCard(
@@ -475,12 +611,44 @@ class KnowledgeService:
         )
         if not created:
             self.store.complete_ingestion(checksum, owner_token, document_id)
+            extraction_report = self.store.get_extraction_report(document_id)
             return {
                 "document_id": document_id,
                 "duplicate_document": True,
                 "card_ids": self.store.card_ids_for_document(document_id),
+                "case_id": (
+                    extraction_report.get("case_id")
+                    if extraction_report is not None
+                    else None
+                ),
+                "cards_by_role": (
+                    extraction_report.get("cards_by_role", {})
+                    if extraction_report is not None
+                    else {}
+                ),
+                "extraction_strategy": (
+                    extraction_report.get("strategy")
+                    if extraction_report is not None
+                    else "unknown"
+                ),
+                "extraction_report": extraction_report,
                 "message": "相同内容已经导入。",
             }
+
+        extraction_report: dict[str, Any] = {
+            "strategy": extraction_strategy,
+            "change_order": adapter_diagnostics,
+            "chunks": len(chunks),
+        }
+        case_id = (
+            f"change-order:{checksum}"
+            if change_order_plan is not None
+            else f"document:{checksum}"
+        )
+        extraction_report["case_id"] = case_id
+        self.store.save_extraction_report(
+            document_id, extraction_strategy, extraction_report
+        )
 
         chunk_ids = {
             chunk.index: self.store.add_chunk(
@@ -493,6 +661,7 @@ class KnowledgeService:
             for chunk in chunks
         }
         card_ids: list[int] = []
+        cards_by_role: dict[str, int] = {}
         for item in extracted:
             status = (
                 CardStatus.PENDING_REVIEW
@@ -522,13 +691,37 @@ class KnowledgeService:
                 quality_issues=item.quality_issues,
                 comparison=item.comparison,
             )
+            lineage_unit = extraction_units.get(item.chunk.index)
+            if lineage_unit is not None:
+                self.store.save_card_lineage(
+                    card_id,
+                    case_id=case_id,
+                    extraction_strategy=extraction_strategy,
+                    unit_role=lineage_unit.role,
+                    unit_pointer=lineage_unit.pointer,
+                    source_pointers=list(lineage_unit.source_pointers),
+                    source_order=lineage_unit.chunk.index,
+                )
+                cards_by_role[lineage_unit.role] = (
+                    cards_by_role.get(lineage_unit.role, 0) + 1
+                )
             card_ids.append(card_id)
+
+        extraction_report["generated_cards"] = len(card_ids)
+        extraction_report["cards_by_role"] = cards_by_role
+        self.store.save_extraction_report(
+            document_id, extraction_strategy, extraction_report
+        )
 
         result = {
             "document_id": document_id,
+            "case_id": case_id,
             "duplicate_document": False,
             "chunks": len(chunks),
+            "extraction_strategy": extraction_strategy,
+            "extraction_report": extraction_report,
             "extracted_cards": len(card_ids),
+            "cards_by_role": cards_by_role,
             "batch_duplicates_skipped": batch_duplicates_skipped,
             "card_ids": card_ids,
             "pending_review": sum(
@@ -620,14 +813,28 @@ class KnowledgeService:
         *,
         split_depth: int = 0,
         budget: ModelCallBudget | None = None,
+        structural_unit: ChangeOrderExtractionUnit | None = None,
     ) -> list[tuple[DocumentChunk, Any, dict[str, Any] | None, int]]:
         budget = budget or ModelCallBudget(self.settings.max_model_calls_per_ingest)
         locator = f"字符 {chunk.char_start}-{chunk.char_end}"
         try:
             budget.consume("extract")
+            if structural_unit is None:
+                system_prompt = EXTRACTION_SYSTEM_PROMPT
+                user_prompt = extraction_user_prompt(
+                    source_name, locator, chunk.content
+                )
+            else:
+                system_prompt = CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT
+                user_prompt = change_order_extraction_user_prompt(
+                    source_name,
+                    locator,
+                    structural_unit.prompt_context(),
+                    chunk.content,
+                )
             payload, usage = self.client.chat_json(
-                EXTRACTION_SYSTEM_PROMPT,
-                extraction_user_prompt(source_name, locator, chunk.content),
+                system_prompt,
+                user_prompt,
                 retries=0 if len(chunk.content) >= 2000 else 1,
             )
             return [(chunk, payload, usage, split_depth)]
@@ -665,6 +872,7 @@ class KnowledgeService:
                         part,
                         split_depth=split_depth + 1,
                         budget=budget,
+                        structural_unit=structural_unit,
                     )
                 )
             return results
@@ -1153,6 +1361,25 @@ class KnowledgeService:
                     f"chars={chunk['char_start']}-{chunk['char_end']};unverified"
                 )
             score, issues = draft.quality(chunk["content"])
+            extraction_report = self.store.get_extraction_report(
+                int(card["source_document_id"])
+            )
+            change_report = (
+                extraction_report.get("change_order")
+                if extraction_report is not None
+                else None
+            )
+            if (
+                isinstance(change_report, dict)
+                and change_report.get("matched") is True
+                and not change_report.get("safe_to_publish", False)
+            ):
+                issues.extend(
+                    f"阻断：{blocker}"
+                    for blocker in change_report.get("blockers", [])
+                    if f"阻断：{blocker}" not in issues
+                )
+                score = min(score, 64.0)
             old_status = CardStatus(card["status"])
             if old_status in {CardStatus.DRAFT, CardStatus.PENDING_REVIEW}:
                 new_status = (
@@ -1196,6 +1423,10 @@ class KnowledgeService:
             return None
         card["relations"] = self.store.list_relations(card_id)
         card["audit_log"] = self.store.list_audit(card_id)
+        card["lineage"] = self.store.get_card_lineage(card_id)
+        card["extraction_report"] = self.store.get_extraction_report(
+            int(card["source_document_id"])
+        )
         card["memory_sync"] = self.store.get_memory_sync_state(
             card_id, MindMemOSBridge.BACKEND
         )
