@@ -42,13 +42,14 @@ CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT = """你是运维变更知识工程师。�
 抽取原则：
 1. 每个结构单元最多输出 1 张知识卡片；不要为每条 TaskRecord、每个 ProcedureStep 或每个字段分别建卡。
 2. 合并同一阶段内连续、相关的内容，并严格保持源数组顺序。数组可超过 6 项，不得为了缩短而遗漏明确步骤。
-3. role=TASKS_CANONICAL 是任务主视图；分组副本已由程序对账，不要臆造分组语义。
-4. role=ROLLBACK_STEPS 的明确步骤写入 rollback_steps；role=VALIDATION_STEPS 的明确步骤写入 validation_steps。
-5. PROCEDURE_GROUP_A 和 PROCEDURE_GROUP_C 的语义仍未知，不得仅凭它们在四组中的位置命名阶段；只能根据单元内明确字段和值描述事实。
-6. EXECUTION_RESULT 是实际执行结果，必须与计划 Procedure 分开理解，优先抽取为 case 或验证事实，不能把结果反写成计划。
+3. role=TASKS_CANONICAL 是 /data/action_list 任务主视图；分组副本只保存 grouping/provenance，不重复抽取。
+4. PRECHECK_STEPS 与 IMPLEMENTATION_STEPS 的明确步骤按顺序写入 procedure_steps；VALIDATION_STEPS 写入 validation_steps；ROLLBACK_STEPS 写入 rollback_steps。
+5. UNMAPPED_PROCEDURE_STEPS 表示只通过结构识别、真实 Key 未确认的步骤组，不得推断它属于前检、实施、验证或回退。
+6. EXECUTION_RESULT 属于 post_execution，是实际执行结果而不是方案生成输入；优先抽取为 case 或效果事实，不能把结果反写成计划。
 7. 缺失、null、空字符串、空数组和有值必须区别理解；没有明确内容时保持空字段，不能猜测。
 8. evidence_quote 必须逐字复制本单元中的一段连续原文，控制在 20 至 300 字符；没有可定位证据时不要生成卡片。
-9. 纯标识、状态码堆积或无可复用含义的元数据可以不生成卡片。宁可返回空数组，也不要制造碎片化低价值知识。
+9. IDENTITY、SERVICE_SCOPE、CHANGE_CONTEXT、RISK_IMPACT、EXECUTION_CONTEXT、GOVERNANCE_CONTEXT 可以为整单提供上下文，但不要逐字段建卡。
+10. API_ENVELOPE（code/provider_code/msg）不属于业务知识，不会进入本提示。纯标识、状态码堆积或无可复用含义的元数据可以不生成卡片。
 
 JSON 格式：
 {

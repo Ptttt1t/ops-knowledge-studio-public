@@ -437,7 +437,9 @@ class KnowledgeService:
             extraction_units = {
                 unit.chunk.index: unit for unit in change_order_plan.units
             }
-            extraction_strategy = "change_order_shape_v1"
+            extraction_strategy = str(
+                change_order_plan.report.get("adapter") or "change_order_shape_v2"
+            )
         else:
             chunks = chunk_text(
                 document.content,
@@ -451,7 +453,7 @@ class KnowledgeService:
             score: float, issues: list[str]
         ) -> tuple[float, list[str]]:
             if change_order_plan is None or change_order_plan.report.get(
-                "safe_to_publish", False
+                "safe_for_internal_index", False
             ):
                 return score, issues
             updated = list(issues)
@@ -701,6 +703,7 @@ class KnowledgeService:
                     unit_pointer=lineage_unit.pointer,
                     source_pointers=list(lineage_unit.source_pointers),
                     source_order=lineage_unit.chunk.index,
+                    unit_metadata=lineage_unit.lineage_metadata(),
                 )
                 cards_by_role[lineage_unit.role] = (
                     cards_by_role.get(lineage_unit.role, 0) + 1
@@ -947,7 +950,11 @@ class KnowledgeService:
         return [hit.to_dict() for hit in hits]
 
     def trusted_search_hits(
-        self, query: str, *, top_k: int | None = None
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        for_generation: bool = False,
     ) -> tuple[list[SearchHit], dict[str, Any]]:
         """Combine local lexical recall with governed MindMemOS recall.
 
@@ -970,6 +977,16 @@ class KnowledgeService:
         lexical: list[SearchHit] = []
         lexical_rejected: list[dict[str, Any]] = []
         for hit in lexical_candidates:
+            if for_generation:
+                lineage = self.store.get_card_lineage(int(hit.card["id"])) or {}
+                if lineage.get("include_in_generation") is False:
+                    lexical_rejected.append(
+                        {
+                            "card_id": int(hit.card["id"]),
+                            "reason": "POST_EXECUTION_EXCLUDED_FROM_GENERATION",
+                        }
+                    )
+                    continue
             relevance = self._semantic_relevance_gate(
                 text,
                 hit.card,
@@ -1018,6 +1035,16 @@ class KnowledgeService:
             card = self.store.get_card(card_id)
             if card is None or card["status"] != CardStatus.APPROVED.value:
                 continue
+            if for_generation:
+                lineage = self.store.get_card_lineage(card_id) or {}
+                if lineage.get("include_in_generation") is False:
+                    rejected_semantic.append(
+                        {
+                            "card_id": card_id,
+                            "reason": "POST_EXECUTION_EXCLUDED_FROM_GENERATION",
+                        }
+                    )
+                    continue
             relevance = self._semantic_relevance_gate(
                 text,
                 card,
@@ -1048,6 +1075,7 @@ class KnowledgeService:
                 "external_rerank_threshold": self.settings.mindmemos_min_relevance_score,
                 "minimum_local_anchors": self.settings.mindmemos_min_local_anchors,
             },
+            "for_generation": for_generation,
             "final_card_ids": [int(hit.card["id"]) for hit in hits],
         }
         self.trace.log("governed_memory_retrieval", question=text, **diagnostics)
@@ -1277,7 +1305,9 @@ class KnowledgeService:
     def query(self, question: str) -> dict[str, Any]:
         self.settings.require_api()
         hits, diagnostics = self.trusted_search_hits(
-            question, top_k=self.settings.retrieval_top_k
+            question,
+            top_k=self.settings.retrieval_top_k,
+            for_generation=True,
         )
         result = self._answer_from_hits(question, hits)
         result["memory_retrieval"] = diagnostics
@@ -1320,6 +1350,17 @@ class KnowledgeService:
                 )
             card["memory_sync"] = memory_sync
         return card
+
+    def delete_card(self, card_id: int, *, actor: str) -> dict[str, Any]:
+        result = self.store.delete_card(card_id, actor=actor)
+        cleanup: dict[str, Any] = {"processed": 0, "removed": 0, "failed": 0}
+        if result["queued_memory_retirements"] and self.memory.configured:
+            cleanup = self.memory.cleanup_retired_memories(
+                limit=max(1, int(result["queued_memory_retirements"]))
+            )
+        result["memory_retirement_cleanup"] = cleanup
+        self.trace.log("knowledge_card_deleted", actor=actor, **result)
+        return result
 
     def sync_long_term_memory(self) -> dict[str, Any]:
         result = self.memory.sync_approved()
@@ -1372,7 +1413,10 @@ class KnowledgeService:
             if (
                 isinstance(change_report, dict)
                 and change_report.get("matched") is True
-                and not change_report.get("safe_to_publish", False)
+                and not change_report.get(
+                    "safe_for_internal_index",
+                    change_report.get("safe_to_publish", False),
+                )
             ):
                 issues.extend(
                     f"阻断：{blocker}"

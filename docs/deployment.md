@@ -29,7 +29,6 @@ cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
 python -m pip install -c constraints/base.txt -e .
 copy .env.example .env
-python run.py generate-access-token
 notepad .env
 ```
 
@@ -41,10 +40,10 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 PLATFORM_HOST=127.0.0.1
 PLATFORM_PORT=8765
-PLATFORM_AUTH_MODE=token
-PLATFORM_ACCESS_TOKEN_HASH=粘贴令牌命令输出的sha256值
-PLATFORM_ALLOWED_HOSTS=127.0.0.1,localhost,::1
-PLATFORM_ALLOWED_ORIGINS=http://127.0.0.1:8765,http://localhost:8765
+DEMO_MODE=true
+STARTUP_TOKEN_REQUIRED=false
+ACCESS_TOKEN_REQUIRED=false
+DEEPSEEK_ALLOW_INSECURE_HTTP=true
 ```
 
 不要将真实 `.env` 提交到 Git；仓库已默认忽略该文件。
@@ -57,7 +56,7 @@ python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-浏览器访问 <http://127.0.0.1:8765> 并输入令牌明文；无鉴权存活检查访问 <http://127.0.0.1:8765/api/health/live>。详细 `/api/health` 需要 Bearer 令牌。
+浏览器直接访问 <http://127.0.0.1:8765>。Demo 模式不要求启动令牌或 Bearer Token，详细 `/api/health` 也可以直接访问。
 
 ## 3. Linux 或 macOS 首次部署
 
@@ -69,13 +68,30 @@ cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
 python -m pip install -c constraints/base.txt -e .
 cp .env.example .env
-python run.py generate-access-token
 python run.py init
 python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-## 4. 启用 PDF 图片与 OCR
+## 4. 切换为生产安全模式
+
+Demo 默认只适合本机或隔离内网体验。生产部署需显式设置：
+
+```dotenv
+DEMO_MODE=false
+STARTUP_TOKEN_REQUIRED=true
+ACCESS_TOKEN_REQUIRED=true
+PLATFORM_AUTH_MODE=token
+PLATFORM_REQUEST_BOUNDARY_CHECKS_ENABLED=true
+PLATFORM_CSP_ALLOW_INLINE=false
+DEEPSEEK_ALLOW_INSECURE_HTTP=false
+PLATFORM_ALLOWED_HOSTS=127.0.0.1,localhost,::1
+PLATFORM_ALLOWED_ORIGINS=https://你的正式域名
+```
+
+然后执行 `python run.py generate-access-token`，只把输出的哈希写入 `.env`，通过受保护渠道向操作者提供一次性显示的明文令牌。生产内网模型端点应使用 HTTPS。
+
+## 5. 启用 PDF 图片与 OCR
 
 带文本层的 PDF 使用基础依赖 `pypdf`，无需安装 OCR。扫描 PDF 和图片识别需要：
 
@@ -88,7 +104,7 @@ python scripts/ocr_smoke_test.py
 
 OCR 首次运行可能下载模型到 `data/paddlex_cache`。该目录不会进入 Git，后续运行会复用本地缓存。
 
-## 5. 日常启动与后台启动
+## 6. 日常启动与后台启动
 
 前台启动：
 
@@ -108,7 +124,7 @@ python scripts/start_server.py
 
 停止服务时应先找到 `artifacts/server.pid` 对应的进程，再使用操作系统的正常进程停止方式，避免在任务写入 SQLite 时强制关机。
 
-## 6. 数据目录与备份
+## 7. 数据目录与备份
 
 需要持久化的数据包括：
 
@@ -121,7 +137,7 @@ python scripts/start_server.py
 
 备份前先停止服务，然后复制 `.env`、两个 SQLite 数据库和上传目录到受保护位置。不要把这些文件作为 GitHub 备份，它们可能包含 API Key、业务文档或内部知识。
 
-## 7. 升级现有部署
+## 8. 升级现有部署
 
 先停止服务并完成数据备份，然后执行：
 
@@ -135,7 +151,7 @@ python run.py serve
 
 `python run.py init` 可以重复执行：它只会补齐缺失的数据表和迁移记录，不会清空现有知识。
 
-## 8. 运行参数
+## 9. 运行参数
 
 Harness Runtime 默认配置：
 
@@ -148,7 +164,7 @@ HARNESS_SYNC_WAIT_SECONDS=900
 
 资源较少的机器可以把 `HARNESS_WORKERS` 设置为 `1`。多个 Worker 会并发处理不同 Run，但每个 Run 内部仍按步骤顺序执行。
 
-## 9. 安全边界
+## 10. 安全边界
 
 当前 Web 服务使用共享令牌，而不是个人账号或租户体系，因此：
 
@@ -178,7 +194,7 @@ sudo ss -lntp | grep 8765
 
 第二条命令必须显示应用只监听 `127.0.0.1:8765`；云安全组和主机防火墙只开放 HTTPS 入口，不开放 8765。
 
-## 10. 故障检查
+## 11. 故障检查
 
 服务无法启动时按顺序检查：
 

@@ -81,6 +81,7 @@ class TrustedKnowledgeAgent:
         hits, _diagnostics = self.service.trusted_search_hits(
             query,
             top_k=min(max(top_k, 1), self.service.settings.retrieval_top_k),
+            for_generation=True,
         )
         return hits
 

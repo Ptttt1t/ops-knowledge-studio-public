@@ -104,6 +104,8 @@ class WebSecurity:
         return self.settings.shared_actor
 
     def validate_host(self, host_header: str) -> None:
+        if not self.settings.request_boundary_checks_enabled:
+            return
         hostname = _normalized_hostname(host_header)
         if not hostname or hostname not in self._allowed_hosts:
             raise WebSecurityError(
@@ -113,6 +115,8 @@ class WebSecurity:
             )
 
     def validate_origin(self, origin: str) -> None:
+        if not self.settings.request_boundary_checks_enabled:
+            return
         if origin and origin.rstrip("/") not in self._allowed_origins:
             raise WebSecurityError(
                 "请求 Origin 不在允许列表中",
@@ -121,7 +125,7 @@ class WebSecurity:
             )
 
     def authenticate(self, authorization: str) -> None:
-        if self.settings.auth_mode == "disabled":
+        if not self.settings.effective_access_token_required:
             return
         scheme, separator, token = authorization.partition(" ")
         if separator != " " or scheme.lower() != "bearer" or not token.strip():

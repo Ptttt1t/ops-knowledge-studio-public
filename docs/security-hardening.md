@@ -1,6 +1,6 @@
 # Web 与资源安全基线
 
-本项目默认按“受控内网、共享管理员令牌”部署。共享令牌只能证明请求持有平台密钥，不能区分真实个人；所有 Web 审计主体固定为 `shared-operator`，并允许演示自审批。需要个人身份或职责分离时，应升级到 OIDC/RBAC，而不是在请求体中填写姓名。
+本项目默认以 `DEMO_MODE=true` 提供内部演示：启动令牌、Web/API Access Token、Host/Origin 边界和严格 CSP 默认关闭，启动日志会明确显示三条 `[DEMO MODE]` 提示。安全实现没有被删除；设置 `DEMO_MODE=false` 并打开对应开关即可恢复以下生产基线。
 
 ## 信任边界
 
@@ -10,6 +10,20 @@
 - `Host` 与浏览器 `Origin` 必须分别匹配配置白名单。
 - JSON 写接口拒绝 `text/plain`；上传只接受 `multipart/form-data`。
 - 共享令牌只保存在浏览器 `sessionStorage`，关闭标签页或点击“退出”即清除。
+
+推荐的生产开关：
+
+```dotenv
+DEMO_MODE=false
+STARTUP_TOKEN_REQUIRED=true
+ACCESS_TOKEN_REQUIRED=true
+PLATFORM_AUTH_MODE=token
+PLATFORM_REQUEST_BOUNDARY_CHECKS_ENABLED=true
+PLATFORM_CSP_ALLOW_INLINE=false
+DEEPSEEK_ALLOW_INSECURE_HTTP=false
+```
+
+共享令牌只能证明请求持有平台密钥，不能区分真实个人；生产共享令牌模式下 Web 审计主体固定为 `shared-operator`。需要个人身份、职责分离或双人复核时，应升级到 OIDC/RBAC。
 
 生成令牌：
 
@@ -32,7 +46,7 @@ python run.py generate-access-token
 ## 健康检查
 
 - `/api/health/live`：无鉴权，只返回最小存活状态，供 systemd/代理探针使用。
-- `/api/health`：要求 Bearer 令牌，返回配置能力和运行时详情。
+- `/api/health`：Demo 模式可直接访问；生产模式要求 Bearer 令牌，返回配置能力和运行时详情。
 
 ## 安全响应
 

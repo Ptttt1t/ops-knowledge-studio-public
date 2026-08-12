@@ -43,24 +43,44 @@ def make_change_order(
         )
 
     return {
-        **{f"meta{index:02d}": f"metadata-{index}" for index in range(85)},
-        "task_bundle": {
-            "flat_view": tasks,
-            "grouped_view": {
+        "code": 0,
+        "provider_code": "OK",
+        "msg": "success",
+        "data": {
+            "ticket_id": "CHG-REAL-SHAPE-001",
+            "title": "脱敏结构回归变更单",
+            "original_system": "internal-change-platform",
+            "create_time": "2026-08-12T12:00:00+08:00",
+            "cloud_service": "VPC",
+            "affected_service": "order-service",
+            "change_scene": "route cutover",
+            "risk_level": "high",
+            "region": "internal-region-1",
+            "approval_status": "approved",
+            **{f"meta{index:02d}": f"metadata-{index}" for index in range(20)},
+            "action_list": tasks,
+            "change_tool_relate_action": {
                 "unknown_group_1": grouped_tasks[:1],
                 "unknown_group_2": grouped_tasks[1:3],
                 "unknown_group_3": grouped_tasks[3:],
             },
-        },
-        "procedure_container": {
-            "unknown_a": procedure_groups[0],
-            "rollback": procedure_groups[1],
-            "unknown_c": procedure_groups[2],
-            "validation": procedure_groups[3],
-        },
-        "execution_result": {
-            **{f"result{index:02d}": f"value-{index}" for index in range(14)},
-            "result_items": ["success"],
+            "sop_change_step": {
+                "check_before_change": procedure_groups[0],
+                "change_implement": procedure_groups[1],
+                "change_verified": procedure_groups[2],
+                "change_rollback": procedure_groups[3],
+            },
+            "change_plan": [
+                {
+                    "result": {
+                        **{
+                            f"result{index:02d}": f"value-{index}"
+                            for index in range(14)
+                        },
+                        "result_items": ["success"],
+                    }
+                }
+            ],
         },
     }
 
@@ -115,6 +135,45 @@ class OverproducingStructuralClient(StructuralFakeClient):
         return payload, usage
 
 
+class ExecutionAwareStructuralClient(StructuralFakeClient):
+    def chat_json(self, system_prompt, user_prompt, **kwargs):
+        if (
+            "运维变更知识工程师" in system_prompt
+            and "role=EXECUTION_RESULT" in user_prompt
+        ):
+            self.json_calls.append((system_prompt, user_prompt, kwargs))
+            source = user_prompt.split("\n\n", 1)[-1]
+            quote = next(
+                line.strip()
+                for line in source.splitlines()
+                if line.strip() and len(line.strip()) >= 20
+            )
+            return (
+                {
+                    "knowledge_cards": [
+                        {
+                            "title": "execution result success evidence",
+                            "summary": "execution result success is post execution evidence",
+                            "knowledge_type": "case",
+                            "scenario": "execution result analysis",
+                            "object_type": "change_order",
+                            "object_name": "execution-result-success",
+                            "applicable_versions": [],
+                            "prerequisites": [],
+                            "procedure_steps": [],
+                            "risks": [],
+                            "rollback_steps": [],
+                            "validation_steps": ["execution result success"],
+                            "keywords": ["execution", "result", "success"],
+                            "evidence_quote": quote,
+                        }
+                    ]
+                },
+                {"total_tokens": 20},
+            )
+        return super().chat_json(system_prompt, user_prompt, **kwargs)
+
+
 class ChangeOrderExtractionTests(unittest.TestCase):
     def test_adapter_reconciles_task_views_and_preserves_procedure_roles(self):
         text = source_json(make_change_order())
@@ -122,11 +181,18 @@ class ChangeOrderExtractionTests(unittest.TestCase):
 
         self.assertIsNotNone(plan)
         self.assertTrue(report["matched"])
-        self.assertTrue(report["safe_to_publish"])
-        self.assertEqual(report["coverage"]["coverage_ratio"], 1.0)
-        self.assertEqual(report["coverage"]["node_coverage_ratio"], 1.0)
+        self.assertTrue(report["safe_for_internal_index"])
+        self.assertFalse(report["safe_for_external_publish"])
+        self.assertEqual(report["publish_scope"], "INTERNAL_ONLY")
+        self.assertEqual(report["semantic_mapping_status"], "CONFIRMED")
+        self.assertEqual(report["coverage"]["structural_coverage_ratio"], 1.0)
+        self.assertEqual(
+            report["coverage"]["structural_node_coverage_ratio"], 1.0
+        )
         self.assertEqual(report["coverage"]["uncovered"], 0)
         self.assertEqual(report["coverage"]["nodes_uncovered"], 0)
+        self.assertEqual(report["coverage"]["excluded_api_envelope"], 3)
+        self.assertEqual(report["coverage"]["nodes_excluded_api_envelope"], 3)
         self.assertGreater(report["coverage"]["observed_presence"]["NULL"], 0)
         self.assertIsNone(report["coverage"]["observed_presence"]["MISSING"])
         self.assertEqual(report["task_record"]["flat_count"], 4)
@@ -136,10 +202,10 @@ class ChangeOrderExtractionTests(unittest.TestCase):
         self.assertEqual(
             [group["role"] for group in report["procedure"]["groups"]],
             [
-                "PROCEDURE_GROUP_A",
-                "ROLLBACK_STEPS",
-                "PROCEDURE_GROUP_C",
+                "PRECHECK_STEPS",
+                "IMPLEMENTATION_STEPS",
                 "VALIDATION_STEPS",
+                "ROLLBACK_STEPS",
             ],
         )
         self.assertEqual(
@@ -154,9 +220,28 @@ class ChangeOrderExtractionTests(unittest.TestCase):
         self.assertTrue(rollback)
         self.assertTrue(validation)
         self.assertLess(
-            min(unit.chunk.char_start for unit in rollback),
             min(unit.chunk.char_start for unit in validation),
+            min(unit.chunk.char_start for unit in rollback),
         )
+        precheck = next(unit for unit in units if unit.role == "PRECHECK_STEPS")
+        self.assertEqual(precheck.procedure_group, "PRECHECK")
+        self.assertEqual(precheck.step_start_index, 0)
+        self.assertEqual(precheck.step_end_index, 1)
+        self.assertEqual(precheck.total_steps_in_group, 2)
+        execution = next(unit for unit in units if unit.role == "EXECUTION_RESULT")
+        self.assertEqual(execution.lifecycle_stage, "post_execution")
+        self.assertFalse(execution.include_in_generation)
+        self.assertEqual(report["api_envelope"]["role"], "API_ENVELOPE")
+        self.assertFalse(report["api_envelope"]["include_in_rag"])
+        context_roles = {
+            item["path"]: item["role"] for item in report["context_classification"]
+        }
+        self.assertEqual(context_roles["/data/ticket_id"], "IDENTITY")
+        self.assertEqual(context_roles["/data/cloud_service"], "SERVICE_SCOPE")
+        self.assertEqual(context_roles["/data/change_scene"], "CHANGE_CONTEXT")
+        self.assertEqual(context_roles["/data/risk_level"], "RISK_IMPACT")
+        self.assertEqual(context_roles["/data/region"], "EXECUTION_CONTEXT")
+        self.assertEqual(context_roles["/data/approval_status"], "GOVERNANCE_CONTEXT")
 
     def test_adapter_flags_task_projection_mismatch_and_keeps_both_views(self):
         text = source_json(make_change_order(grouped_mutation=True))
@@ -164,7 +249,7 @@ class ChangeOrderExtractionTests(unittest.TestCase):
 
         self.assertIsNotNone(plan)
         self.assertTrue(report["matched"])
-        self.assertFalse(report["safe_to_publish"])
+        self.assertFalse(report["safe_for_internal_index"])
         self.assertEqual(report["task_record"]["exact_record_matches"], 3)
         self.assertEqual(report["task_record"]["flat_unmatched"], 1)
         self.assertIn(
@@ -174,7 +259,7 @@ class ChangeOrderExtractionTests(unittest.TestCase):
         self.assertTrue(
             any(unit.role == "TASKS_GROUPED_UNRECONCILED" for unit in plan.units)
         )
-        self.assertEqual(report["coverage"]["coverage_ratio"], 1.0)
+        self.assertEqual(report["coverage"]["structural_coverage_ratio"], 1.0)
 
     def test_non_matching_json_falls_back_without_guessing(self):
         text = source_json({"title": "普通 JSON", "items": [{"a": 1}]})
@@ -216,7 +301,7 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             client = StructuralFakeClient()
             service = KnowledgeService(make_settings(root), client=client)
             payload = make_change_order()
-            del payload["execution_result"]
+            del payload["data"]["change_plan"]
 
             with self.assertRaises(KnowledgeRequestError) as captured:
                 service.ingest_text(
@@ -267,10 +352,13 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                 content=source_json(make_change_order()),
             )
 
-            self.assertEqual(result["extraction_strategy"], "change_order_shape_v1")
+            self.assertEqual(result["extraction_strategy"], "change_order_shape_v2")
             report = result["extraction_report"]["change_order"]
-            self.assertTrue(report["safe_to_publish"])
-            self.assertEqual(report["coverage"]["coverage_ratio"], 1.0)
+            self.assertTrue(report["safe_for_internal_index"])
+            self.assertFalse(report["safe_for_external_publish"])
+            self.assertEqual(
+                report["coverage"]["structural_coverage_ratio"], 1.0
+            )
             self.assertEqual(result["extracted_cards"], 1)
             self.assertEqual(result["cards_by_role"], {"ROLLBACK_STEPS": 1})
             card = service.card_detail(result["card_ids"][0])
@@ -281,12 +369,16 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                 card["lineage"]["case_id"], result["extraction_report"]["case_id"]
             )
             self.assertTrue(
-                card["extraction_report"]["change_order"]["safe_to_publish"]
+                card["extraction_report"]["change_order"][
+                    "safe_for_internal_index"
+                ]
             )
+            self.assertEqual(card["lineage"]["procedure_group"], "ROLLBACK")
+            self.assertEqual(card["lineage"]["semantic_mapping_status"], "CONFIRMED")
 
             persisted = service.store.get_extraction_report(result["document_id"])
-            self.assertEqual(persisted["strategy"], "change_order_shape_v1")
-            self.assertTrue(persisted["change_order"]["safe_to_publish"])
+            self.assertEqual(persisted["strategy"], "change_order_shape_v2")
+            self.assertTrue(persisted["change_order"]["safe_for_internal_index"])
             self.assertTrue(
                 any(
                     "role=ROLLBACK_STEPS" in call[1]
@@ -294,6 +386,13 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                     if "运维变更知识工程师" in call[0]
                 )
             )
+            approved = service.review(
+                card["id"],
+                action="approve",
+                reviewer="internal-demo-reviewer",
+                comment="内部索引验证通过；不代表允许外部发布",
+            )
+            self.assertEqual(approved["status"], CardStatus.APPROVED.value)
 
     def test_large_json_requires_known_structure_and_uses_separate_limits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -316,7 +415,7 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                 source_ref="ticket://large-known",
                 content=structured,
             )
-            self.assertEqual(result["extraction_strategy"], "change_order_shape_v1")
+            self.assertEqual(result["extraction_strategy"], "change_order_shape_v2")
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -372,7 +471,9 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             )
 
             self.assertFalse(
-                result["extraction_report"]["change_order"]["safe_to_publish"]
+                result["extraction_report"]["change_order"][
+                    "safe_for_internal_index"
+                ]
             )
             self.assertEqual(result["pending_review"], 0)
             card = service.card_detail(result["card_ids"][0])
@@ -392,6 +493,53 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                     reviewer="tester",
                     comment="不应越过结构阻断",
                 )
+
+    def test_post_execution_is_searchable_but_excluded_from_plan_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = replace(
+                make_settings(root),
+                max_document_chunks=100,
+                max_change_order_chunks=100,
+                max_model_calls_per_ingest=120,
+            )
+            service = KnowledgeService(
+                settings, client=ExecutionAwareStructuralClient()
+            )
+            result = service.ingest_text(
+                source_name="post-execution.json",
+                source_type="json",
+                content=source_json(make_change_order()),
+            )
+            execution_id = next(
+                card_id
+                for card_id in result["card_ids"]
+                if service.card_detail(card_id)["lineage"]["unit_role"]
+                == "EXECUTION_RESULT"
+            )
+            service.review(
+                execution_id,
+                action="approve",
+                reviewer="internal-demo-reviewer",
+                comment="历史结果可用于经验检索",
+            )
+
+            searchable, _ = service.trusted_search_hits(
+                "execution result success", top_k=10, for_generation=False
+            )
+            self.assertIn(execution_id, [int(hit.card["id"]) for hit in searchable])
+            planning, diagnostics = service.trusted_search_hits(
+                "execution result success", top_k=10, for_generation=True
+            )
+            self.assertNotIn(execution_id, [int(hit.card["id"]) for hit in planning])
+            self.assertTrue(
+                any(
+                    item.get("card_id") == execution_id
+                    and item.get("reason")
+                    == "POST_EXECUTION_EXCLUDED_FROM_GENERATION"
+                    for item in diagnostics.get("lexical_rejected", [])
+                )
+            )
 
 
 if __name__ == "__main__":

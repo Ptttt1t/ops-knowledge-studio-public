@@ -415,7 +415,9 @@ class SecurityHardeningTests(unittest.TestCase):
             root = Path(directory)
             env_file = root / ".env"
             env_file.write_text(
-                "DEEPSEEK_BASE_URL=http://api.example.invalid\n", encoding="utf-8"
+                "DEMO_MODE=false\n"
+                "DEEPSEEK_BASE_URL=http://api.example.invalid\n",
+                encoding="utf-8",
             )
             with self.assertRaises(ConfigurationError):
                 Settings.load(env_file)

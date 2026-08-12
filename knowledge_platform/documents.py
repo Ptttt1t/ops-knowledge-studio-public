@@ -93,7 +93,7 @@ _OCR_RUN_LOCK = threading.Lock()
 def document_capabilities() -> dict[str, object]:
     return {
         "supported_extensions": sorted(SUPPORTED_DOCUMENT_EXTENSIONS),
-        "structured_change_order_json": "change_order_shape_v1",
+        "structured_change_order_json": "change_order_shape_v2",
         "pdf_text_extraction": importlib.util.find_spec("pypdf") is not None,
         "pdf_page_rendering": importlib.util.find_spec("fitz") is not None,
         "paddleocr": importlib.util.find_spec("paddleocr") is not None,

@@ -414,6 +414,7 @@ function cardHtml(card, reviewMode = false) {
     <button class="button primary small" onclick="reviewCard(${card.id}, 'approve')">批准</button>
     <button class="button danger small" onclick="reviewCard(${card.id}, 'reject')">驳回</button>
     <button class="button secondary small" onclick="reviewCard(${card.id}, 'supersede')">替代旧版</button>` : "";
+  const deleteAction = `<button class="button danger small" onclick="deleteCard(${card.id})">删除</button>`;
   return `<article class="knowledge-card">
     <div class="card-top">
       <div><h3>K${card.id} · ${escapeHtml(card.title || "无标题")}</h3><p>${escapeHtml(card.summary)}</p></div>
@@ -426,7 +427,7 @@ function cardHtml(card, reviewMode = false) {
     </div>
     <p title="${issues}">质量：${issues}</p>
     <div class="card-actions">
-      <button class="button secondary small" onclick="showDetail(${card.id})">查看证据与详情</button>${actions}
+      <button class="button secondary small" onclick="showDetail(${card.id})">查看证据与详情</button>${actions}${deleteAction}
     </div>
   </article>`;
 }
@@ -455,6 +456,7 @@ async function refreshHealth() {
   document.getElementById("api-dot").classList.toggle("ok", configured);
   document.getElementById("api-status").textContent = configured ? "API 已配置" : "等待填写 API";
   document.getElementById("model-name").textContent = data.config.model;
+  document.getElementById("forget-token").hidden = !data.config.access_token_required;
   const healthy = memory.health === "OK";
   const badge = document.getElementById("memory-health-badge");
   badge.textContent = healthy ? "服务可用" : memory.health;
@@ -518,7 +520,8 @@ window.showDetail = async function showDetail(id) {
         ${field("原文证据", card.evidence_quote)}${field("证据位置", card.evidence_locator)}${field("来源", card.source_ref)}
         ${field("比较判断", `${card.comparison_label} (${card.comparison_confidence})：${card.comparison_reason}`)}
         ${field("质量问题", card.quality_issues)}${field("审核", `${card.reviewer || "未审核"} ${card.review_comment || ""}`)}
-      </dl>`;
+      </dl>
+      <div class="card-actions"><button class="button danger" onclick="deleteCard(${card.id})">删除这张知识卡片</button></div>`;
     document.getElementById("detail-dialog").showModal();
   } catch (error) { toast(error.message, true); }
 };
@@ -537,6 +540,16 @@ window.reviewCard = async function reviewCard(id, action) {
       body: JSON.stringify({ action, comment, supersedes_id: supersedesId }),
     });
     toast(`K${id} 审核完成`);
+    await refreshAll();
+  } catch (error) { toast(error.message, true); }
+};
+
+window.deleteCard = async function deleteCard(id) {
+  if (!window.confirm(`确认永久删除知识卡片 K${id}？关联关系和本地索引会同步清理。`)) return;
+  try {
+    await api(`/api/cards/${id}`, { method: "DELETE" });
+    document.getElementById("detail-dialog").close();
+    toast(`K${id} 已删除`);
     await refreshAll();
   } catch (error) { toast(error.message, true); }
 };

@@ -85,6 +85,10 @@ def _read_bool(values: Mapping[str, str], name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} 必须是 true 或 false，当前值为 {raw!r}")
 
 
+def _has_setting(values: Mapping[str, str], name: str) -> bool:
+    return name in os.environ or name in values
+
+
 def _read_csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in _get(values, name, default).split(",") if item.strip())
 
@@ -133,6 +137,12 @@ class Settings:
     runtime_workers: int = 2
     runtime_max_queued_runs: int = 100
     runtime_sync_wait_seconds: int = 900
+    demo_mode: bool = False
+    startup_token_required: bool = False
+    access_token_required: bool = False
+    request_boundary_checks_enabled: bool = True
+    csp_allow_inline: bool = False
+    allow_insecure_model_http: bool = False
     auth_mode: str = "disabled"
     access_token_hash: str = ""
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "::1")
@@ -185,6 +195,25 @@ class Settings:
         return self.api_key not in PLACEHOLDERS and self.model not in PLACEHOLDERS
 
     @property
+    def effective_access_token_required(self) -> bool:
+        """Keep direct and legacy Settings(auth_mode="token") callers compatible."""
+
+        return self.access_token_required or self.auth_mode == "token"
+
+    def startup_security_messages(self) -> list[str]:
+        prefix = "[DEMO MODE]" if self.demo_mode else "[PRODUCTION MODE]"
+        authentication_enabled = (
+            self.startup_token_required or self.effective_access_token_required
+        )
+        return [
+            f"{prefix} Authentication {'enabled' if authentication_enabled else 'disabled'}",
+            f"{prefix} Startup token "
+            f"{'required' if self.startup_token_required else 'disabled'}",
+            f"{prefix} Access token "
+            f"{'required' if self.effective_access_token_required else 'disabled'}",
+        ]
+
+    @property
     def mindmemos_configured(self) -> bool:
         return (
             self.mindmemos_enabled
@@ -215,6 +244,12 @@ class Settings:
             "runtime_workers": self.runtime_workers,
             "runtime_max_queued_runs": self.runtime_max_queued_runs,
             "auth_mode": self.auth_mode,
+            "demo_mode": self.demo_mode,
+            "startup_token_required": self.startup_token_required,
+            "access_token_required": self.effective_access_token_required,
+            "request_boundary_checks_enabled": self.request_boundary_checks_enabled,
+            "csp_allow_inline": self.csp_allow_inline,
+            "allow_insecure_model_http": self.allow_insecure_model_http,
             "shared_actor": self.shared_actor,
             "request_limits": {
                 "json_bytes": self.max_json_bytes,
@@ -277,7 +312,7 @@ class Settings:
         bind_host = (host or self.host).strip()
         if self.auth_mode not in {"token", "disabled"}:
             raise ConfigurationError("PLATFORM_AUTH_MODE 只能是 token 或 disabled")
-        if self.auth_mode == "token":
+        if self.startup_token_required or self.effective_access_token_required:
             digest = self.access_token_hash.removeprefix("sha256:")
             if (
                 not self.access_token_hash.startswith("sha256:")
@@ -288,9 +323,9 @@ class Settings:
                     "PLATFORM_ACCESS_TOKEN_HASH 缺失或格式无效；请先运行 "
                     "python run.py generate-access-token"
                 )
-        elif not _is_loopback_host(bind_host):
+        elif self.request_boundary_checks_enabled and not _is_loopback_host(bind_host):
             raise ConfigurationError("关闭 Web 鉴权时只允许监听回环地址")
-        if not self.allowed_hosts:
+        if self.request_boundary_checks_enabled and not self.allowed_hosts:
             raise ConfigurationError("PLATFORM_ALLOWED_HOSTS 不能为空")
 
     @classmethod
@@ -302,11 +337,23 @@ class Settings:
         )
         values = read_env_file(env_file) if env_file is not None else {}
 
+        # The packaged experience is an internal Demo by default, including
+        # existing local .env files created before DEMO_MODE was introduced.
+        # Production deployments must opt in explicitly with DEMO_MODE=false.
+        demo_mode = _read_bool(values, "DEMO_MODE", True)
+        allow_insecure_model_http = _read_bool(
+            values, "DEEPSEEK_ALLOW_INSECURE_HTTP", demo_mode
+        )
+
         base_url = _get(values, "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         parsed_base_url = urlsplit(base_url)
         if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.hostname:
             raise ConfigurationError("DEEPSEEK_BASE_URL 必须以 http:// 或 https:// 开头")
-        if parsed_base_url.scheme == "http" and not _is_loopback_host(parsed_base_url.hostname):
+        if (
+            parsed_base_url.scheme == "http"
+            and not _is_loopback_host(parsed_base_url.hostname)
+            and not allow_insecure_model_http
+        ):
             raise ConfigurationError("DEEPSEEK_BASE_URL 使用 HTTP 时只允许本机回环地址")
 
         mindmemos_base_url = _get(
@@ -369,7 +416,27 @@ class Settings:
         default_origins = (
             f"http://127.0.0.1:{platform_port},http://localhost:{platform_port}"
         )
-        auth_mode = _get(values, "PLATFORM_AUTH_MODE", "token").lower()
+        legacy_auth_mode = _get(values, "PLATFORM_AUTH_MODE", "").lower()
+        if legacy_auth_mode and legacy_auth_mode not in {"token", "disabled"}:
+            raise ConfigurationError("PLATFORM_AUTH_MODE 只能是 token 或 disabled")
+        if _has_setting(values, "ACCESS_TOKEN_REQUIRED"):
+            access_token_required = _read_bool(
+                values, "ACCESS_TOKEN_REQUIRED", not demo_mode
+            )
+        elif demo_mode:
+            access_token_required = False
+        else:
+            access_token_required = legacy_auth_mode != "disabled"
+        startup_token_required = _read_bool(
+            values, "STARTUP_TOKEN_REQUIRED", not demo_mode
+        )
+        request_boundary_checks_enabled = _read_bool(
+            values, "PLATFORM_REQUEST_BOUNDARY_CHECKS_ENABLED", not demo_mode
+        )
+        csp_allow_inline = _read_bool(
+            values, "PLATFORM_CSP_ALLOW_INLINE", demo_mode
+        )
+        auth_mode = "token" if access_token_required else "disabled"
         settings = cls(
             project_root=project_root,
             api_key=_get(values, "DEEPSEEK_API_KEY", "YOUR_DEEPSEEK_API_KEY_HERE"),
@@ -402,6 +469,12 @@ class Settings:
             runtime_workers=_read_int(values, "HARNESS_WORKERS", 2),
             runtime_max_queued_runs=_read_int(values, "HARNESS_MAX_QUEUED_RUNS", 100),
             runtime_sync_wait_seconds=_read_int(values, "HARNESS_SYNC_WAIT_SECONDS", 900),
+            demo_mode=demo_mode,
+            startup_token_required=startup_token_required,
+            access_token_required=access_token_required,
+            request_boundary_checks_enabled=request_boundary_checks_enabled,
+            csp_allow_inline=csp_allow_inline,
+            allow_insecure_model_http=allow_insecure_model_http,
             auth_mode=auth_mode,
             access_token_hash=_get(values, "PLATFORM_ACCESS_TOKEN_HASH", ""),
             allowed_hosts=_read_csv(

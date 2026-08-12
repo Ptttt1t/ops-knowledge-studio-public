@@ -42,7 +42,7 @@ flowchart LR
 | 模块 | 能力 | 关键约束 |
 | --- | --- | --- |
 | 知识采集 | 上传文档或粘贴文本，分片、抽取知识卡片并精确定位来源 | 抽取结果默认进入待审核状态 |
-| 知识治理 | 质量评分、重复/冲突/新版本比较、批准、驳回与替代 | 只有 `APPROVED` 可被可信检索 |
+| 知识治理 | 质量评分、重复/冲突/新版本比较、批准、驳回、替代与人工删除 | 只有 `APPROVED` 可被可信检索；删除保留审计并回收长期记忆 |
 | 可信方案 | 本地混合检索、可选 MindMemOS 语义后备 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
 | 变更生成 | 环境感知、知识复用、风险评分、分步计划、验证与回退生成 | 所有云资源与网络均为隔离模拟 |
 | 审批执行 | 精确确认串、参数摘要、灰度执行、故障注入与自动回退 | 审批前不修改模拟网络 |
@@ -95,7 +95,6 @@ cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
 python -m pip install -c constraints/base.txt -e .
 copy .env.example .env
-python run.py generate-access-token
 python run.py init
 python run.py serve
 ```
@@ -110,7 +109,6 @@ cd ops-knowledge-studio-public
 python -m pip install --upgrade pip
 python -m pip install -c constraints/base.txt -e .
 cp .env.example .env
-python run.py generate-access-token
 python run.py init
 python run.py serve
 ```
@@ -120,7 +118,21 @@ python run.py serve
 - Web 工作台：<http://127.0.0.1:8765>
 - 无鉴权存活检查：<http://127.0.0.1:8765/api/health/live>
 
-将令牌命令输出的 `PLATFORM_ACCESS_TOKEN_HASH=...` 写入 `.env`，浏览器首次打开时输入对应明文令牌。日常启动只需要激活环境并执行 `python run.py serve`。
+仓库的 `.env.example` 默认是内部 Demo 模式，不要求启动令牌或 Web Access Token，浏览器可直接打开。启动日志会明确打印三条 `[DEMO MODE] ... disabled` 提示，避免把演示配置误认为生产配置。日常启动只需要激活环境并执行 `python run.py serve`。
+
+如果要恢复生产安全边界，至少设置：
+
+```dotenv
+DEMO_MODE=false
+STARTUP_TOKEN_REQUIRED=true
+ACCESS_TOKEN_REQUIRED=true
+PLATFORM_AUTH_MODE=token
+PLATFORM_REQUEST_BOUNDARY_CHECKS_ENABLED=true
+PLATFORM_CSP_ALLOW_INLINE=false
+DEEPSEEK_ALLOW_INSECURE_HTTP=false
+```
+
+再运行 `python run.py generate-access-token`，将输出的 `PLATFORM_ACCESS_TOKEN_HASH=...` 写入 `.env`，并在浏览器首次打开时输入对应明文令牌。
 
 ## 三分钟体验变更闭环
 
@@ -304,6 +316,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 项目使用 OpenAI 兼容的 `POST /chat/completions`。若使用兼容代理服务，只替换 Key、Base URL 和模型名，不要把 `/chat/completions` 写进 Base URL。
 
+内部 Demo 可以连接局域网中的 HTTP 兼容模型服务：保持 `DEMO_MODE=true` 和 `DEEPSEEK_ALLOW_INSECURE_HTTP=true`，把 `DEEPSEEK_BASE_URL` 改为对应内网地址即可。HTTP 不提供传输加密；生产环境应切换 HTTPS，并将该开关设为 `false`。
+
 DeepSeek 用于：
 
 - 将原始文档抽取为固定 Schema 的知识卡片；
@@ -365,7 +379,9 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 使用 `python run.py <命令> --help` 查看完整参数。
 
-对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v1`：按 TaskRecord、四组 ProcedureStep 和独立 ExecutionResult 的结构边界抽取，严格对账重复任务视图，并返回可审计的覆盖率报告。无关的普通 JSON 仍使用原有通用流程；同时命中多类变更单特征但关键结构不完整的输入会在模型调用前阻断。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。报告区分结构覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+
+Web 知识库中的每张卡片均提供“删除”按钮。删除操作会移除卡片、关系、结构 lineage 和检索映射，保留不可变审计记录；若卡片已同步到 MindMemOS，还会进入退休队列等待清理。此操作不可从界面撤销，删除前会再次确认。
 
 ## 变更状态与审批安全
 
@@ -479,12 +495,12 @@ python run.py demo-change --case-id nat-egress-bluegreen
 
 ## 部署与安全边界
 
-当前 Web 服务定位为本机或受控内网演示，默认启用共享高熵令牌、Host/Origin 白名单、严格 Content-Type、模型调用额度和文档解析限制：
+当前 Web 服务定位为本机或受控内网演示。默认 `DEMO_MODE=true`，关闭启动令牌、Access Token、Host/Origin 边界和严格 CSP，但继续保留 Content-Type、模型调用额度与文档解析限制；这些演示放宽项均可通过配置恢复，不是生产部署基线：
 
 - 保持 `PLATFORM_HOST=127.0.0.1`；
 - 不要直接将 8765 端口暴露到内网或互联网；
-- 多人内网使用时必须在前面增加 HTTPS 反向代理，并配置浏览器实际访问的 Host 与 Origin；
-- 共享令牌下所有 Web 审计主体固定为 `shared-operator`，它不提供个人身份或职责分离；
+- 多人内网或生产使用时设置 `DEMO_MODE=false`，重新启用 Access Token、Host/Origin 校验和严格 CSP，并在前面增加 HTTPS 反向代理；
+- 当前 `.env.example` 下 Demo 与共享令牌模式的 Web 审计主体都固定为 `shared-operator`，它不提供个人身份或职责分离；
 - 不要把生产数据库、业务文档、上传目录、运行工件或 `.env` 上传到公开仓库；
 - 不要向本项目填入真实云凭据，当前代码没有真实云变更适配器；
 - MindMemOS 即使已启用也默认禁止内容外发；只有确认字段白名单和外部服务数据边界后才设置 `MINDMEMOS_ALLOW_CONTENT_EXPORT=true`；

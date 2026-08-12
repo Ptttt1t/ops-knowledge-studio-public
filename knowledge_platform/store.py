@@ -148,6 +148,7 @@ class KnowledgeStore:
             unit_pointer TEXT NOT NULL,
             source_pointers TEXT NOT NULL,
             source_order INTEGER NOT NULL,
+            unit_metadata TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         );
 
@@ -213,6 +214,17 @@ class KnowledgeStore:
                     connection.execute(
                         f"ALTER TABLE memory_sync_state ADD COLUMN {column} {declaration}"
                     )
+            lineage_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(card_lineage)"
+                ).fetchall()
+            }
+            if "unit_metadata" not in lineage_columns:
+                connection.execute(
+                    "ALTER TABLE card_lineage "
+                    "ADD COLUMN unit_metadata TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def add_document(
         self,
@@ -291,21 +303,23 @@ class KnowledgeStore:
         unit_pointer: str,
         source_pointers: list[str],
         source_order: int,
+        unit_metadata: dict[str, Any] | None = None,
     ) -> None:
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO card_lineage
                     (card_id, case_id, extraction_strategy, unit_role, unit_pointer,
-                     source_pointers, source_order, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     source_pointers, source_order, unit_metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(card_id) DO UPDATE SET
                     case_id = excluded.case_id,
                     extraction_strategy = excluded.extraction_strategy,
                     unit_role = excluded.unit_role,
                     unit_pointer = excluded.unit_pointer,
                     source_pointers = excluded.source_pointers,
-                    source_order = excluded.source_order
+                    source_order = excluded.source_order,
+                    unit_metadata = excluded.unit_metadata
                 """,
                 (
                     card_id,
@@ -315,6 +329,7 @@ class KnowledgeStore:
                     unit_pointer,
                     json.dumps(source_pointers, ensure_ascii=False),
                     source_order,
+                    json.dumps(unit_metadata or {}, ensure_ascii=False),
                     utc_now(),
                 ),
             )
@@ -328,6 +343,9 @@ class KnowledgeStore:
             return None
         result = dict(row)
         result["source_pointers"] = json.loads(result["source_pointers"] or "[]")
+        result["unit_metadata"] = json.loads(result.get("unit_metadata") or "{}")
+        if isinstance(result["unit_metadata"], dict):
+            result.update(result["unit_metadata"])
         return result
 
     def claim_ingestion(
@@ -581,6 +599,64 @@ class KnowledgeStore:
             ).fetchone()
         return self._decode_card(row)
 
+    def delete_card(self, card_id: int, *, actor: str) -> dict[str, Any]:
+        actor = actor.strip()
+        if not actor:
+            raise StoreError("删除操作者不能为空")
+        now = utc_now()
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT id, title, status, source_document_id FROM cards WHERE id = ?",
+                (card_id,),
+            ).fetchone()
+            if current is None:
+                raise StoreError(f"知识卡片不存在: {card_id}")
+
+            memory_rows = connection.execute(
+                "SELECT backend, memory_id FROM memory_links WHERE card_id = ?",
+                (card_id,),
+            ).fetchall()
+            for row in memory_rows:
+                connection.execute(
+                    """
+                    INSERT INTO memory_retirements
+                        (backend, memory_id, card_id, status, attempts, last_error,
+                         updated_at)
+                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                    ON CONFLICT(backend, memory_id) DO UPDATE SET
+                        card_id = excluded.card_id,
+                        status = 'PENDING',
+                        last_error = '',
+                        updated_at = excluded.updated_at
+                    """,
+                    (str(row["backend"]), str(row["memory_id"]), card_id, now),
+                )
+
+            # A deleted historical card must not remain as another card's
+            # supersedes target. Relation, lineage and memory mapping rows use
+            # ON DELETE CASCADE and are cleaned in the same transaction.
+            connection.execute(
+                "UPDATE cards SET supersedes_id = NULL, updated_at = ? "
+                "WHERE supersedes_id = ?",
+                (now, card_id),
+            )
+            detail = {
+                "deleted_card_id": card_id,
+                "title": str(current["title"]),
+                "status": str(current["status"]),
+                "source_document_id": int(current["source_document_id"]),
+                "queued_memory_retirements": len(memory_rows),
+            }
+            connection.execute(
+                """
+                INSERT INTO audit_log (card_id, action, actor, detail, created_at)
+                VALUES (?, 'CARD_DELETED', ?, ?, ?)
+                """,
+                (card_id, actor, json.dumps(detail, ensure_ascii=False), now),
+            )
+            connection.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+        return detail
+
     def update_card_quality(
         self,
         card_id: int,
@@ -741,7 +817,10 @@ class KnowledgeStore:
                     if (
                         isinstance(change_report, dict)
                         and change_report.get("matched") is True
-                        and not change_report.get("safe_to_publish", False)
+                        and not change_report.get(
+                            "safe_for_internal_index",
+                            change_report.get("safe_to_publish", False),
+                        )
                     ):
                         blockers = change_report.get("blockers") or ["结构完整性检查未通过"]
                         raise StoreError(

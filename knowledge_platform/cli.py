@@ -214,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
             port = getattr(args, "port", None) or settings.port
             server = create_server(service, host=host, port=port)
             print(f"Ops Knowledge Studio 已启动：http://{host}:{port}")
+            for message in settings.startup_security_messages():
+                print(message)
             print("按 Ctrl+C 停止。")
             try:
                 server.serve_forever()

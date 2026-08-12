@@ -85,9 +85,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        script_policy = "script-src 'self'"
+        if self.server.service.settings.csp_allow_inline:
+            script_policy += " 'unsafe-inline' 'unsafe-hashes'"
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            f"default-src 'self'; {script_policy}; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
             "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         )
@@ -570,6 +573,23 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._handle_error(exc)
 
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            principal = self._authorize_api(path, "DELETE")
+            match = CARD_DETAIL_PATTERN.match(path)
+            if not match:
+                self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            card_id = int(match.group(1))
+            if self.server.service.store.get_card(card_id) is None:
+                self._send_json({"error": "知识卡片不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            result = self.server.service.delete_card(card_id, actor=principal)
+            self._send_json({"deleted": True, **result})
+        except Exception as exc:
+            self._handle_error(exc)
+
     def do_OPTIONS(self) -> None:
         try:
             self.server.security.validate_host(self.headers.get("Host", ""))
@@ -604,6 +624,8 @@ def serve(settings: Settings, service: KnowledgeService | None = None) -> None:
     instance = service or KnowledgeService(settings)
     server = create_server(instance, host=settings.host, port=settings.port)
     print(f"Ops Knowledge Studio 已启动：http://{settings.host}:{settings.port}")
+    for message in settings.startup_security_messages():
+        print(message)
     print("按 Ctrl+C 停止。平台默认仅监听本机地址。")
     try:
         server.serve_forever()
