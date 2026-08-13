@@ -510,6 +510,12 @@ window.showDetail = async function showDetail(id) {
   try {
     const card = await api(`/api/cards/${id}`);
     const field = (label, value) => `<dt>${label}</dt><dd>${Array.isArray(value) ? value.map(escapeHtml).join("\n") : escapeHtml(value)}</dd>`;
+    const sourceEvidence = (card.source_items || []).map(item =>
+      `${item.output_field}[${item.output_index}] ← ${item.source_pointer} · chars ${item.char_start}-${item.char_end} · sha256 ${String(item.source_hash || "").slice(0, 16)}…`
+    );
+    const coverage = card.lineage?.content_coverage_status
+      ? `${card.lineage.content_coverage_status} (${sourceEvidence.length}/${card.lineage.expected_source_items})`
+      : "LEGACY_NOT_EVALUATED";
     document.getElementById("dialog-content").innerHTML = `
       <p class="eyebrow">KNOWLEDGE CARD K${card.id}</p><h2>${escapeHtml(card.title)}</h2>
       <div class="card-meta"><span class="tag ${card.status}">${statusLabels[card.status]}</span><span class="tag">质量 ${card.quality_score}</span><span class="tag">${escapeHtml(card.comparison_label)}</span></div>
@@ -518,6 +524,7 @@ window.showDetail = async function showDetail(id) {
         ${field("适用版本", card.applicable_versions)}${field("前置条件", card.prerequisites)}${field("操作步骤", card.procedure_steps)}
         ${field("风险", card.risks)}${field("回退", card.rollback_steps)}${field("验证", card.validation_steps)}
         ${field("原文证据", card.evidence_quote)}${field("证据位置", card.evidence_locator)}${field("来源", card.source_ref)}
+        ${field("逐源覆盖", coverage)}${field("结构证据矩阵", sourceEvidence)}
         ${field("比较判断", `${card.comparison_label} (${card.comparison_confidence})：${card.comparison_reason}`)}
         ${field("质量问题", card.quality_issues)}${field("审核", `${card.reviewer || "未审核"} ${card.review_comment || ""}`)}
       </dl>

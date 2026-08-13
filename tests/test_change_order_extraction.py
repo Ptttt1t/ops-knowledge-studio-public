@@ -359,9 +359,29 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             self.assertEqual(
                 report["coverage"]["structural_coverage_ratio"], 1.0
             )
-            self.assertEqual(result["extracted_cards"], 1)
-            self.assertEqual(result["cards_by_role"], {"ROLLBACK_STEPS": 1})
-            card = service.card_detail(result["card_ids"][0])
+            self.assertEqual(result["extracted_cards"], 7)
+            self.assertEqual(
+                set(result["cards_by_role"]),
+                {
+                    "IDENTITY_METADATA_CONTEXT",
+                    "TASKS_CANONICAL",
+                    "PRECHECK_STEPS",
+                    "IMPLEMENTATION_STEPS",
+                    "VALIDATION_STEPS",
+                    "ROLLBACK_STEPS",
+                    "EXECUTION_RESULT",
+                },
+            )
+            self.assertEqual(
+                result["extraction_report"]["content_coverage"]["status"],
+                "COMPLETE",
+            )
+            card = next(
+                service.card_detail(card_id)
+                for card_id in result["card_ids"]
+                if service.card_detail(card_id)["lineage"]["unit_role"]
+                == "ROLLBACK_STEPS"
+            )
             self.assertEqual(card["knowledge_type"], "rollback")
             self.assertEqual(card["status"], CardStatus.PENDING_REVIEW.value)
             self.assertEqual(card["lineage"]["unit_role"], "ROLLBACK_STEPS")
@@ -375,6 +395,10 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             )
             self.assertEqual(card["lineage"]["procedure_group"], "ROLLBACK")
             self.assertEqual(card["lineage"]["semantic_mapping_status"], "CONFIRMED")
+            self.assertEqual(card["lineage"]["content_coverage_status"], "COMPLETE")
+            self.assertEqual(card["lineage"]["evidence_mode"], "STRUCTURED_JSON_POINTERS")
+            self.assertEqual(len(card["source_items"]), 3)
+            self.assertTrue(all(item["source_hash"] for item in card["source_items"]))
 
             persisted = service.store.get_extraction_report(result["document_id"])
             self.assertEqual(persisted["strategy"], "change_order_shape_v2")
@@ -452,7 +476,8 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                 source_type="json",
                 content=source_json(make_change_order()),
             )
-            self.assertEqual(result["extracted_cards"], 1)
+            self.assertEqual(result["extracted_cards"], 7)
+            self.assertEqual(result["cards_by_role"]["ROLLBACK_STEPS"], 1)
 
     def test_unreconciled_structure_blocks_card_approval(self):
         with tempfile.TemporaryDirectory() as directory:

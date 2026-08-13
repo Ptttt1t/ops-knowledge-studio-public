@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -154,6 +155,23 @@ class KnowledgeStore:
 
         CREATE INDEX IF NOT EXISTS idx_card_lineage_case
             ON card_lineage(case_id, source_order);
+
+        CREATE TABLE IF NOT EXISTS card_source_items (
+            card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+            output_field TEXT NOT NULL,
+            output_index INTEGER NOT NULL,
+            source_index INTEGER NOT NULL,
+            source_pointer TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            char_start INTEGER NOT NULL,
+            char_end INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(card_id, output_field, output_index),
+            UNIQUE(card_id, source_pointer, char_start, char_end)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_card_source_items_card
+            ON card_source_items(card_id, output_index);
 
         CREATE TABLE IF NOT EXISTS memory_sync_state (
             card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
@@ -347,6 +365,48 @@ class KnowledgeStore:
         if isinstance(result["unit_metadata"], dict):
             result.update(result["unit_metadata"])
         return result
+
+    def save_card_source_items(
+        self,
+        card_id: int,
+        items: list[dict[str, Any]],
+    ) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM card_source_items WHERE card_id = ?", (card_id,)
+            )
+            connection.executemany(
+                """
+                INSERT INTO card_source_items
+                    (card_id, output_field, output_index, source_index,
+                     source_pointer, source_hash, char_start, char_end, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        card_id,
+                        str(item["output_field"]),
+                        int(item["output_index"]),
+                        int(item["source_index"]),
+                        str(item["source_pointer"]),
+                        str(item["source_hash"]),
+                        int(item["char_start"]),
+                        int(item["char_end"]),
+                        now,
+                    )
+                    for item in items
+                ],
+            )
+
+    def list_card_source_items(self, card_id: int) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM card_source_items WHERE card_id = ? "
+                "ORDER BY output_field, output_index",
+                (card_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def claim_ingestion(
         self,
@@ -754,6 +814,103 @@ class KnowledgeStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _validate_structured_card_evidence(
+        connection: sqlite3.Connection,
+        current: sqlite3.Row,
+    ) -> None:
+        lineage = connection.execute(
+            "SELECT extraction_strategy, unit_role, source_pointers, unit_metadata "
+            "FROM card_lineage WHERE card_id = ?",
+            (int(current["id"]),),
+        ).fetchone()
+        if lineage is None:
+            report_row = connection.execute(
+                "SELECT strategy FROM extraction_reports WHERE document_id = ?",
+                (int(current["source_document_id"]),),
+            ).fetchone()
+            if report_row is not None and str(report_row["strategy"]) == "change_order_shape_v2":
+                raise StoreError("结构化知识尚未完成 lineage 与证据矩阵写入")
+            return
+        if str(lineage["extraction_strategy"]) != "change_order_shape_v2":
+            return
+
+        metadata = json.loads(str(lineage["unit_metadata"] or "{}"))
+        if metadata.get("quality_policy_version") != "change_order_role_v2":
+            # Existing cards created before the structured evidence matrix remain
+            # reviewable under the legacy exact-quote gate.
+            return
+        if metadata.get("evidence_mode") != "STRUCTURED_JSON_POINTERS":
+            raise StoreError("结构化知识缺少受信任的 JSON Pointer 证据模式")
+        if metadata.get("content_coverage_status") != "COMPLETE":
+            raise StoreError("结构化知识的逐源记录覆盖不完整，不能批准")
+
+        references = metadata.get("source_evidence_refs")
+        if not isinstance(references, list) or not references:
+            raise StoreError("结构化知识缺少逐源记录证据")
+        try:
+            expected = int(metadata.get("expected_source_items"))
+        except (TypeError, ValueError) as exc:
+            raise StoreError("结构化知识的预期源记录数无效") from exc
+        if expected != len(references):
+            raise StoreError("结构化知识的证据清单与预期源记录数不一致")
+
+        rows = connection.execute(
+            "SELECT output_field, output_index, source_index, source_pointer, "
+            "source_hash, char_start, char_end FROM card_source_items "
+            "WHERE card_id = ? ORDER BY output_index",
+            (int(current["id"]),),
+        ).fetchall()
+        if len(rows) != expected:
+            raise StoreError("结构化知识的逐源记录证据数量不完整")
+
+        role = str(lineage["unit_role"])
+        expected_field = {
+            "TASKS_CANONICAL": "procedure_steps",
+            "PRECHECK_STEPS": "procedure_steps",
+            "IMPLEMENTATION_STEPS": "procedure_steps",
+            "VALIDATION_STEPS": "validation_steps",
+            "ROLLBACK_STEPS": "rollback_steps",
+        }.get(role, "__evidence__")
+        source_pointers = json.loads(str(lineage["source_pointers"] or "[]"))
+        if source_pointers != [str(item.get("pointer")) for item in references]:
+            raise StoreError("结构化知识的 lineage 与证据 Pointer 不一致")
+
+        document = connection.execute(
+            "SELECT content FROM documents WHERE id = ?",
+            (int(current["source_document_id"]),),
+        ).fetchone()
+        if document is None:
+            raise StoreError("结构化知识的来源文档不存在")
+        content = str(document["content"])
+
+        for output_index, (row, reference) in enumerate(zip(rows, references)):
+            try:
+                char_start = int(reference["char_start"])
+                char_end = int(reference["char_end"])
+                source_index = int(reference["source_index"])
+                source_pointer = str(reference["pointer"])
+                expected_hash = str(reference["content_sha256"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise StoreError("结构化知识包含无效的逐源证据记录") from exc
+            if not 0 <= char_start < char_end <= len(content):
+                raise StoreError("结构化知识的证据字符范围越界")
+            actual_hash = hashlib.sha256(
+                content[char_start:char_end].encode("utf-8")
+            ).hexdigest()
+            if actual_hash != expected_hash:
+                raise StoreError("结构化知识的来源内容哈希已漂移，必须重新抽取")
+            if (
+                str(row["output_field"]) != expected_field
+                or int(row["output_index"]) != output_index
+                or int(row["source_index"]) != source_index
+                or str(row["source_pointer"]) != source_pointer
+                or str(row["source_hash"]) != expected_hash
+                or int(row["char_start"]) != char_start
+                or int(row["char_end"]) != char_end
+            ):
+                raise StoreError("结构化知识的输出项与逐源证据映射不一致")
+
     def review_card(
         self,
         card_id: int,
@@ -805,6 +962,7 @@ class KnowledgeStore:
                         "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
                         + "；".join(blocking_issues)
                     )
+                self._validate_structured_card_evidence(connection, current)
                 report_row = connection.execute(
                     "SELECT report FROM extraction_reports WHERE document_id = ?",
                     (int(current["source_document_id"]),),

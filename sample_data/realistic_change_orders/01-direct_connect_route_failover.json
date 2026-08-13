@@ -1,0 +1,1152 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_OK",
+  "msg": "synthetic demo change order",
+  "data": {
+    "synthetic_demo_data": true,
+    "data_classification": "SYNTHETIC_DEIDENTIFIED_DEMO",
+    "ticket_id": "CHG-SYN-NET-001",
+    "title": "[合成演示] 生产 VPC 专线路由双 AZ 主备切换",
+    "original_system": "synthetic-internal-change-platform",
+    "create_time": "2026-08-01T09:30:00+08:00",
+    "cloud_service": "Cloud Network",
+    "service": "production-network-foundation",
+    "micro_service": "network-control-plane",
+    "affected_service": "order-service,payment-service",
+    "change_scene": "DIRECT_CONNECT_ROUTE_FAILOVER",
+    "change_notes": "主专线连续抖动，按 AZ 灰度切换至健康备用专线。",
+    "special_change_type": "PLANNED_HIGH_RISK_SYNTHETIC",
+    "change_guide": "分批执行、每批验证、异常立即停止并按逆序回退",
+    "severity": "S2",
+    "change_level": "HIGH",
+    "customer_sensed": "POSSIBLE_TRANSIENT_JITTER",
+    "affected_customer": "synthetic-internal-services",
+    "risk_level": "HIGH",
+    "impact_risk_level": "MEDIUM",
+    "region": "cn-north-4",
+    "expected_start_time": "2026-08-02T01:00:00+08:00",
+    "expected_end_time": "2026-08-02T02:00:00+08:00",
+    "expected_total_time": 60,
+    "executors": [
+      "network-operator-a",
+      "network-operator-b"
+    ],
+    "cooperators": [
+      "application-sre-a",
+      "monitoring-oncall-a"
+    ],
+    "reviewers": [
+      "change-manager-a",
+      "service-owner-a"
+    ],
+    "approval_status": "APPROVED_HISTORICAL_SYNTHETIC",
+    "high_risk_check": "PASSED_SYNTHETIC",
+    "authorization_reference": "AUTH-SYNTHETIC-ONLY",
+    "notification_status": "SIMULATED_COMPLETED",
+    "action_list": [
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-01",
+        "task_name": "冻结 AZ-A 路由表并记录版本",
+        "task_type": "CHANGE",
+        "sequence": 1,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "rtb-prod-app-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "LOCK_AND_SNAPSHOT",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "已取得独占变更锁和基线哈希",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "已取得独占变更锁和基线哈希",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-02",
+        "task_name": "切换 AZ-A 数据库路由下一跳",
+        "task_type": "CHANGE",
+        "sequence": 2,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "rtb-prod-app-a:172.20.32.0/20",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MODIFY_NEXT_HOP",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "下一跳为 dc-standby 且路由状态 ACTIVE",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-03",
+        "task_name": "放行 AZ-A 10% 合成探测流量",
+        "task_type": "CHANGE",
+        "sequence": 3,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "probe-order-pay-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENABLE_CANARY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "10% 探测连续两个周期达标",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "10% 探测连续两个周期达标",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-04",
+        "task_name": "冻结 AZ-B 路由表并记录版本",
+        "task_type": "CHANGE",
+        "sequence": 4,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "rtb-prod-app-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "LOCK_AND_SNAPSHOT",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "已取得独占变更锁和基线哈希",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "已取得独占变更锁和基线哈希",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-05",
+        "task_name": "切换 AZ-B 数据库路由下一跳",
+        "task_type": "CHANGE",
+        "sequence": 5,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "rtb-prod-app-b:172.20.32.0/20",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MODIFY_NEXT_HOP",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "下一跳为 dc-standby 且路由状态 ACTIVE",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-001-TASK-06",
+        "task_name": "恢复全量业务探测并解除冻结",
+        "task_type": "CHANGE",
+        "sequence": 6,
+        "region": "cn-north-4",
+        "availability_zone": null,
+        "target_resource": "vpc-prod-core",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENABLE_FULL_TRAFFIC_AND_UNLOCK",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "双 AZ 探测达标且路由表已解锁",
+          "change_ticket": "CHG-SYN-NET-001"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "双 AZ 探测达标且路由表已解锁",
+        "owner": "network-operator-a"
+      }
+    ],
+    "change_tool_relate_action": {
+      "preparation_and_canary": [
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-01",
+          "task_name": "冻结 AZ-A 路由表并记录版本",
+          "task_type": "CHANGE",
+          "sequence": 1,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "rtb-prod-app-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "LOCK_AND_SNAPSHOT",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "已取得独占变更锁和基线哈希",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "已取得独占变更锁和基线哈希",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-02",
+          "task_name": "切换 AZ-A 数据库路由下一跳",
+          "task_type": "CHANGE",
+          "sequence": 2,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "rtb-prod-app-a:172.20.32.0/20",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MODIFY_NEXT_HOP",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "owner": "network-operator-a"
+        }
+      ],
+      "primary_change_wave": [
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-03",
+          "task_name": "放行 AZ-A 10% 合成探测流量",
+          "task_type": "CHANGE",
+          "sequence": 3,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "probe-order-pay-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENABLE_CANARY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "10% 探测连续两个周期达标",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "10% 探测连续两个周期达标",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-04",
+          "task_name": "冻结 AZ-B 路由表并记录版本",
+          "task_type": "CHANGE",
+          "sequence": 4,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "rtb-prod-app-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "LOCK_AND_SNAPSHOT",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "已取得独占变更锁和基线哈希",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "已取得独占变更锁和基线哈希",
+          "owner": "network-operator-a"
+        }
+      ],
+      "verification_and_closeout": [
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-05",
+          "task_name": "切换 AZ-B 数据库路由下一跳",
+          "task_type": "CHANGE",
+          "sequence": 5,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "rtb-prod-app-b:172.20.32.0/20",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MODIFY_NEXT_HOP",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-001-TASK-06",
+          "task_name": "恢复全量业务探测并解除冻结",
+          "task_type": "CHANGE",
+          "sequence": 6,
+          "region": "cn-north-4",
+          "availability_zone": null,
+          "target_resource": "vpc-prod-core",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENABLE_FULL_TRAFFIC_AND_UNLOCK",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "双 AZ 探测达标且路由表已解锁",
+            "change_ticket": "CHG-SYN-NET-001"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "双 AZ 探测达标且路由表已解锁",
+          "owner": "network-operator-a"
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "step_id": "CHG-SYN-NET-001-PRECHECK-01",
+          "step_name": "核对双 AZ 路由资源",
+          "step_description": "核对双 AZ 路由资源",
+          "step_type": "PRECHECK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "两张路由表和目标 CIDR 均存在",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpc-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "两张路由表和目标 CIDR 均存在"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpc-prod-core"
+          ],
+          "validation_rules": [
+            "两张路由表和目标 CIDR 均存在",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-PRECHECK-02",
+          "step_name": "核对当前主链路下一跳",
+          "step_description": "核对当前主链路下一跳",
+          "step_type": "PRECHECK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "当前下一跳与基线快照一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "dc-primary"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "当前下一跳与基线快照一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT dc-primary"
+          ],
+          "validation_rules": [
+            "当前下一跳与基线快照一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-PRECHECK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-PRECHECK-03",
+          "step_name": "检查备用专线健康度",
+          "step_description": "检查备用专线健康度",
+          "step_type": "PRECHECK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "BFD 正常且连续 10 分钟无丢包",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "dc-standby"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "BFD 正常且连续 10 分钟无丢包"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT dc-standby"
+          ],
+          "validation_rules": [
+            "BFD 正常且连续 10 分钟无丢包",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-PRECHECK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-PRECHECK-04",
+          "step_name": "检查备用专线容量",
+          "step_description": "检查备用专线容量",
+          "step_type": "PRECHECK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "峰值利用率低于 60%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "dc-standby"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "峰值利用率低于 60%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT dc-standby"
+          ],
+          "validation_rules": [
+            "峰值利用率低于 60%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-PRECHECK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-PRECHECK-05",
+          "step_name": "检查变更窗口和业务冻结",
+          "step_description": "检查变更窗口和业务冻结",
+          "step_type": "PRECHECK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "窗口有效且无冲突变更",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "CHG-SYN-NET-001"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "窗口有效且无冲突变更"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT CHG-SYN-NET-001"
+          ],
+          "validation_rules": [
+            "窗口有效且无冲突变更",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-PRECHECK-04"
+          ]
+        }
+      ],
+      "change_implement": [
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-01",
+          "step_name": "冻结 AZ-A 路由表并记录版本",
+          "step_description": "冻结 AZ-A 路由表并记录版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "已取得独占变更锁和基线哈希",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "LOCK_AND_SNAPSHOT",
+            "desired_state": "已取得独占变更锁和基线哈希"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan LOCK_AND_SNAPSHOT rtb-prod-app-a"
+          ],
+          "validation_rules": [
+            "已取得独占变更锁和基线哈希",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-02",
+          "step_name": "切换 AZ-A 数据库路由下一跳",
+          "step_description": "切换 AZ-A 数据库路由下一跳",
+          "step_type": "IMPLEMENT",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-a:172.20.32.0/20"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MODIFY_NEXT_HOP",
+            "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MODIFY_NEXT_HOP rtb-prod-app-a:172.20.32.0/20"
+          ],
+          "validation_rules": [
+            "下一跳为 dc-standby 且路由状态 ACTIVE",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-IMPLEMENT-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-03",
+          "step_name": "放行 AZ-A 10% 合成探测流量",
+          "step_description": "放行 AZ-A 10% 合成探测流量",
+          "step_type": "IMPLEMENT",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "10% 探测连续两个周期达标",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "probe-order-pay-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENABLE_CANARY",
+            "desired_state": "10% 探测连续两个周期达标"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENABLE_CANARY probe-order-pay-a"
+          ],
+          "validation_rules": [
+            "10% 探测连续两个周期达标",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-IMPLEMENT-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-04",
+          "step_name": "冻结 AZ-B 路由表并记录版本",
+          "step_description": "冻结 AZ-B 路由表并记录版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "已取得独占变更锁和基线哈希",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "LOCK_AND_SNAPSHOT",
+            "desired_state": "已取得独占变更锁和基线哈希"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan LOCK_AND_SNAPSHOT rtb-prod-app-b"
+          ],
+          "validation_rules": [
+            "已取得独占变更锁和基线哈希",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-IMPLEMENT-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-05",
+          "step_name": "切换 AZ-B 数据库路由下一跳",
+          "step_description": "切换 AZ-B 数据库路由下一跳",
+          "step_type": "IMPLEMENT",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳为 dc-standby 且路由状态 ACTIVE",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-b:172.20.32.0/20"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MODIFY_NEXT_HOP",
+            "desired_state": "下一跳为 dc-standby 且路由状态 ACTIVE"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MODIFY_NEXT_HOP rtb-prod-app-b:172.20.32.0/20"
+          ],
+          "validation_rules": [
+            "下一跳为 dc-standby 且路由状态 ACTIVE",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-IMPLEMENT-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-IMPLEMENT-06",
+          "step_name": "恢复全量业务探测并解除冻结",
+          "step_description": "恢复全量业务探测并解除冻结",
+          "step_type": "IMPLEMENT",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "双 AZ 探测达标且路由表已解锁",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpc-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENABLE_FULL_TRAFFIC_AND_UNLOCK",
+            "desired_state": "双 AZ 探测达标且路由表已解锁"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENABLE_FULL_TRAFFIC_AND_UNLOCK vpc-prod-core"
+          ],
+          "validation_rules": [
+            "双 AZ 探测达标且路由表已解锁",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-IMPLEMENT-05"
+          ]
+        }
+      ],
+      "change_verified": [
+        {
+          "step_id": "CHG-SYN-NET-001-VALIDATE-01",
+          "step_name": "验证 AZ-A 有效下一跳",
+          "step_description": "验证 AZ-A 有效下一跳",
+          "step_type": "VALIDATE",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "172.20.32.0/20 有效下一跳为 dc-standby",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "rtb-prod-app-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "172.20.32.0/20 有效下一跳为 dc-standby"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE rtb-prod-app-a"
+          ],
+          "validation_rules": [
+            "172.20.32.0/20 有效下一跳为 dc-standby",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-VALIDATE-02",
+          "step_name": "验证 AZ-A 业务指标",
+          "step_description": "验证 AZ-A 业务指标",
+          "step_type": "VALIDATE",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "TCP 443/5432 成功率不低于 99.5%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "probe-order-pay-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "TCP 443/5432 成功率不低于 99.5%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE probe-order-pay-a"
+          ],
+          "validation_rules": [
+            "TCP 443/5432 成功率不低于 99.5%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-VALIDATE-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-VALIDATE-03",
+          "step_name": "验证 AZ-B 有效下一跳",
+          "step_description": "验证 AZ-B 有效下一跳",
+          "step_type": "VALIDATE",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "172.20.32.0/20 有效下一跳为 dc-standby",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "rtb-prod-app-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "172.20.32.0/20 有效下一跳为 dc-standby"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE rtb-prod-app-b"
+          ],
+          "validation_rules": [
+            "172.20.32.0/20 有效下一跳为 dc-standby",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-VALIDATE-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-VALIDATE-04",
+          "step_name": "验证 AZ-B 业务指标",
+          "step_description": "验证 AZ-B 业务指标",
+          "step_type": "VALIDATE",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "丢包不高于 1% 且 P95 时延不高于 30ms",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "probe-order-pay-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "丢包不高于 1% 且 P95 时延不高于 30ms"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE probe-order-pay-b"
+          ],
+          "validation_rules": [
+            "丢包不高于 1% 且 P95 时延不高于 30ms",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-VALIDATE-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-VALIDATE-05",
+          "step_name": "核对全局状态哈希",
+          "step_description": "核对全局状态哈希",
+          "step_type": "VALIDATE",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "最终快照与目标计划哈希一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpc-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "最终快照与目标计划哈希一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpc-prod-core"
+          ],
+          "validation_rules": [
+            "最终快照与目标计划哈希一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-VALIDATE-04"
+          ]
+        }
+      ],
+      "change_rollback": [
+        {
+          "step_id": "CHG-SYN-NET-001-ROLLBACK-01",
+          "step_name": "恢复 AZ-B 原下一跳",
+          "step_description": "恢复 AZ-B 原下一跳",
+          "step_type": "ROLLBACK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳恢复 dc-primary",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "下一跳恢复 dc-primary"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE rtb-prod-app-b"
+          ],
+          "validation_rules": [
+            "下一跳恢复 dc-primary",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-ROLLBACK-02",
+          "step_name": "验证 AZ-B 回退状态",
+          "step_description": "验证 AZ-B 回退状态",
+          "step_type": "ROLLBACK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "业务指标恢复基线",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "probe-order-pay-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "业务指标恢复基线"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE probe-order-pay-b"
+          ],
+          "validation_rules": [
+            "业务指标恢复基线",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-ROLLBACK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-ROLLBACK-03",
+          "step_name": "恢复 AZ-A 原下一跳",
+          "step_description": "恢复 AZ-A 原下一跳",
+          "step_type": "ROLLBACK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳恢复 dc-primary",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-app-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "下一跳恢复 dc-primary"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE rtb-prod-app-a"
+          ],
+          "validation_rules": [
+            "下一跳恢复 dc-primary",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-ROLLBACK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-001-ROLLBACK-04",
+          "step_name": "验证整体回退哈希",
+          "step_description": "验证整体回退哈希",
+          "step_type": "ROLLBACK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "状态哈希等于变更前哈希",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpc-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "状态哈希等于变更前哈希"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpc-prod-core"
+          ],
+          "validation_rules": [
+            "状态哈希等于变更前哈希",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-001-ROLLBACK-03"
+          ]
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "execution_status": "SUCCEEDED",
+          "started_at": "2026-08-02T01:00:00+08:00",
+          "ended_at": "2026-08-02T02:00:00+08:00",
+          "operator": "network-operator-a",
+          "approver": "change-manager-a",
+          "total_steps": 6,
+          "succeeded_steps": 6,
+          "failed_steps": 0,
+          "rollback_triggered": false,
+          "rollback_status": "NOT_REQUIRED",
+          "pre_state_hash": "dfb4b7ac4708e7dae6a5150b13aac564c69c328beb837fbadbbcecb43b40de0b",
+          "post_state_hash": "5309505d207b022ad6a0cf854ac720ea1258f8b076257e30885e34f8be51546d",
+          "summary": "双 AZ 依次切换成功，业务指标连续三个采样周期达标。",
+          "incident_id": null,
+          "result_items": [
+            "AZ-A route switched",
+            "AZ-B route switched",
+            "No rollback required"
+          ]
+        }
+      }
+    ]
+  }
+}

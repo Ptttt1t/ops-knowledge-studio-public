@@ -58,9 +58,11 @@ JSON 原文
   -> 精确 Key 映射 / 结构指纹识别
   -> TaskRecord 双视图逐项对账
   -> 按完整对象边界生成抽取单元
-  -> DeepSeek 对每个单元最多生成一张候选卡片
-  -> 证据原文定位与 lineage 保存
-  -> 结构覆盖与语义映射状态检查
+  -> Adapter 确定性生成任务/步骤列表与逐源证据
+  -> DeepSeek 生成标题、摘要、场景和风险叙述
+  -> 多卡响应稳定合并，不静默截断
+  -> Pointer/span/hash 证据矩阵与 lineage 保存
+  -> 结构、内容覆盖与语义映射状态检查
   -> 人工审核
 ```
 
@@ -69,6 +71,9 @@ JSON 原文
 - ProcedureStep 始终保持源数组顺序，不依赖自动猜测的 sequence 字段重排。
 - 单个 ProcedureStep 不会被从对象内部硬截断；超长组以完整 step 为最小单位分卡。
 - 每张 Procedure 卡保存 `procedure_group`、`step_start_index`、`step_end_index`、`total_steps_in_group`，便于 RAG 按源顺序恢复完整流程。
+- `TASKS_CANONICAL` 和四类 Procedure 的权威列表由 Adapter 逐条渲染，不允许模型删减、合并或重排；模型返回多张卡时只合并表达字段，同一结构单元最终仍保存一张卡。
+- 每个输出项保存 `source_pointer`、绝对字符范围和源片段 SHA-256。审批时会重新读取原文复算哈希，并校验输出序号与来源记录一一对应。
+- 质量规则按权威 `unit_role` 执行：前检卡不再因缺少回退字段而扣分，验证卡只强制验证内容，回退卡只强制回退内容。普通文档继续使用原有 `knowledge_type` 规则。
 - `EXECUTION_RESULT` 属于 `post_execution`：历史已完成工单可以参与经验检索和失败分析，但生成新方案时会被排除，避免结果泄漏。
 
 ## 完整性与语义状态
@@ -80,6 +85,13 @@ JSON 原文
   "extraction_strategy": "change_order_shape_v2",
   "extraction_report": {
     "case_id": "change-order:<source-sha256>",
+    "content_coverage": {
+      "status": "COMPLETE",
+      "expected_units": 7,
+      "generated_cards": 7,
+      "expected_source_items": 27,
+      "mapped_source_items": 27
+    },
     "change_order": {
       "semantic_mapping_status": "CONFIRMED",
       "safe_for_internal_index": true,
@@ -105,6 +117,8 @@ JSON 原文
 - `CONFLICT`：结构、数量或映射相互冲突，阻断内部入库。
 
 覆盖账本还统计进入抽取单元、已对账重复投影、API envelope、未覆盖路径、`NULL/EMPTY/VALUE` 观测，以及 TaskRecord 匹配和四组 Procedure 步骤数量。
+
+`content_coverage.status=COMPLETE` 才表示每个抽取单元都已落卡、每个 canonical TaskRecord/ProcedureStep 都建立了逐源映射。它仍不等于业务判断自动正确，但可以证明没有在抽取链路中静默丢记录。新版结构化卡的审批同时要求：内容覆盖完整、证据模式为 `STRUCTURED_JSON_POINTERS`、Pointer/span/hash 可复算且结构 blocker 为空。旧卡保留原审核规则并标记为未执行新版覆盖评估，避免兼容迁移伪造完整状态。
 
 ## 内部入库与外部发布是两道门
 

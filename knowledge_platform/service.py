@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from http import HTTPStatus
+import json
 from pathlib import Path
 import threading
 from typing import Any
@@ -24,6 +25,7 @@ from .documents import (
 from .change_order_adapter import (
     ChangeOrderExtractionPlan,
     ChangeOrderExtractionUnit,
+    SourceEvidenceRef,
     build_change_order_extraction_plan,
 )
 from .prompts import (
@@ -509,18 +511,25 @@ class KnowledgeService:
                 if not isinstance(raw_cards, list):
                     raise KnowledgeServiceError("模型返回的 knowledge_cards 不是数组")
 
-                card_limit = 1 if unit is not None else self.MAX_CARDS_PER_EXTRACTION
-                if unit is not None and len(raw_cards) > card_limit:
+                if unit is not None:
+                    prepared_cards = self._merge_structural_cards(
+                        raw_cards, unit
+                    )
+                else:
+                    prepared_cards = [
+                        KnowledgeCardDraft.from_dict(raw_card)
+                        for raw_card in raw_cards[: self.MAX_CARDS_PER_EXTRACTION]
+                    ]
+                if unit is not None and len(raw_cards) > 1:
                     self.trace.log(
-                        "change_order_unit_card_limit_applied",
+                        "change_order_unit_cards_merged",
                         source_name=document.name,
                         chunk_index=chunk.index,
                         unit_role=unit.role,
                         returned_cards=len(raw_cards),
-                        kept_cards=card_limit,
+                        merged_cards=len(prepared_cards),
                     )
-                for raw_card in raw_cards[:card_limit]:
-                    draft = KnowledgeCardDraft.from_dict(raw_card)
+                for draft in prepared_cards:
                     evidence_span = ground_evidence_quote(
                         extracted_chunk.content, draft.evidence_quote
                     )
@@ -544,12 +553,17 @@ class KnowledgeService:
                         ),
                     )
                     batch_key = self._batch_card_key(draft)
+                    if unit is not None:
+                        batch_key = f"structural:{unit.chunk.index}:{batch_key}"
                     if batch_key in batch_seen:
                         existing_index = batch_seen[batch_key]
                         existing_item = extracted[existing_index]
                         batch_duplicates_skipped += 1
                         score, issues = apply_structural_blockers(
-                            *draft.quality(extracted_chunk.content)
+                            *draft.quality(
+                                extracted_chunk.content,
+                                unit_role=unit.role if unit is not None else None,
+                            )
                         )
                         replace_existing = (
                             evidence_span is not None,
@@ -583,14 +597,22 @@ class KnowledgeService:
                         )
                         continue
                     batch_seen[batch_key] = len(extracted)
-                    if len(extracted) >= self.settings.max_cards_per_document:
+                    card_document_limit = (
+                        self.settings.max_change_order_chunks
+                        if change_order_plan is not None
+                        else self.settings.max_cards_per_document
+                    )
+                    if len(extracted) >= card_document_limit:
                         raise KnowledgeRequestError(
                             "单份文档生成的候选知识卡片超过限制",
                             status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                             code="document_card_limit_exceeded",
                         )
                     score, issues = apply_structural_blockers(
-                        *draft.quality(extracted_chunk.content)
+                        *draft.quality(
+                            extracted_chunk.content,
+                            unit_role=unit.role if unit is not None else None,
+                        )
                     )
                     comparison = self._compare(draft, budget=budget)
                     extracted.append(
@@ -664,6 +686,7 @@ class KnowledgeService:
         }
         card_ids: list[int] = []
         cards_by_role: dict[str, int] = {}
+        mapped_source_items = 0
         for item in extracted:
             status = (
                 CardStatus.PENDING_REVIEW
@@ -695,6 +718,25 @@ class KnowledgeService:
             )
             lineage_unit = extraction_units.get(item.chunk.index)
             if lineage_unit is not None:
+                if lineage_unit.source_evidence_refs:
+                    first_reference = lineage_unit.source_evidence_refs[0]
+                    evidence_locator = (
+                        f"{document.name}#pointer={first_reference.pointer};"
+                        f"chars={first_reference.char_start}-{first_reference.char_end};"
+                        f"sha256={first_reference.content_sha256};match=structured"
+                    )
+                    self.store.update_card_quality(
+                        card_id,
+                        evidence_quote=item.draft.evidence_quote,
+                        evidence_locator=evidence_locator,
+                        quality_score=item.quality_score,
+                        quality_issues=item.quality_issues,
+                        status=status,
+                        detail={
+                            "reason": "structured_evidence_locator_assigned",
+                            "unit_role": lineage_unit.role,
+                        },
+                    )
                 self.store.save_card_lineage(
                     card_id,
                     case_id=case_id,
@@ -705,6 +747,9 @@ class KnowledgeService:
                     source_order=lineage_unit.chunk.index,
                     unit_metadata=lineage_unit.lineage_metadata(),
                 )
+                source_item_rows = self._structured_source_item_rows(lineage_unit)
+                self.store.save_card_source_items(card_id, source_item_rows)
+                mapped_source_items += len(source_item_rows)
                 cards_by_role[lineage_unit.role] = (
                     cards_by_role.get(lineage_unit.role, 0) + 1
                 )
@@ -712,6 +757,22 @@ class KnowledgeService:
 
         extraction_report["generated_cards"] = len(card_ids)
         extraction_report["cards_by_role"] = cards_by_role
+        if change_order_plan is not None:
+            expected_source_items = sum(
+                len(unit.source_evidence_refs) for unit in change_order_plan.units
+            )
+            extraction_report["content_coverage"] = {
+                "status": (
+                    "COMPLETE"
+                    if len(card_ids) == len(change_order_plan.units)
+                    and mapped_source_items == expected_source_items
+                    else "INCOMPLETE"
+                ),
+                "expected_units": len(change_order_plan.units),
+                "generated_cards": len(card_ids),
+                "expected_source_items": expected_source_items,
+                "mapped_source_items": mapped_source_items,
+            }
         self.store.save_extraction_report(
             document_id, extraction_strategy, extraction_report
         )
@@ -738,6 +799,160 @@ class KnowledgeService:
         self.store.complete_ingestion(checksum, owner_token, document_id)
         self.trace.log("knowledge_ingest_completed", **result)
         return result
+
+    @staticmethod
+    def _merge_structural_cards(
+        raw_cards: list[Any], unit: ChangeOrderExtractionUnit
+    ) -> list[KnowledgeCardDraft]:
+        """Merge all cards returned for one structural unit without losing lists.
+
+        A ChangeOrder extraction unit maps to exactly one persisted knowledge card.
+        Models may nevertheless return several cards for that unit. Scalar fields
+        therefore use the first non-empty value and supporting lists are concatenated
+        in model-return order with stable de-duplication. The role's authoritative
+        list and evidence are always rebuilt from Adapter-owned source records.
+        """
+
+        drafts = [KnowledgeCardDraft.from_dict(raw_card) for raw_card in raw_cards]
+
+        scalar_fields = (
+            "title",
+            "summary",
+            "knowledge_type",
+            "scenario",
+            "object_type",
+            "object_name",
+        )
+        list_fields = (
+            "applicable_versions",
+            "prerequisites",
+            "procedure_steps",
+            "risks",
+            "rollback_steps",
+            "validation_steps",
+            "keywords",
+        )
+
+        merged: dict[str, Any] = {}
+        for field_name in scalar_fields:
+            merged[field_name] = next(
+                (
+                    value
+                    for draft in drafts
+                    if (value := getattr(draft, field_name))
+                ),
+                "",
+            )
+
+        default_type = (
+            "rollback"
+            if unit.role == "ROLLBACK_STEPS"
+            else "case"
+            if unit.role == "EXECUTION_RESULT"
+            else "procedure"
+        )
+        explicit_type = next(
+            (
+                str(raw_card.get("knowledge_type") or "").strip()
+                for raw_card in raw_cards
+                if isinstance(raw_card, dict)
+                and str(raw_card.get("knowledge_type") or "").strip()
+            ),
+            "",
+        )
+        merged["title"] = merged["title"] or f"{unit.role} 结构化知识"
+        merged["summary"] = merged["summary"] or (
+            f"按源 JSON Pointer 保留 {len(unit.source_evidence_refs)} 条结构化记录。"
+        )
+        merged["knowledge_type"] = explicit_type or default_type
+        merged["scenario"] = merged["scenario"] or "结构化变更单抽取"
+        merged["object_type"] = merged["object_type"] or "ChangeOrder"
+        merged["object_name"] = merged["object_name"] or (unit.pointer or "/")
+
+        for field_name in list_fields:
+            values: list[str] = []
+            for draft in drafts:
+                for value in getattr(draft, field_name):
+                    if value not in values:
+                        values.append(value)
+            merged[field_name] = values
+
+        primary_field = KnowledgeService._structured_primary_field(unit.role)
+        if primary_field is not None:
+            merged[primary_field] = [
+                KnowledgeService._render_structured_source_item(unit, reference)
+                for reference in unit.source_evidence_refs
+            ]
+
+        merged["evidence_quote"] = KnowledgeService._structured_evidence_quote(unit)
+        return [KnowledgeCardDraft.from_dict(merged)]
+
+    @staticmethod
+    def _structured_primary_field(role: str) -> str | None:
+        return {
+            "TASKS_CANONICAL": "procedure_steps",
+            "PRECHECK_STEPS": "procedure_steps",
+            "IMPLEMENTATION_STEPS": "procedure_steps",
+            "VALIDATION_STEPS": "validation_steps",
+            "ROLLBACK_STEPS": "rollback_steps",
+        }.get(role)
+
+    @staticmethod
+    def _source_fragment(
+        unit: ChangeOrderExtractionUnit, reference: SourceEvidenceRef
+    ) -> str:
+        start = reference.char_start - unit.chunk.char_start
+        end = reference.char_end - unit.chunk.char_start
+        if not 0 <= start < end <= len(unit.chunk.content):
+            raise KnowledgeServiceError("结构化证据范围不在所属抽取单元内")
+        fragment = unit.chunk.content[start:end]
+        if hashlib.sha256(fragment.encode("utf-8")).hexdigest() != reference.content_sha256:
+            raise KnowledgeServiceError("结构化证据哈希与抽取单元内容不一致")
+        return fragment
+
+    @staticmethod
+    def _render_structured_source_item(
+        unit: ChangeOrderExtractionUnit, reference: SourceEvidenceRef
+    ) -> str:
+        fragment = KnowledgeService._source_fragment(unit, reference).strip()
+        try:
+            value = json.loads(fragment)
+        except json.JSONDecodeError:
+            # Object members used as context may include their key. Procedure and
+            # task array members are complete JSON values and take the branch above.
+            compact = " ".join(fragment.split())
+        else:
+            compact = json.dumps(
+                value, ensure_ascii=False, sort_keys=False, separators=(",", ":")
+            )
+        return f"{reference.pointer}: {compact}"
+
+    @staticmethod
+    def _structured_evidence_quote(unit: ChangeOrderExtractionUnit) -> str:
+        if not unit.source_evidence_refs:
+            return ""
+        fragment = KnowledgeService._source_fragment(
+            unit, unit.source_evidence_refs[0]
+        ).strip()
+        return fragment[:300].rstrip()
+
+    @classmethod
+    def _structured_source_item_rows(
+        cls, unit: ChangeOrderExtractionUnit
+    ) -> list[dict[str, Any]]:
+        output_field = cls._structured_primary_field(unit.role) or "__evidence__"
+        return [
+            {
+                "output_field": output_field,
+                "output_index": output_index,
+                "source_index": reference.source_index,
+                "source_pointer": reference.pointer,
+                "source_hash": reference.content_sha256,
+                "char_start": reference.char_start,
+                "char_end": reference.char_end,
+            }
+            for output_index, reference in enumerate(unit.source_evidence_refs)
+        ]
 
     @staticmethod
     def _normalize_batch_value(value: Any) -> str:
@@ -842,6 +1057,12 @@ class KnowledgeService:
             )
             return [(chunk, payload, usage, split_depth)]
         except APIError as exc:
+            if structural_unit is not None:
+                raise KnowledgeServiceError(
+                    f"来源 {source_name} 在 {locator} 的结构化抽取失败；"
+                    "为避免破坏源对象边界，未继续拆分该结构单元："
+                    f"{exc}"
+                ) from exc
             if (
                 split_depth >= self.MAX_EXTRACTION_SPLIT_DEPTH
                 or len(chunk.content) < 800
@@ -1401,7 +1622,24 @@ class KnowledgeService:
                     f"{card['source_name']}#chunk={int(chunk['chunk_index']) + 1};"
                     f"chars={chunk['char_start']}-{chunk['char_end']};unverified"
                 )
-            score, issues = draft.quality(chunk["content"])
+            lineage = self.store.get_card_lineage(int(card["id"]))
+            unit_role = lineage.get("unit_role") if lineage is not None else None
+            source_items = self.store.list_card_source_items(int(card["id"]))
+            if (
+                lineage is not None
+                and lineage.get("evidence_mode") == "STRUCTURED_JSON_POINTERS"
+                and source_items
+            ):
+                first_source = source_items[0]
+                evidence_locator = (
+                    f"{card['source_name']}#pointer={first_source['source_pointer']};"
+                    f"chars={first_source['char_start']}-{first_source['char_end']};"
+                    f"sha256={first_source['source_hash']};match=structured"
+                )
+            score, issues = draft.quality(
+                chunk["content"],
+                unit_role=str(unit_role) if unit_role else None,
+            )
             extraction_report = self.store.get_extraction_report(
                 int(card["source_document_id"])
             )
@@ -1468,6 +1706,7 @@ class KnowledgeService:
         card["relations"] = self.store.list_relations(card_id)
         card["audit_log"] = self.store.list_audit(card_id)
         card["lineage"] = self.store.get_card_lineage(card_id)
+        card["source_items"] = self.store.list_card_source_items(card_id)
         card["extraction_report"] = self.store.get_extraction_report(
             int(card["source_document_id"])
         )

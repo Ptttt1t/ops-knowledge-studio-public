@@ -379,7 +379,7 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 使用 `python run.py <命令> --help` 查看完整参数。
 
-对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。报告区分结构覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
 
 Web 知识库中的每张卡片均提供“删除”按钮。删除操作会移除卡片、关系、结构 lineage 和检索映射，保留不可变审计记录；若卡片已同步到 MindMemOS，还会进入退休队列等待清理。此操作不可从界面撤销，删除前会再次确认。
 

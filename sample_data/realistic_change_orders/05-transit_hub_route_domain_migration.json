@@ -1,0 +1,2464 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_OK",
+  "msg": "synthetic demo change order",
+  "data": {
+    "synthetic_demo_data": true,
+    "data_classification": "SYNTHETIC_DEIDENTIFIED_DEMO",
+    "ticket_id": "CHG-SYN-NET-005",
+    "title": "[合成演示] Hub-Spoke 中转路由域十四步分波迁移",
+    "original_system": "synthetic-internal-change-platform",
+    "create_time": "2026-08-01T09:30:00+08:00",
+    "cloud_service": "Cloud Network",
+    "service": "production-network-foundation",
+    "micro_service": "network-control-plane",
+    "affected_service": "ops,shared,order,payment,data",
+    "change_scene": "TRANSIT_HUB_ROUTE_DOMAIN_MIGRATION",
+    "change_notes": "按运维、共享、应用、数据四波迁移；数据域验证失败后恢复原关联。",
+    "special_change_type": "PLANNED_HIGH_RISK_SYNTHETIC",
+    "change_guide": "分批执行、每批验证、异常立即停止并按逆序回退",
+    "severity": "S2",
+    "change_level": "HIGH",
+    "customer_sensed": "POSSIBLE_TRANSIENT_JITTER",
+    "affected_customer": "synthetic-internal-services",
+    "risk_level": "HIGH",
+    "impact_risk_level": "MEDIUM",
+    "region": "cn-east-3",
+    "expected_start_time": "2026-08-06T00:00:00+08:00",
+    "expected_end_time": "2026-08-06T03:00:00+08:00",
+    "expected_total_time": 180,
+    "executors": [
+      "network-operator-a",
+      "network-operator-b"
+    ],
+    "cooperators": [
+      "application-sre-a",
+      "monitoring-oncall-a"
+    ],
+    "reviewers": [
+      "change-manager-a",
+      "service-owner-a"
+    ],
+    "approval_status": "APPROVED_HISTORICAL_SYNTHETIC",
+    "high_risk_check": "PASSED_SYNTHETIC",
+    "authorization_reference": "AUTH-SYNTHETIC-ONLY",
+    "notification_status": "SIMULATED_COMPLETED",
+    "action_list": [
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-01",
+        "task_name": "创建目标路由域策略版本",
+        "task_type": "CHANGE",
+        "sequence": 1,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "tgw-domain-prod-v2",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "CREATE_POLICY_VERSION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "策略版本 v2 已创建未发布",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "策略版本 v2 已创建未发布",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-02",
+        "task_name": "迁移运维 Spoke-A 关联",
+        "task_type": "CHANGE",
+        "sequence": 2,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "spoke-ops-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-03",
+        "task_name": "迁移运维 Spoke-B 关联",
+        "task_type": "CHANGE",
+        "sequence": 3,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "spoke-ops-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-04",
+        "task_name": "迁移共享服务 Spoke-A 关联",
+        "task_type": "CHANGE",
+        "sequence": 4,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "spoke-shared-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-05",
+        "task_name": "迁移共享服务 Spoke-B 关联",
+        "task_type": "CHANGE",
+        "sequence": 5,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "spoke-shared-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-06",
+        "task_name": "迁移订单 Spoke-A 关联",
+        "task_type": "CHANGE",
+        "sequence": 6,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "spoke-order-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-07",
+        "task_name": "迁移订单 Spoke-B 关联",
+        "task_type": "CHANGE",
+        "sequence": 7,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "spoke-order-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-08",
+        "task_name": "迁移支付 Spoke-A 关联",
+        "task_type": "CHANGE",
+        "sequence": 8,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "spoke-payment-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-09",
+        "task_name": "迁移支付 Spoke-B 关联",
+        "task_type": "CHANGE",
+        "sequence": 9,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "spoke-payment-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-10",
+        "task_name": "迁移数据 Spoke-A 关联",
+        "task_type": "CHANGE",
+        "sequence": 10,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "spoke-data-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-11",
+        "task_name": "迁移数据 Spoke-B 关联",
+        "task_type": "CHANGE",
+        "sequence": 11,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "spoke-data-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MOVE_ASSOCIATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联至 tgw-domain-prod-v2",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联至 tgw-domain-prod-v2",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-12",
+        "task_name": "发布目标路由域传播策略",
+        "task_type": "CHANGE",
+        "sequence": 12,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "tgw-domain-prod-v2",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "PUBLISH_PROPAGATION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "所有期望前缀完成传播",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "所有期望前缀完成传播",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-13",
+        "task_name": "降低旧路由域优先级",
+        "task_type": "CHANGE",
+        "sequence": 13,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "tgw-domain-prod-v1",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "DEPRIORITIZE_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "旧路由域只保留回退路径",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "旧路由域只保留回退路径",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-005-TASK-14",
+        "task_name": "固化关联并解除变更锁",
+        "task_type": "CHANGE",
+        "sequence": 14,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "tgw-prod-core",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "COMMIT_AND_UNLOCK",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "关联快照已固化且变更锁释放",
+          "change_ticket": "CHG-SYN-NET-005"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "关联快照已固化且变更锁释放",
+        "owner": "network-operator-a"
+      }
+    ],
+    "change_tool_relate_action": {
+      "preparation_and_canary": [
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-01",
+          "task_name": "创建目标路由域策略版本",
+          "task_type": "CHANGE",
+          "sequence": 1,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "tgw-domain-prod-v2",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "CREATE_POLICY_VERSION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "策略版本 v2 已创建未发布",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "策略版本 v2 已创建未发布",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-02",
+          "task_name": "迁移运维 Spoke-A 关联",
+          "task_type": "CHANGE",
+          "sequence": 2,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "spoke-ops-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-03",
+          "task_name": "迁移运维 Spoke-B 关联",
+          "task_type": "CHANGE",
+          "sequence": 3,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "spoke-ops-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-04",
+          "task_name": "迁移共享服务 Spoke-A 关联",
+          "task_type": "CHANGE",
+          "sequence": 4,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "spoke-shared-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-05",
+          "task_name": "迁移共享服务 Spoke-B 关联",
+          "task_type": "CHANGE",
+          "sequence": 5,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "spoke-shared-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        }
+      ],
+      "primary_change_wave": [
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-06",
+          "task_name": "迁移订单 Spoke-A 关联",
+          "task_type": "CHANGE",
+          "sequence": 6,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "spoke-order-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-07",
+          "task_name": "迁移订单 Spoke-B 关联",
+          "task_type": "CHANGE",
+          "sequence": 7,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "spoke-order-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-08",
+          "task_name": "迁移支付 Spoke-A 关联",
+          "task_type": "CHANGE",
+          "sequence": 8,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "spoke-payment-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-09",
+          "task_name": "迁移支付 Spoke-B 关联",
+          "task_type": "CHANGE",
+          "sequence": 9,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "spoke-payment-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-10",
+          "task_name": "迁移数据 Spoke-A 关联",
+          "task_type": "CHANGE",
+          "sequence": 10,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "spoke-data-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        }
+      ],
+      "verification_and_closeout": [
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-11",
+          "task_name": "迁移数据 Spoke-B 关联",
+          "task_type": "CHANGE",
+          "sequence": 11,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "spoke-data-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MOVE_ASSOCIATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联至 tgw-domain-prod-v2",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联至 tgw-domain-prod-v2",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-12",
+          "task_name": "发布目标路由域传播策略",
+          "task_type": "CHANGE",
+          "sequence": 12,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "tgw-domain-prod-v2",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "PUBLISH_PROPAGATION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "所有期望前缀完成传播",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "所有期望前缀完成传播",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-13",
+          "task_name": "降低旧路由域优先级",
+          "task_type": "CHANGE",
+          "sequence": 13,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "tgw-domain-prod-v1",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "DEPRIORITIZE_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "旧路由域只保留回退路径",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "旧路由域只保留回退路径",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-005-TASK-14",
+          "task_name": "固化关联并解除变更锁",
+          "task_type": "CHANGE",
+          "sequence": 14,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "tgw-prod-core",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "COMMIT_AND_UNLOCK",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "关联快照已固化且变更锁释放",
+            "change_ticket": "CHG-SYN-NET-005"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "关联快照已固化且变更锁释放",
+          "owner": "network-operator-a"
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-01",
+          "step_name": "核对全部 Spoke 关联",
+          "step_description": "核对全部 Spoke 关联",
+          "step_type": "PRECHECK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "十个 Spoke 当前关联与快照一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "十个 Spoke 当前关联与快照一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-prod-core"
+          ],
+          "validation_rules": [
+            "十个 Spoke 当前关联与快照一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-02",
+          "step_name": "检查目标路由域配额",
+          "step_description": "检查目标路由域配额",
+          "step_type": "PRECHECK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "关联和传播配额余量超过 40%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-domain-prod-v2"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "关联和传播配额余量超过 40%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-domain-prod-v2"
+          ],
+          "validation_rules": [
+            "关联和传播配额余量超过 40%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-03",
+          "step_name": "检查前缀冲突",
+          "step_description": "检查前缀冲突",
+          "step_type": "PRECHECK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "目标域不存在更具体冲突前缀",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-route-analyzer"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "目标域不存在更具体冲突前缀"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-route-analyzer"
+          ],
+          "validation_rules": [
+            "目标域不存在更具体冲突前缀",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-04",
+          "step_name": "检查双 AZ 附件健康",
+          "step_description": "检查双 AZ 附件健康",
+          "step_type": "PRECHECK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "全部附件状态 AVAILABLE",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-attachments"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "全部附件状态 AVAILABLE"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-attachments"
+          ],
+          "validation_rules": [
+            "全部附件状态 AVAILABLE",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-05",
+          "step_name": "检查防火墙服务链",
+          "step_description": "检查防火墙服务链",
+          "step_type": "PRECHECK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "目标域传播包含安全检查路径",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "ew-firewall-chain"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "目标域传播包含安全检查路径"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT ew-firewall-chain"
+          ],
+          "validation_rules": [
+            "目标域传播包含安全检查路径",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-06",
+          "step_name": "检查数据域维护授权",
+          "step_description": "检查数据域维护授权",
+          "step_type": "PRECHECK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "数据域迁移已获双人确认",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "data-domain-approval"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "数据域迁移已获双人确认"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT data-domain-approval"
+          ],
+          "validation_rules": [
+            "数据域迁移已获双人确认",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-07",
+          "step_name": "检查监控采样",
+          "step_description": "检查监控采样",
+          "step_type": "PRECHECK",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "基线采样和告警通道正常",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-flow-monitor"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "基线采样和告警通道正常"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-flow-monitor"
+          ],
+          "validation_rules": [
+            "基线采样和告警通道正常",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-PRECHECK-08",
+          "step_name": "检查回退操作日志",
+          "step_description": "检查回退操作日志",
+          "step_type": "PRECHECK",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "全部关联具备幂等回退记录",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "tgw-operation-journal"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "全部关联具备幂等回退记录"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT tgw-operation-journal"
+          ],
+          "validation_rules": [
+            "全部关联具备幂等回退记录",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-PRECHECK-07"
+          ]
+        }
+      ],
+      "change_implement": [
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-01",
+          "step_name": "创建目标路由域策略版本",
+          "step_description": "创建目标路由域策略版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "策略版本 v2 已创建未发布",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-domain-prod-v2"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "CREATE_POLICY_VERSION",
+            "desired_state": "策略版本 v2 已创建未发布"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan CREATE_POLICY_VERSION tgw-domain-prod-v2"
+          ],
+          "validation_rules": [
+            "策略版本 v2 已创建未发布",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-02",
+          "step_name": "迁移运维 Spoke-A 关联",
+          "step_description": "迁移运维 Spoke-A 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-ops-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-ops-a"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-03",
+          "step_name": "迁移运维 Spoke-B 关联",
+          "step_description": "迁移运维 Spoke-B 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-ops-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-ops-b"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-04",
+          "step_name": "迁移共享服务 Spoke-A 关联",
+          "step_description": "迁移共享服务 Spoke-A 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-shared-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-shared-a"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-05",
+          "step_name": "迁移共享服务 Spoke-B 关联",
+          "step_description": "迁移共享服务 Spoke-B 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-shared-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-shared-b"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-06",
+          "step_name": "迁移订单 Spoke-A 关联",
+          "step_description": "迁移订单 Spoke-A 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-order-a"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-07",
+          "step_name": "迁移订单 Spoke-B 关联",
+          "step_description": "迁移订单 Spoke-B 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-order-b"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-08",
+          "step_name": "迁移支付 Spoke-A 关联",
+          "step_description": "迁移支付 Spoke-A 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-payment-a"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-09",
+          "step_name": "迁移支付 Spoke-B 关联",
+          "step_description": "迁移支付 Spoke-B 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-payment-b"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-10",
+          "step_name": "迁移数据 Spoke-A 关联",
+          "step_description": "迁移数据 Spoke-A 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-data-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-data-a"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-09"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-11",
+          "step_name": "迁移数据 Spoke-B 关联",
+          "step_description": "迁移数据 Spoke-B 关联",
+          "step_type": "IMPLEMENT",
+          "sequence": 11,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联至 tgw-domain-prod-v2",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-data-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MOVE_ASSOCIATION",
+            "desired_state": "关联至 tgw-domain-prod-v2"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MOVE_ASSOCIATION spoke-data-b"
+          ],
+          "validation_rules": [
+            "关联至 tgw-domain-prod-v2",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-10"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-12",
+          "step_name": "发布目标路由域传播策略",
+          "step_description": "发布目标路由域传播策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 12,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "所有期望前缀完成传播",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-domain-prod-v2"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "PUBLISH_PROPAGATION",
+            "desired_state": "所有期望前缀完成传播"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan PUBLISH_PROPAGATION tgw-domain-prod-v2"
+          ],
+          "validation_rules": [
+            "所有期望前缀完成传播",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-11"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-13",
+          "step_name": "降低旧路由域优先级",
+          "step_description": "降低旧路由域优先级",
+          "step_type": "IMPLEMENT",
+          "sequence": 13,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "旧路由域只保留回退路径",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-domain-prod-v1"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "DEPRIORITIZE_POLICY",
+            "desired_state": "旧路由域只保留回退路径"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan DEPRIORITIZE_POLICY tgw-domain-prod-v1"
+          ],
+          "validation_rules": [
+            "旧路由域只保留回退路径",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-12"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-IMPLEMENT-14",
+          "step_name": "固化关联并解除变更锁",
+          "step_description": "固化关联并解除变更锁",
+          "step_type": "IMPLEMENT",
+          "sequence": 14,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "关联快照已固化且变更锁释放",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "COMMIT_AND_UNLOCK",
+            "desired_state": "关联快照已固化且变更锁释放"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan COMMIT_AND_UNLOCK tgw-prod-core"
+          ],
+          "validation_rules": [
+            "关联快照已固化且变更锁释放",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-IMPLEMENT-13"
+          ]
+        }
+      ],
+      "change_verified": [
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-01",
+          "step_name": "验证运维域互通",
+          "step_description": "验证运维域互通",
+          "step_type": "VALIDATE",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "SSH 跳板探测成功率 100%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "spoke-ops"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "SSH 跳板探测成功率 100%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE spoke-ops"
+          ],
+          "validation_rules": [
+            "SSH 跳板探测成功率 100%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-02",
+          "step_name": "验证共享服务域",
+          "step_description": "验证共享服务域",
+          "step_type": "VALIDATE",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "DNS、NTP 和制品库均可达",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "spoke-shared"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "DNS、NTP 和制品库均可达"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE spoke-shared"
+          ],
+          "validation_rules": [
+            "DNS、NTP 和制品库均可达",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-03",
+          "step_name": "验证订单双 AZ",
+          "step_description": "验证订单双 AZ",
+          "step_type": "VALIDATE",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "健康检查成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "spoke-order"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "健康检查成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE spoke-order"
+          ],
+          "validation_rules": [
+            "健康检查成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-04",
+          "step_name": "验证支付双 AZ",
+          "step_description": "验证支付双 AZ",
+          "step_type": "VALIDATE",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "健康检查成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "spoke-payment"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "健康检查成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE spoke-payment"
+          ],
+          "validation_rules": [
+            "健康检查成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-05",
+          "step_name": "验证数据双 AZ",
+          "step_description": "验证数据双 AZ",
+          "step_type": "VALIDATE",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "数据库连接成功率不低于 99.5%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "spoke-data"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "数据库连接成功率不低于 99.5%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE spoke-data"
+          ],
+          "validation_rules": [
+            "数据库连接成功率不低于 99.5%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-06",
+          "step_name": "验证东西向防火墙",
+          "step_description": "验证东西向防火墙",
+          "step_type": "VALIDATE",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "所有跨域流量经过服务链",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "ew-firewall-chain"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "所有跨域流量经过服务链"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE ew-firewall-chain"
+          ],
+          "validation_rules": [
+            "所有跨域流量经过服务链",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-07",
+          "step_name": "验证路由前缀数量",
+          "step_description": "验证路由前缀数量",
+          "step_type": "VALIDATE",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "传播前缀数量等于审批基线",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "tgw-domain-prod-v2"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "传播前缀数量等于审批基线"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE tgw-domain-prod-v2"
+          ],
+          "validation_rules": [
+            "传播前缀数量等于审批基线",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-08",
+          "step_name": "验证非对称路由",
+          "step_description": "验证非对称路由",
+          "step_type": "VALIDATE",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "未发现非对称会话",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "tgw-flow-monitor"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "未发现非对称会话"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE tgw-flow-monitor"
+          ],
+          "validation_rules": [
+            "未发现非对称会话",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-09",
+          "step_name": "验证 P95 时延",
+          "step_description": "验证 P95 时延",
+          "step_type": "VALIDATE",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "跨域 P95 时延不高于 15ms",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "tgw-latency"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "跨域 P95 时延不高于 15ms"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE tgw-latency"
+          ],
+          "validation_rules": [
+            "跨域 P95 时延不高于 15ms",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-VALIDATE-10",
+          "step_name": "核对全局状态哈希",
+          "step_description": "核对全局状态哈希",
+          "step_type": "VALIDATE",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "最终哈希与目标计划一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "tgw-prod-core"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "最终哈希与目标计划一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE tgw-prod-core"
+          ],
+          "validation_rules": [
+            "最终哈希与目标计划一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-VALIDATE-09"
+          ]
+        }
+      ],
+      "change_rollback": [
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-01",
+          "step_name": "逆序恢复迁移项 12",
+          "step_description": "逆序恢复迁移项 12",
+          "step_type": "ROLLBACK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "tgw-domain-prod-v1 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-domain-prod-v1"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "tgw-domain-prod-v1 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE tgw-domain-prod-v1"
+          ],
+          "validation_rules": [
+            "tgw-domain-prod-v1 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-02",
+          "step_name": "逆序恢复迁移项 11",
+          "step_description": "逆序恢复迁移项 11",
+          "step_type": "ROLLBACK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "tgw-domain-prod-v2 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "tgw-domain-prod-v2"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "tgw-domain-prod-v2 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE tgw-domain-prod-v2"
+          ],
+          "validation_rules": [
+            "tgw-domain-prod-v2 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-03",
+          "step_name": "逆序恢复迁移项 10",
+          "step_description": "逆序恢复迁移项 10",
+          "step_type": "ROLLBACK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-data-b 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-data-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-data-b 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-data-b"
+          ],
+          "validation_rules": [
+            "spoke-data-b 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-04",
+          "step_name": "逆序恢复迁移项 09",
+          "step_description": "逆序恢复迁移项 09",
+          "step_type": "ROLLBACK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-data-a 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-data-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-data-a 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-data-a"
+          ],
+          "validation_rules": [
+            "spoke-data-a 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-05",
+          "step_name": "逆序恢复迁移项 08",
+          "step_description": "逆序恢复迁移项 08",
+          "step_type": "ROLLBACK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-payment-b 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-payment-b 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-payment-b"
+          ],
+          "validation_rules": [
+            "spoke-payment-b 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-06",
+          "step_name": "逆序恢复迁移项 07",
+          "step_description": "逆序恢复迁移项 07",
+          "step_type": "ROLLBACK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-payment-a 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-payment-a 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-payment-a"
+          ],
+          "validation_rules": [
+            "spoke-payment-a 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-07",
+          "step_name": "逆序恢复迁移项 06",
+          "step_description": "逆序恢复迁移项 06",
+          "step_type": "ROLLBACK",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-order-b 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-order-b 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-order-b"
+          ],
+          "validation_rules": [
+            "spoke-order-b 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-08",
+          "step_name": "逆序恢复迁移项 05",
+          "step_description": "逆序恢复迁移项 05",
+          "step_type": "ROLLBACK",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-order-a 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-order-a 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-order-a"
+          ],
+          "validation_rules": [
+            "spoke-order-a 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-09",
+          "step_name": "逆序恢复迁移项 04",
+          "step_description": "逆序恢复迁移项 04",
+          "step_type": "ROLLBACK",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-shared-b 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-shared-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-shared-b 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-shared-b"
+          ],
+          "validation_rules": [
+            "spoke-shared-b 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-10",
+          "step_name": "逆序恢复迁移项 03",
+          "step_description": "逆序恢复迁移项 03",
+          "step_type": "ROLLBACK",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-shared-a 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-shared-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-shared-a 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-shared-a"
+          ],
+          "validation_rules": [
+            "spoke-shared-a 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-09"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-11",
+          "step_name": "逆序恢复迁移项 02",
+          "step_description": "逆序恢复迁移项 02",
+          "step_type": "ROLLBACK",
+          "sequence": 11,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-ops-b 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-ops-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-ops-b 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-ops-b"
+          ],
+          "validation_rules": [
+            "spoke-ops-b 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-10"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-005-ROLLBACK-12",
+          "step_name": "逆序恢复迁移项 01",
+          "step_description": "逆序恢复迁移项 01",
+          "step_type": "ROLLBACK",
+          "sequence": 12,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "spoke-ops-a 恢复原路由域关联",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "spoke-ops-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "spoke-ops-a 恢复原路由域关联"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE spoke-ops-a"
+          ],
+          "validation_rules": [
+            "spoke-ops-a 恢复原路由域关联",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-005-ROLLBACK-11"
+          ]
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "execution_status": "ROLLED_BACK",
+          "started_at": "2026-08-06T00:00:00+08:00",
+          "ended_at": "2026-08-06T03:00:00+08:00",
+          "operator": "network-operator-a",
+          "approver": "change-manager-a",
+          "total_steps": 14,
+          "succeeded_steps": 10,
+          "failed_steps": 1,
+          "rollback_triggered": true,
+          "rollback_status": "SUCCEEDED",
+          "pre_state_hash": "496026a4b2239cbf2703f88da4444481bae23417cd62cb8a554cbef3e60fe6ff",
+          "post_state_hash": "496026a4b2239cbf2703f88da4444481bae23417cd62cb8a554cbef3e60fe6ff",
+          "summary": "数据域连接成功率降至 98.7%，停止后续步骤并逆序恢复十二项关联，状态哈希恢复。",
+          "incident_id": "INC-SYN-TGW-005",
+          "result_items": [
+            "Data-domain success rate 98.7%",
+            "12 reverse operations completed",
+            "Pre-state hash restored"
+          ]
+        }
+      }
+    ]
+  }
+}

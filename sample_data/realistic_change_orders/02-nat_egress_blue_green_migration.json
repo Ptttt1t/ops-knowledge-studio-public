@@ -1,0 +1,1480 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_OK",
+  "msg": "synthetic demo change order",
+  "data": {
+    "synthetic_demo_data": true,
+    "data_classification": "SYNTHETIC_DEIDENTIFIED_DEMO",
+    "ticket_id": "CHG-SYN-NET-002",
+    "title": "[合成演示] 生产 NAT 网关 EIP 与 SNAT 出口蓝绿迁移",
+    "original_system": "synthetic-internal-change-platform",
+    "create_time": "2026-08-01T09:30:00+08:00",
+    "cloud_service": "Cloud Network",
+    "service": "production-network-foundation",
+    "micro_service": "network-control-plane",
+    "affected_service": "public-api,batch-worker",
+    "change_scene": "NAT_EGRESS_BLUE_GREEN_MIGRATION",
+    "change_notes": "将双 AZ 公网出口从蓝色 NAT 迁移至绿色 NAT，保留旧网关热备。",
+    "special_change_type": "PLANNED_HIGH_RISK_SYNTHETIC",
+    "change_guide": "分批执行、每批验证、异常立即停止并按逆序回退",
+    "severity": "S2",
+    "change_level": "HIGH",
+    "customer_sensed": "POSSIBLE_TRANSIENT_JITTER",
+    "affected_customer": "synthetic-internal-services",
+    "risk_level": "HIGH",
+    "impact_risk_level": "MEDIUM",
+    "region": "cn-east-3",
+    "expected_start_time": "2026-08-03T00:30:00+08:00",
+    "expected_end_time": "2026-08-03T02:00:00+08:00",
+    "expected_total_time": 90,
+    "executors": [
+      "network-operator-a",
+      "network-operator-b"
+    ],
+    "cooperators": [
+      "application-sre-a",
+      "monitoring-oncall-a"
+    ],
+    "reviewers": [
+      "change-manager-a",
+      "service-owner-a"
+    ],
+    "approval_status": "APPROVED_HISTORICAL_SYNTHETIC",
+    "high_risk_check": "PASSED_SYNTHETIC",
+    "authorization_reference": "AUTH-SYNTHETIC-ONLY",
+    "notification_status": "SIMULATED_COMPLETED",
+    "action_list": [
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-01",
+        "task_name": "校验绿色 NAT 网关配置版本",
+        "task_type": "CHANGE",
+        "sequence": 1,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "nat-prod-green",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "VERIFY_TARGET_CONFIG",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "绿色 NAT 配置版本与审批包一致",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "绿色 NAT 配置版本与审批包一致",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-02",
+        "task_name": "关联绿色出口 EIP",
+        "task_type": "CHANGE",
+        "sequence": 2,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "eip-prod-egress-green",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ASSOCIATE_EIP",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "EIP 已绑定 nat-prod-green",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "EIP 已绑定 nat-prod-green",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-03",
+        "task_name": "同步生产 SNAT 规则",
+        "task_type": "CHANGE",
+        "sequence": 3,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "nat-prod-green:snat-rules",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "UPSERT_SNAT_RULES",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "8 条 SNAT 规则与旧网关一致",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "8 条 SNAT 规则与旧网关一致",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-04",
+        "task_name": "切换 AZ-A 默认出口路由",
+        "task_type": "CHANGE",
+        "sequence": 4,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "rtb-prod-egress-a:0.0.0.0/0",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MODIFY_NEXT_HOP",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "下一跳为 nat-prod-green",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "下一跳为 nat-prod-green",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-05",
+        "task_name": "验证 AZ-A 出口与固定源地址",
+        "task_type": "CHANGE",
+        "sequence": 5,
+        "region": "cn-east-3",
+        "availability_zone": "az-a",
+        "target_resource": "egress-probe-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "VALIDATE_EGRESS",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-06",
+        "task_name": "切换 AZ-B 默认出口路由",
+        "task_type": "CHANGE",
+        "sequence": 6,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "rtb-prod-egress-b:0.0.0.0/0",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "MODIFY_NEXT_HOP",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "下一跳为 nat-prod-green",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "下一跳为 nat-prod-green",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-07",
+        "task_name": "验证 AZ-B 出口与固定源地址",
+        "task_type": "CHANGE",
+        "sequence": 7,
+        "region": "cn-east-3",
+        "availability_zone": "az-b",
+        "target_resource": "egress-probe-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "VALIDATE_EGRESS",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-002-TASK-08",
+        "task_name": "将旧 NAT 网关置为热备",
+        "task_type": "CHANGE",
+        "sequence": 8,
+        "region": "cn-east-3",
+        "availability_zone": null,
+        "target_resource": "nat-prod-blue",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "SET_STANDBY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "旧 NAT 保留配置且不承载新连接",
+          "change_ticket": "CHG-SYN-NET-002"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "旧 NAT 保留配置且不承载新连接",
+        "owner": "network-operator-a"
+      }
+    ],
+    "change_tool_relate_action": {
+      "preparation_and_canary": [
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-01",
+          "task_name": "校验绿色 NAT 网关配置版本",
+          "task_type": "CHANGE",
+          "sequence": 1,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "nat-prod-green",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "VERIFY_TARGET_CONFIG",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "绿色 NAT 配置版本与审批包一致",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "绿色 NAT 配置版本与审批包一致",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-02",
+          "task_name": "关联绿色出口 EIP",
+          "task_type": "CHANGE",
+          "sequence": 2,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "eip-prod-egress-green",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ASSOCIATE_EIP",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "EIP 已绑定 nat-prod-green",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "EIP 已绑定 nat-prod-green",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-03",
+          "task_name": "同步生产 SNAT 规则",
+          "task_type": "CHANGE",
+          "sequence": 3,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "nat-prod-green:snat-rules",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "UPSERT_SNAT_RULES",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "8 条 SNAT 规则与旧网关一致",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "8 条 SNAT 规则与旧网关一致",
+          "owner": "network-operator-a"
+        }
+      ],
+      "primary_change_wave": [
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-04",
+          "task_name": "切换 AZ-A 默认出口路由",
+          "task_type": "CHANGE",
+          "sequence": 4,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "rtb-prod-egress-a:0.0.0.0/0",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MODIFY_NEXT_HOP",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "下一跳为 nat-prod-green",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "下一跳为 nat-prod-green",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-05",
+          "task_name": "验证 AZ-A 出口与固定源地址",
+          "task_type": "CHANGE",
+          "sequence": 5,
+          "region": "cn-east-3",
+          "availability_zone": "az-a",
+          "target_resource": "egress-probe-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "VALIDATE_EGRESS",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-06",
+          "task_name": "切换 AZ-B 默认出口路由",
+          "task_type": "CHANGE",
+          "sequence": 6,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "rtb-prod-egress-b:0.0.0.0/0",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "MODIFY_NEXT_HOP",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "下一跳为 nat-prod-green",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "下一跳为 nat-prod-green",
+          "owner": "network-operator-a"
+        }
+      ],
+      "verification_and_closeout": [
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-07",
+          "task_name": "验证 AZ-B 出口与固定源地址",
+          "task_type": "CHANGE",
+          "sequence": 7,
+          "region": "cn-east-3",
+          "availability_zone": "az-b",
+          "target_resource": "egress-probe-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "VALIDATE_EGRESS",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-002-TASK-08",
+          "task_name": "将旧 NAT 网关置为热备",
+          "task_type": "CHANGE",
+          "sequence": 8,
+          "region": "cn-east-3",
+          "availability_zone": null,
+          "target_resource": "nat-prod-blue",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "SET_STANDBY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "旧 NAT 保留配置且不承载新连接",
+            "change_ticket": "CHG-SYN-NET-002"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "旧 NAT 保留配置且不承载新连接",
+          "owner": "network-operator-a"
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-01",
+          "step_name": "核对绿色 NAT 资源",
+          "step_description": "核对绿色 NAT 资源",
+          "step_type": "PRECHECK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "网关、EIP 和子网状态 AVAILABLE",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "nat-prod-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "网关、EIP 和子网状态 AVAILABLE"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT nat-prod-green"
+          ],
+          "validation_rules": [
+            "网关、EIP 和子网状态 AVAILABLE",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-02",
+          "step_name": "对账 SNAT 规则",
+          "step_description": "对账 SNAT 规则",
+          "step_type": "PRECHECK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "源规则共 8 条且无重复 CIDR",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "nat-prod-blue"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "源规则共 8 条且无重复 CIDR"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT nat-prod-blue"
+          ],
+          "validation_rules": [
+            "源规则共 8 条且无重复 CIDR",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-PRECHECK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-03",
+          "step_name": "检查 EIP 信誉与带宽",
+          "step_description": "检查 EIP 信誉与带宽",
+          "step_type": "PRECHECK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "无封禁且带宽余量超过 50%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "eip-prod-egress-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "无封禁且带宽余量超过 50%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT eip-prod-egress-green"
+          ],
+          "validation_rules": [
+            "无封禁且带宽余量超过 50%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-PRECHECK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-04",
+          "step_name": "检查外部白名单",
+          "step_description": "检查外部白名单",
+          "step_type": "PRECHECK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "绿色 EIP 已加入合作方白名单",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "partner-allowlist"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "绿色 EIP 已加入合作方白名单"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT partner-allowlist"
+          ],
+          "validation_rules": [
+            "绿色 EIP 已加入合作方白名单",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-PRECHECK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-05",
+          "step_name": "检查连接排空条件",
+          "step_description": "检查连接排空条件",
+          "step_type": "PRECHECK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "长连接数量低于门槛",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "nat-prod-blue"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "长连接数量低于门槛"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT nat-prod-blue"
+          ],
+          "validation_rules": [
+            "长连接数量低于门槛",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-PRECHECK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-PRECHECK-06",
+          "step_name": "检查变更互斥锁",
+          "step_description": "检查变更互斥锁",
+          "step_type": "PRECHECK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "没有并发路由或防火墙变更",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpc-prod-egress"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "没有并发路由或防火墙变更"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpc-prod-egress"
+          ],
+          "validation_rules": [
+            "没有并发路由或防火墙变更",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-PRECHECK-05"
+          ]
+        }
+      ],
+      "change_implement": [
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-01",
+          "step_name": "校验绿色 NAT 网关配置版本",
+          "step_description": "校验绿色 NAT 网关配置版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "绿色 NAT 配置版本与审批包一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "nat-prod-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VERIFY_TARGET_CONFIG",
+            "desired_state": "绿色 NAT 配置版本与审批包一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan VERIFY_TARGET_CONFIG nat-prod-green"
+          ],
+          "validation_rules": [
+            "绿色 NAT 配置版本与审批包一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-02",
+          "step_name": "关联绿色出口 EIP",
+          "step_description": "关联绿色出口 EIP",
+          "step_type": "IMPLEMENT",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "EIP 已绑定 nat-prod-green",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eip-prod-egress-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ASSOCIATE_EIP",
+            "desired_state": "EIP 已绑定 nat-prod-green"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ASSOCIATE_EIP eip-prod-egress-green"
+          ],
+          "validation_rules": [
+            "EIP 已绑定 nat-prod-green",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-03",
+          "step_name": "同步生产 SNAT 规则",
+          "step_description": "同步生产 SNAT 规则",
+          "step_type": "IMPLEMENT",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "8 条 SNAT 规则与旧网关一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "nat-prod-green:snat-rules"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "UPSERT_SNAT_RULES",
+            "desired_state": "8 条 SNAT 规则与旧网关一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan UPSERT_SNAT_RULES nat-prod-green:snat-rules"
+          ],
+          "validation_rules": [
+            "8 条 SNAT 规则与旧网关一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-04",
+          "step_name": "切换 AZ-A 默认出口路由",
+          "step_description": "切换 AZ-A 默认出口路由",
+          "step_type": "IMPLEMENT",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳为 nat-prod-green",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-egress-a:0.0.0.0/0"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MODIFY_NEXT_HOP",
+            "desired_state": "下一跳为 nat-prod-green"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MODIFY_NEXT_HOP rtb-prod-egress-a:0.0.0.0/0"
+          ],
+          "validation_rules": [
+            "下一跳为 nat-prod-green",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-05",
+          "step_name": "验证 AZ-A 出口与固定源地址",
+          "step_description": "验证 AZ-A 出口与固定源地址",
+          "step_type": "IMPLEMENT",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "egress-probe-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE_EGRESS",
+            "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan VALIDATE_EGRESS egress-probe-a"
+          ],
+          "validation_rules": [
+            "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-06",
+          "step_name": "切换 AZ-B 默认出口路由",
+          "step_description": "切换 AZ-B 默认出口路由",
+          "step_type": "IMPLEMENT",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳为 nat-prod-green",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-egress-b:0.0.0.0/0"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "MODIFY_NEXT_HOP",
+            "desired_state": "下一跳为 nat-prod-green"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan MODIFY_NEXT_HOP rtb-prod-egress-b:0.0.0.0/0"
+          ],
+          "validation_rules": [
+            "下一跳为 nat-prod-green",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-07",
+          "step_name": "验证 AZ-B 出口与固定源地址",
+          "step_description": "验证 AZ-B 出口与固定源地址",
+          "step_type": "IMPLEMENT",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "egress-probe-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE_EGRESS",
+            "desired_state": "HTTPS 成功率不低于 99.9% 且源 EIP 正确"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan VALIDATE_EGRESS egress-probe-b"
+          ],
+          "validation_rules": [
+            "HTTPS 成功率不低于 99.9% 且源 EIP 正确",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-IMPLEMENT-08",
+          "step_name": "将旧 NAT 网关置为热备",
+          "step_description": "将旧 NAT 网关置为热备",
+          "step_type": "IMPLEMENT",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "旧 NAT 保留配置且不承载新连接",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "nat-prod-blue"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "SET_STANDBY",
+            "desired_state": "旧 NAT 保留配置且不承载新连接"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan SET_STANDBY nat-prod-blue"
+          ],
+          "validation_rules": [
+            "旧 NAT 保留配置且不承载新连接",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-IMPLEMENT-07"
+          ]
+        }
+      ],
+      "change_verified": [
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-01",
+          "step_name": "验证双 AZ 默认路由",
+          "step_description": "验证双 AZ 默认路由",
+          "step_type": "VALIDATE",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "两张默认路由均指向 nat-prod-green",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpc-prod-egress"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "两张默认路由均指向 nat-prod-green"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpc-prod-egress"
+          ],
+          "validation_rules": [
+            "两张默认路由均指向 nat-prod-green",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-02",
+          "step_name": "验证公网 HTTPS",
+          "step_description": "验证公网 HTTPS",
+          "step_type": "VALIDATE",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "public-api-probe"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE public-api-probe"
+          ],
+          "validation_rules": [
+            "成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-VALIDATE-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-03",
+          "step_name": "验证 DNS 与 NTP 出口",
+          "step_description": "验证 DNS 与 NTP 出口",
+          "step_type": "VALIDATE",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "UDP/TCP 探测均成功",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "infra-egress-probe"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "UDP/TCP 探测均成功"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE infra-egress-probe"
+          ],
+          "validation_rules": [
+            "UDP/TCP 探测均成功",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-VALIDATE-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-04",
+          "step_name": "验证源 EIP",
+          "step_description": "验证源 EIP",
+          "step_type": "VALIDATE",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "所有新连接源地址为绿色 EIP",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "egress-observer"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "所有新连接源地址为绿色 EIP"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE egress-observer"
+          ],
+          "validation_rules": [
+            "所有新连接源地址为绿色 EIP",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-VALIDATE-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-05",
+          "step_name": "验证 SNAT 端口容量",
+          "step_description": "验证 SNAT 端口容量",
+          "step_type": "VALIDATE",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "端口利用率低于 50%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "nat-prod-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "端口利用率低于 50%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE nat-prod-green"
+          ],
+          "validation_rules": [
+            "端口利用率低于 50%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-VALIDATE-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-VALIDATE-06",
+          "step_name": "验证旧 NAT 无新增连接",
+          "step_description": "验证旧 NAT 无新增连接",
+          "step_type": "VALIDATE",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "连续两周期无新增生产连接",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "nat-prod-blue"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "连续两周期无新增生产连接"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE nat-prod-blue"
+          ],
+          "validation_rules": [
+            "连续两周期无新增生产连接",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-VALIDATE-05"
+          ]
+        }
+      ],
+      "change_rollback": [
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-01",
+          "step_name": "恢复 AZ-B 默认路由",
+          "step_description": "恢复 AZ-B 默认路由",
+          "step_type": "ROLLBACK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳恢复 nat-prod-blue",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-egress-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "下一跳恢复 nat-prod-blue"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE rtb-prod-egress-b"
+          ],
+          "validation_rules": [
+            "下一跳恢复 nat-prod-blue",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-02",
+          "step_name": "恢复 AZ-A 默认路由",
+          "step_description": "恢复 AZ-A 默认路由",
+          "step_type": "ROLLBACK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "下一跳恢复 nat-prod-blue",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "rtb-prod-egress-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "下一跳恢复 nat-prod-blue"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE rtb-prod-egress-a"
+          ],
+          "validation_rules": [
+            "下一跳恢复 nat-prod-blue",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-ROLLBACK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-03",
+          "step_name": "恢复旧 NAT 承载状态",
+          "step_description": "恢复旧 NAT 承载状态",
+          "step_type": "ROLLBACK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "旧 NAT 状态 ACTIVE",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "nat-prod-blue"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "旧 NAT 状态 ACTIVE"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE nat-prod-blue"
+          ],
+          "validation_rules": [
+            "旧 NAT 状态 ACTIVE",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-ROLLBACK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-04",
+          "step_name": "停止绿色 NAT 新连接",
+          "step_description": "停止绿色 NAT 新连接",
+          "step_type": "ROLLBACK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "绿色 NAT 不再接收新连接",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "nat-prod-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "绿色 NAT 不再接收新连接"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE nat-prod-green"
+          ],
+          "validation_rules": [
+            "绿色 NAT 不再接收新连接",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-ROLLBACK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-05",
+          "step_name": "解除绿色 EIP 绑定",
+          "step_description": "解除绿色 EIP 绑定",
+          "step_type": "ROLLBACK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "EIP 回到 RESERVED",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eip-prod-egress-green"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "EIP 回到 RESERVED"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eip-prod-egress-green"
+          ],
+          "validation_rules": [
+            "EIP 回到 RESERVED",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-ROLLBACK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-002-ROLLBACK-06",
+          "step_name": "核对回退后出口",
+          "step_description": "核对回退后出口",
+          "step_type": "ROLLBACK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "源 EIP 和状态哈希恢复基线",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpc-prod-egress"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "源 EIP 和状态哈希恢复基线"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpc-prod-egress"
+          ],
+          "validation_rules": [
+            "源 EIP 和状态哈希恢复基线",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-002-ROLLBACK-05"
+          ]
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "execution_status": "SUCCEEDED",
+          "started_at": "2026-08-03T00:30:00+08:00",
+          "ended_at": "2026-08-03T02:00:00+08:00",
+          "operator": "network-operator-a",
+          "approver": "change-manager-a",
+          "total_steps": 8,
+          "succeeded_steps": 8,
+          "failed_steps": 0,
+          "rollback_triggered": false,
+          "rollback_status": "NOT_REQUIRED",
+          "pre_state_hash": "8aed6d6ef45a466bdf890f2937b8fbb6da2b186410559290e5c83567c57c5348",
+          "post_state_hash": "460f39242acdae2a97bc312739cb7347d5ce9df7a441790a3262ee9892fac43a",
+          "summary": "八个实施任务完成，绿色 NAT 承载稳定，旧 NAT 保持热备。",
+          "incident_id": null,
+          "result_items": [
+            "8 SNAT rules synchronized",
+            "Both AZ routes switched",
+            "Old NAT kept as standby"
+          ]
+        }
+      }
+    ]
+  }
+}

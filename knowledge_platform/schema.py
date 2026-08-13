@@ -93,7 +93,12 @@ class KnowledgeCardDraft:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def quality(self, source_text: str) -> tuple[float, list[str]]:
+    def quality(
+        self,
+        source_text: str,
+        *,
+        unit_role: str | None = None,
+    ) -> tuple[float, list[str]]:
         score = 100.0
         issues: list[str] = []
 
@@ -105,7 +110,7 @@ class KnowledgeCardDraft:
             (not self.evidence_quote, 25, "缺少原文证据"),
         ]
         knowledge_type = self.knowledge_type.strip().lower()
-        type_checks = {
+        legacy_type_checks = {
             "procedure": [
                 (not self.procedure_steps, 18, "缺少操作步骤"),
                 (not self.risks, 7, "缺少风险说明"),
@@ -136,6 +141,35 @@ class KnowledgeCardDraft:
                 (not self.validation_steps, 5, "缺少验证步骤"),
             ],
         )
+        normalized_unit_role = _text(getattr(unit_role, "value", unit_role)).upper()
+        role_checks = {
+            "TASKS_CANONICAL": [
+                (not self.procedure_steps, 18, "缺少任务步骤"),
+            ],
+            "PRECHECK_STEPS": [
+                (not self.procedure_steps, 18, "缺少前检步骤"),
+            ],
+            "IMPLEMENTATION_STEPS": [
+                (not self.procedure_steps, 18, "缺少实施步骤"),
+            ],
+            "VALIDATION_STEPS": [
+                (not self.validation_steps, 18, "缺少验证步骤"),
+            ],
+            "ROLLBACK_STEPS": [
+                (not self.rollback_steps, 18, "缺少回退步骤"),
+            ],
+            "EXECUTION_RESULT": [],
+            "IDENTITY_METADATA_CONTEXT": [],
+            "IDENTITY": [],
+            "SERVICE_SCOPE": [],
+            "CHANGE_CONTEXT": [],
+            "EXECUTION_CONTEXT": [],
+            "GOVERNANCE_CONTEXT": [],
+            "RISK_IMPACT": [
+                (not self.risks, 18, "缺少风险说明"),
+            ],
+        }
+        type_checks = role_checks.get(normalized_unit_role, legacy_type_checks)
 
         for failed, penalty, message in [*common_checks, *type_checks]:
             if failed:

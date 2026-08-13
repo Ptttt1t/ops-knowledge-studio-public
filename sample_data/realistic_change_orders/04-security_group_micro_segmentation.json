@@ -1,0 +1,2136 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_OK",
+  "msg": "synthetic demo change order",
+  "data": {
+    "synthetic_demo_data": true,
+    "data_classification": "SYNTHETIC_DEIDENTIFIED_DEMO",
+    "ticket_id": "CHG-SYN-NET-004",
+    "title": "[合成演示] 订单与支付服务安全组微隔离规则收敛",
+    "original_system": "synthetic-internal-change-platform",
+    "create_time": "2026-08-01T09:30:00+08:00",
+    "cloud_service": "Cloud Network",
+    "service": "production-network-foundation",
+    "micro_service": "network-control-plane",
+    "affected_service": "order-service,payment-service",
+    "change_scene": "SECURITY_GROUP_MICRO_SEGMENTATION",
+    "change_notes": "按双 AZ 影子策略、强制策略、旧规则下线三阶段收敛东西向访问。",
+    "special_change_type": "PLANNED_HIGH_RISK_SYNTHETIC",
+    "change_guide": "分批执行、每批验证、异常立即停止并按逆序回退",
+    "severity": "S2",
+    "change_level": "HIGH",
+    "customer_sensed": "POSSIBLE_TRANSIENT_JITTER",
+    "affected_customer": "synthetic-internal-services",
+    "risk_level": "HIGH",
+    "impact_risk_level": "MEDIUM",
+    "region": "cn-north-4",
+    "expected_start_time": "2026-08-05T00:00:00+08:00",
+    "expected_end_time": "2026-08-05T02:00:00+08:00",
+    "expected_total_time": 120,
+    "executors": [
+      "network-operator-a",
+      "network-operator-b"
+    ],
+    "cooperators": [
+      "application-sre-a",
+      "monitoring-oncall-a"
+    ],
+    "reviewers": [
+      "change-manager-a",
+      "service-owner-a"
+    ],
+    "approval_status": "APPROVED_HISTORICAL_SYNTHETIC",
+    "high_risk_check": "PASSED_SYNTHETIC",
+    "authorization_reference": "AUTH-SYNTHETIC-ONLY",
+    "notification_status": "SIMULATED_COMPLETED",
+    "action_list": [
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-01",
+        "task_name": "创建订单服务目标安全组版本",
+        "task_type": "CHANGE",
+        "sequence": 1,
+        "region": "cn-north-4",
+        "availability_zone": null,
+        "target_resource": "sg-order-v3",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "CREATE_RULESET_VERSION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "目标版本 v3 已创建但未绑定",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "目标版本 v3 已创建但未绑定",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-02",
+        "task_name": "创建支付服务目标安全组版本",
+        "task_type": "CHANGE",
+        "sequence": 2,
+        "region": "cn-north-4",
+        "availability_zone": null,
+        "target_resource": "sg-payment-v3",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "CREATE_RULESET_VERSION",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "目标版本 v3 已创建但未绑定",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "目标版本 v3 已创建但未绑定",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-03",
+        "task_name": "绑定订单 AZ-A 只读影子策略",
+        "task_type": "CHANGE",
+        "sequence": 3,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "eni-order-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ATTACH_SHADOW_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "影子命中日志无新增拒绝",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "影子命中日志无新增拒绝",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-04",
+        "task_name": "绑定支付 AZ-A 只读影子策略",
+        "task_type": "CHANGE",
+        "sequence": 4,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "eni-payment-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ATTACH_SHADOW_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "影子命中日志无新增拒绝",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "影子命中日志无新增拒绝",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-05",
+        "task_name": "启用订单 AZ-A 强制策略",
+        "task_type": "CHANGE",
+        "sequence": 5,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "eni-order-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENFORCE_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "订单健康检查和数据库访问正常",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "订单健康检查和数据库访问正常",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-06",
+        "task_name": "启用支付 AZ-A 强制策略",
+        "task_type": "CHANGE",
+        "sequence": 6,
+        "region": "cn-north-4",
+        "availability_zone": "az-a",
+        "target_resource": "eni-payment-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENFORCE_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "支付健康检查和数据库访问正常",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "支付健康检查和数据库访问正常",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-07",
+        "task_name": "绑定订单 AZ-B 只读影子策略",
+        "task_type": "CHANGE",
+        "sequence": 7,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "eni-order-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ATTACH_SHADOW_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "影子命中日志无新增拒绝",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "影子命中日志无新增拒绝",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-08",
+        "task_name": "绑定支付 AZ-B 只读影子策略",
+        "task_type": "CHANGE",
+        "sequence": 8,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "eni-payment-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ATTACH_SHADOW_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "影子命中日志无新增拒绝",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "影子命中日志无新增拒绝",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-09",
+        "task_name": "启用订单 AZ-B 强制策略",
+        "task_type": "CHANGE",
+        "sequence": 9,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "eni-order-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENFORCE_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "订单健康检查和数据库访问正常",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "订单健康检查和数据库访问正常",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-10",
+        "task_name": "启用支付 AZ-B 强制策略",
+        "task_type": "CHANGE",
+        "sequence": 10,
+        "region": "cn-north-4",
+        "availability_zone": "az-b",
+        "target_resource": "eni-payment-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENFORCE_RULESET",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "支付健康检查和数据库访问正常",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "支付健康检查和数据库访问正常",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-11",
+        "task_name": "移除旧版宽泛规则",
+        "task_type": "CHANGE",
+        "sequence": 11,
+        "region": "cn-north-4",
+        "availability_zone": null,
+        "target_resource": "sg-legacy-shared",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "DISABLE_LEGACY_RULES",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "0.0.0.0/0 宽泛入站规则已禁用",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "0.0.0.0/0 宽泛入站规则已禁用",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-004-TASK-12",
+        "task_name": "固化规则版本并开启持续审计",
+        "task_type": "CHANGE",
+        "sequence": 12,
+        "region": "cn-north-4",
+        "availability_zone": null,
+        "target_resource": "sg-policy-audit",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "COMMIT_AND_MONITOR",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "策略版本已固化且审计告警启用",
+          "change_ticket": "CHG-SYN-NET-004"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "策略版本已固化且审计告警启用",
+        "owner": "network-operator-a"
+      }
+    ],
+    "change_tool_relate_action": {
+      "preparation_and_canary": [
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-01",
+          "task_name": "创建订单服务目标安全组版本",
+          "task_type": "CHANGE",
+          "sequence": 1,
+          "region": "cn-north-4",
+          "availability_zone": null,
+          "target_resource": "sg-order-v3",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "CREATE_RULESET_VERSION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "目标版本 v3 已创建但未绑定",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "目标版本 v3 已创建但未绑定",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-02",
+          "task_name": "创建支付服务目标安全组版本",
+          "task_type": "CHANGE",
+          "sequence": 2,
+          "region": "cn-north-4",
+          "availability_zone": null,
+          "target_resource": "sg-payment-v3",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "CREATE_RULESET_VERSION",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "目标版本 v3 已创建但未绑定",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "目标版本 v3 已创建但未绑定",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-03",
+          "task_name": "绑定订单 AZ-A 只读影子策略",
+          "task_type": "CHANGE",
+          "sequence": 3,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "eni-order-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ATTACH_SHADOW_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "影子命中日志无新增拒绝",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "影子命中日志无新增拒绝",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-04",
+          "task_name": "绑定支付 AZ-A 只读影子策略",
+          "task_type": "CHANGE",
+          "sequence": 4,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "eni-payment-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ATTACH_SHADOW_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "影子命中日志无新增拒绝",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "影子命中日志无新增拒绝",
+          "owner": "network-operator-a"
+        }
+      ],
+      "primary_change_wave": [
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-05",
+          "task_name": "启用订单 AZ-A 强制策略",
+          "task_type": "CHANGE",
+          "sequence": 5,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "eni-order-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENFORCE_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "订单健康检查和数据库访问正常",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "订单健康检查和数据库访问正常",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-06",
+          "task_name": "启用支付 AZ-A 强制策略",
+          "task_type": "CHANGE",
+          "sequence": 6,
+          "region": "cn-north-4",
+          "availability_zone": "az-a",
+          "target_resource": "eni-payment-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENFORCE_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "支付健康检查和数据库访问正常",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "支付健康检查和数据库访问正常",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-07",
+          "task_name": "绑定订单 AZ-B 只读影子策略",
+          "task_type": "CHANGE",
+          "sequence": 7,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "eni-order-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ATTACH_SHADOW_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "影子命中日志无新增拒绝",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "影子命中日志无新增拒绝",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-08",
+          "task_name": "绑定支付 AZ-B 只读影子策略",
+          "task_type": "CHANGE",
+          "sequence": 8,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "eni-payment-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ATTACH_SHADOW_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "影子命中日志无新增拒绝",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "影子命中日志无新增拒绝",
+          "owner": "network-operator-a"
+        }
+      ],
+      "verification_and_closeout": [
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-09",
+          "task_name": "启用订单 AZ-B 强制策略",
+          "task_type": "CHANGE",
+          "sequence": 9,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "eni-order-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENFORCE_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "订单健康检查和数据库访问正常",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "订单健康检查和数据库访问正常",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-10",
+          "task_name": "启用支付 AZ-B 强制策略",
+          "task_type": "CHANGE",
+          "sequence": 10,
+          "region": "cn-north-4",
+          "availability_zone": "az-b",
+          "target_resource": "eni-payment-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENFORCE_RULESET",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "支付健康检查和数据库访问正常",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "支付健康检查和数据库访问正常",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-11",
+          "task_name": "移除旧版宽泛规则",
+          "task_type": "CHANGE",
+          "sequence": 11,
+          "region": "cn-north-4",
+          "availability_zone": null,
+          "target_resource": "sg-legacy-shared",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "DISABLE_LEGACY_RULES",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "0.0.0.0/0 宽泛入站规则已禁用",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "0.0.0.0/0 宽泛入站规则已禁用",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-004-TASK-12",
+          "task_name": "固化规则版本并开启持续审计",
+          "task_type": "CHANGE",
+          "sequence": 12,
+          "region": "cn-north-4",
+          "availability_zone": null,
+          "target_resource": "sg-policy-audit",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "COMMIT_AND_MONITOR",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "策略版本已固化且审计告警启用",
+            "change_ticket": "CHG-SYN-NET-004"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "策略版本已固化且审计告警启用",
+          "owner": "network-operator-a"
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-01",
+          "step_name": "对账 CMDB 服务关系",
+          "step_description": "对账 CMDB 服务关系",
+          "step_type": "PRECHECK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "生产 ENI 和依赖关系完整",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "cmdb-order-payment"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "生产 ENI 和依赖关系完整"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT cmdb-order-payment"
+          ],
+          "validation_rules": [
+            "生产 ENI 和依赖关系完整",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-02",
+          "step_name": "检查现有流日志",
+          "step_description": "检查现有流日志",
+          "step_type": "PRECHECK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "最近七天无未登记必要流量",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpc-flow-logs"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "最近七天无未登记必要流量"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpc-flow-logs"
+          ],
+          "validation_rules": [
+            "最近七天无未登记必要流量",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-PRECHECK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-03",
+          "step_name": "检查规则配额",
+          "step_description": "检查规则配额",
+          "step_type": "PRECHECK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "规则配额余量超过 30%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "sg-order-v3,sg-payment-v3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "规则配额余量超过 30%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT sg-order-v3,sg-payment-v3"
+          ],
+          "validation_rules": [
+            "规则配额余量超过 30%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-PRECHECK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-04",
+          "step_name": "检查紧急管理通道",
+          "step_description": "检查紧急管理通道",
+          "step_type": "PRECHECK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "受控应急规则可用",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "sg-breakglass"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "受控应急规则可用"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT sg-breakglass"
+          ],
+          "validation_rules": [
+            "受控应急规则可用",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-PRECHECK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-05",
+          "step_name": "检查业务发布冻结",
+          "step_description": "检查业务发布冻结",
+          "step_type": "PRECHECK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "应用侧无并发发布",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "order-payment-release"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "应用侧无并发发布"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT order-payment-release"
+          ],
+          "validation_rules": [
+            "应用侧无并发发布",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-PRECHECK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-PRECHECK-06",
+          "step_name": "校验目标规则哈希",
+          "step_description": "校验目标规则哈希",
+          "step_type": "PRECHECK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "规则哈希与审批包一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "sg-policy-package"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "规则哈希与审批包一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT sg-policy-package"
+          ],
+          "validation_rules": [
+            "规则哈希与审批包一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-PRECHECK-05"
+          ]
+        }
+      ],
+      "change_implement": [
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-01",
+          "step_name": "创建订单服务目标安全组版本",
+          "step_description": "创建订单服务目标安全组版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "目标版本 v3 已创建但未绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-order-v3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "CREATE_RULESET_VERSION",
+            "desired_state": "目标版本 v3 已创建但未绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan CREATE_RULESET_VERSION sg-order-v3"
+          ],
+          "validation_rules": [
+            "目标版本 v3 已创建但未绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-02",
+          "step_name": "创建支付服务目标安全组版本",
+          "step_description": "创建支付服务目标安全组版本",
+          "step_type": "IMPLEMENT",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "目标版本 v3 已创建但未绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-payment-v3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "CREATE_RULESET_VERSION",
+            "desired_state": "目标版本 v3 已创建但未绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan CREATE_RULESET_VERSION sg-payment-v3"
+          ],
+          "validation_rules": [
+            "目标版本 v3 已创建但未绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-03",
+          "step_name": "绑定订单 AZ-A 只读影子策略",
+          "step_description": "绑定订单 AZ-A 只读影子策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "影子命中日志无新增拒绝",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ATTACH_SHADOW_RULESET",
+            "desired_state": "影子命中日志无新增拒绝"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ATTACH_SHADOW_RULESET eni-order-a"
+          ],
+          "validation_rules": [
+            "影子命中日志无新增拒绝",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-04",
+          "step_name": "绑定支付 AZ-A 只读影子策略",
+          "step_description": "绑定支付 AZ-A 只读影子策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "影子命中日志无新增拒绝",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ATTACH_SHADOW_RULESET",
+            "desired_state": "影子命中日志无新增拒绝"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ATTACH_SHADOW_RULESET eni-payment-a"
+          ],
+          "validation_rules": [
+            "影子命中日志无新增拒绝",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-05",
+          "step_name": "启用订单 AZ-A 强制策略",
+          "step_description": "启用订单 AZ-A 强制策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "订单健康检查和数据库访问正常",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENFORCE_RULESET",
+            "desired_state": "订单健康检查和数据库访问正常"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENFORCE_RULESET eni-order-a"
+          ],
+          "validation_rules": [
+            "订单健康检查和数据库访问正常",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-06",
+          "step_name": "启用支付 AZ-A 强制策略",
+          "step_description": "启用支付 AZ-A 强制策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "支付健康检查和数据库访问正常",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENFORCE_RULESET",
+            "desired_state": "支付健康检查和数据库访问正常"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENFORCE_RULESET eni-payment-a"
+          ],
+          "validation_rules": [
+            "支付健康检查和数据库访问正常",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-07",
+          "step_name": "绑定订单 AZ-B 只读影子策略",
+          "step_description": "绑定订单 AZ-B 只读影子策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "影子命中日志无新增拒绝",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ATTACH_SHADOW_RULESET",
+            "desired_state": "影子命中日志无新增拒绝"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ATTACH_SHADOW_RULESET eni-order-b"
+          ],
+          "validation_rules": [
+            "影子命中日志无新增拒绝",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-08",
+          "step_name": "绑定支付 AZ-B 只读影子策略",
+          "step_description": "绑定支付 AZ-B 只读影子策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "影子命中日志无新增拒绝",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ATTACH_SHADOW_RULESET",
+            "desired_state": "影子命中日志无新增拒绝"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ATTACH_SHADOW_RULESET eni-payment-b"
+          ],
+          "validation_rules": [
+            "影子命中日志无新增拒绝",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-09",
+          "step_name": "启用订单 AZ-B 强制策略",
+          "step_description": "启用订单 AZ-B 强制策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "订单健康检查和数据库访问正常",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENFORCE_RULESET",
+            "desired_state": "订单健康检查和数据库访问正常"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENFORCE_RULESET eni-order-b"
+          ],
+          "validation_rules": [
+            "订单健康检查和数据库访问正常",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-10",
+          "step_name": "启用支付 AZ-B 强制策略",
+          "step_description": "启用支付 AZ-B 强制策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "支付健康检查和数据库访问正常",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENFORCE_RULESET",
+            "desired_state": "支付健康检查和数据库访问正常"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENFORCE_RULESET eni-payment-b"
+          ],
+          "validation_rules": [
+            "支付健康检查和数据库访问正常",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-09"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-11",
+          "step_name": "移除旧版宽泛规则",
+          "step_description": "移除旧版宽泛规则",
+          "step_type": "IMPLEMENT",
+          "sequence": 11,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "0.0.0.0/0 宽泛入站规则已禁用",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-legacy-shared"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "DISABLE_LEGACY_RULES",
+            "desired_state": "0.0.0.0/0 宽泛入站规则已禁用"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan DISABLE_LEGACY_RULES sg-legacy-shared"
+          ],
+          "validation_rules": [
+            "0.0.0.0/0 宽泛入站规则已禁用",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-10"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-IMPLEMENT-12",
+          "step_name": "固化规则版本并开启持续审计",
+          "step_description": "固化规则版本并开启持续审计",
+          "step_type": "IMPLEMENT",
+          "sequence": 12,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "策略版本已固化且审计告警启用",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-policy-audit"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "COMMIT_AND_MONITOR",
+            "desired_state": "策略版本已固化且审计告警启用"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan COMMIT_AND_MONITOR sg-policy-audit"
+          ],
+          "validation_rules": [
+            "策略版本已固化且审计告警启用",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-IMPLEMENT-11"
+          ]
+        }
+      ],
+      "change_verified": [
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-01",
+          "step_name": "验证订单健康检查",
+          "step_description": "验证订单健康检查",
+          "step_type": "VALIDATE",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "双 AZ 健康实例比例 100%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "order-service"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "双 AZ 健康实例比例 100%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE order-service"
+          ],
+          "validation_rules": [
+            "双 AZ 健康实例比例 100%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-02",
+          "step_name": "验证支付健康检查",
+          "step_description": "验证支付健康检查",
+          "step_type": "VALIDATE",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "双 AZ 健康实例比例 100%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "payment-service"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "双 AZ 健康实例比例 100%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE payment-service"
+          ],
+          "validation_rules": [
+            "双 AZ 健康实例比例 100%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-03",
+          "step_name": "验证订单到数据库",
+          "step_description": "验证订单到数据库",
+          "step_type": "VALIDATE",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "TCP 5432 成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "order-db-probe"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "TCP 5432 成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE order-db-probe"
+          ],
+          "validation_rules": [
+            "TCP 5432 成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-04",
+          "step_name": "验证支付到数据库",
+          "step_description": "验证支付到数据库",
+          "step_type": "VALIDATE",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "TCP 5432 成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "payment-db-probe"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "TCP 5432 成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE payment-db-probe"
+          ],
+          "validation_rules": [
+            "TCP 5432 成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-05",
+          "step_name": "验证服务间 mTLS",
+          "step_description": "验证服务间 mTLS",
+          "step_type": "VALIDATE",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "握手成功率不低于 99.9%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "order-payment-mtls"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "握手成功率不低于 99.9%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE order-payment-mtls"
+          ],
+          "validation_rules": [
+            "握手成功率不低于 99.9%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-06",
+          "step_name": "检查拒绝日志",
+          "step_description": "检查拒绝日志",
+          "step_type": "VALIDATE",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "无高频未知拒绝流",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpc-flow-logs"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "无高频未知拒绝流"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpc-flow-logs"
+          ],
+          "validation_rules": [
+            "无高频未知拒绝流",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-07",
+          "step_name": "检查宽泛规则",
+          "step_description": "检查宽泛规则",
+          "step_type": "VALIDATE",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "0.0.0.0/0 宽泛入站已清零",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "sg-legacy-shared"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "0.0.0.0/0 宽泛入站已清零"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE sg-legacy-shared"
+          ],
+          "validation_rules": [
+            "0.0.0.0/0 宽泛入站已清零",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-VALIDATE-08",
+          "step_name": "核对规则版本哈希",
+          "step_description": "核对规则版本哈希",
+          "step_type": "VALIDATE",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "实际规则哈希与目标一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "sg-policy-audit"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "实际规则哈希与目标一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE sg-policy-audit"
+          ],
+          "validation_rules": [
+            "实际规则哈希与目标一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-VALIDATE-07"
+          ]
+        }
+      ],
+      "change_rollback": [
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-01",
+          "step_name": "恢复实施步骤 12 的前态",
+          "step_description": "恢复实施步骤 12 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "sg-policy-audit 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-policy-audit"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "sg-policy-audit 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE sg-policy-audit"
+          ],
+          "validation_rules": [
+            "sg-policy-audit 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-02",
+          "step_name": "恢复实施步骤 11 的前态",
+          "step_description": "恢复实施步骤 11 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "sg-legacy-shared 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-legacy-shared"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "sg-legacy-shared 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE sg-legacy-shared"
+          ],
+          "validation_rules": [
+            "sg-legacy-shared 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-03",
+          "step_name": "恢复实施步骤 10 的前态",
+          "step_description": "恢复实施步骤 10 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-payment-b 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-payment-b 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-payment-b"
+          ],
+          "validation_rules": [
+            "eni-payment-b 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-04",
+          "step_name": "恢复实施步骤 09 的前态",
+          "step_description": "恢复实施步骤 09 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-order-b 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-order-b 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-order-b"
+          ],
+          "validation_rules": [
+            "eni-order-b 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-05",
+          "step_name": "恢复实施步骤 08 的前态",
+          "step_description": "恢复实施步骤 08 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-payment-b 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-payment-b 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-payment-b"
+          ],
+          "validation_rules": [
+            "eni-payment-b 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-06",
+          "step_name": "恢复实施步骤 07 的前态",
+          "step_description": "恢复实施步骤 07 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-order-b 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-order-b 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-order-b"
+          ],
+          "validation_rules": [
+            "eni-order-b 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-07",
+          "step_name": "恢复实施步骤 06 的前态",
+          "step_description": "恢复实施步骤 06 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-payment-a 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-payment-a 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-payment-a"
+          ],
+          "validation_rules": [
+            "eni-payment-a 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-08",
+          "step_name": "恢复实施步骤 05 的前态",
+          "step_description": "恢复实施步骤 05 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-order-a 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-order-a 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-order-a"
+          ],
+          "validation_rules": [
+            "eni-order-a 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-09",
+          "step_name": "恢复实施步骤 04 的前态",
+          "step_description": "恢复实施步骤 04 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-payment-a 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-payment-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-payment-a 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-payment-a"
+          ],
+          "validation_rules": [
+            "eni-payment-a 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-10",
+          "step_name": "恢复实施步骤 03 的前态",
+          "step_description": "恢复实施步骤 03 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "eni-order-a 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "eni-order-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "eni-order-a 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE eni-order-a"
+          ],
+          "validation_rules": [
+            "eni-order-a 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-09"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-11",
+          "step_name": "恢复实施步骤 02 的前态",
+          "step_description": "恢复实施步骤 02 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 11,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "sg-payment-v3 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-payment-v3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "sg-payment-v3 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE sg-payment-v3"
+          ],
+          "validation_rules": [
+            "sg-payment-v3 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-10"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-004-ROLLBACK-12",
+          "step_name": "恢复实施步骤 01 的前态",
+          "step_description": "恢复实施步骤 01 的前态",
+          "step_type": "ROLLBACK",
+          "sequence": 12,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "sg-order-v3 恢复原规则或绑定",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "sg-order-v3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "sg-order-v3 恢复原规则或绑定"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE sg-order-v3"
+          ],
+          "validation_rules": [
+            "sg-order-v3 恢复原规则或绑定",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-004-ROLLBACK-11"
+          ]
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "execution_status": "SUCCEEDED",
+          "started_at": "2026-08-05T00:00:00+08:00",
+          "ended_at": "2026-08-05T02:00:00+08:00",
+          "operator": "network-operator-a",
+          "approver": "change-manager-a",
+          "total_steps": 12,
+          "succeeded_steps": 12,
+          "failed_steps": 0,
+          "rollback_triggered": false,
+          "rollback_status": "NOT_REQUIRED",
+          "pre_state_hash": "56d2d512c3b3397eb59f75a426d70067d8c580091ccefa9d4617f813447a9068",
+          "post_state_hash": "3a7cbf8fff04c41d8750a161323e8a3487c42c4bd886e961004079064072bdd8",
+          "summary": "十二步分波次执行成功，宽泛规则下线后业务和拒绝日志均正常。",
+          "incident_id": null,
+          "result_items": [
+            "12 implementation steps completed",
+            "No unexpected denies",
+            "Legacy broad rules disabled"
+          ]
+        }
+      }
+    ]
+  }
+}

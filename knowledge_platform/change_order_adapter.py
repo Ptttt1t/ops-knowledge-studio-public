@@ -57,6 +57,24 @@ class JsonSpanNode:
 
 
 @dataclass(frozen=True)
+class SourceEvidenceRef:
+    pointer: str
+    source_index: int
+    char_start: int
+    char_end: int
+    content_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pointer": self.pointer,
+            "source_index": self.source_index,
+            "char_start": self.char_start,
+            "char_end": self.char_end,
+            "content_sha256": self.content_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class ChangeOrderExtractionUnit:
     chunk: DocumentChunk
     role: str
@@ -73,6 +91,7 @@ class ChangeOrderExtractionUnit:
     step_end_index: int | None = None
     total_steps_in_group: int | None = None
     context_roles: tuple[str, ...] = ()
+    source_evidence_refs: tuple[SourceEvidenceRef, ...] = ()
 
     def prompt_context(self) -> str:
         procedure_context = ""
@@ -86,7 +105,8 @@ class ChangeOrderExtractionUnit:
         return (
             f"结构化变更单单元：role={self.role}；JSON Pointer={self.pointer or '/'}；"
             f"语义映射={self.semantic_mapping_status}；{procedure_context}"
-            f"源对象数={self.item_count}。"
+            f"源对象数={self.item_count}；"
+            f"required_source_indices={list(range(self.item_count))}。"
             f"{self.semantic_hint}"
         )
 
@@ -101,6 +121,13 @@ class ChangeOrderExtractionUnit:
             "step_end_index": self.step_end_index,
             "total_steps_in_group": self.total_steps_in_group,
             "context_roles": list(self.context_roles),
+            "quality_policy_version": "change_order_role_v2",
+            "evidence_mode": "STRUCTURED_JSON_POINTERS",
+            "expected_source_items": len(self.source_evidence_refs),
+            "content_coverage_status": "COMPLETE",
+            "source_evidence_refs": [
+                item.to_dict() for item in self.source_evidence_refs
+            ],
         }
 
 
@@ -619,6 +646,18 @@ class _UnitBuilder:
         start = nodes[0].member_start
         end = nodes[-1].end
         procedure_group = metadata.get("procedure_group")
+        source_evidence_refs = tuple(
+            SourceEvidenceRef(
+                pointer=node.pointer,
+                source_index=source_index,
+                char_start=node.member_start,
+                char_end=node.end,
+                content_sha256=hashlib.sha256(
+                    self.text[node.member_start : node.end].encode("utf-8")
+                ).hexdigest(),
+            )
+            for source_index, node in indexed_nodes
+        )
         self.units.append(
             {
                 "start": start,
@@ -628,6 +667,7 @@ class _UnitBuilder:
                 "source_pointers": tuple(node.pointer for node in nodes),
                 "item_count": len(nodes),
                 "semantic_hint": semantic_hint,
+                "source_evidence_refs": source_evidence_refs,
                 **metadata,
                 "step_start_index": indexed_nodes[0][0] if procedure_group else None,
                 "step_end_index": indexed_nodes[-1][0] if procedure_group else None,
@@ -645,16 +685,29 @@ class _UnitBuilder:
     ) -> None:
         fragment = self.text[node.member_start : node.end]
         for part in chunk_text(fragment, self.chunk_size, 0):
+            part_start = node.member_start + part.char_start
+            part_end = node.member_start + part.char_end
             self.units.append(
                 {
-                    "start": node.member_start + part.char_start,
-                    "end": node.member_start + part.char_end,
+                    "start": part_start,
+                    "end": part_end,
                     "role": role,
                     "pointer": pointer,
                     "source_pointers": (node.pointer,),
                     "item_count": 1,
                     "semantic_hint": semantic_hint
                     + " 单个源对象过长，本单元是其连续片段；不要补全片段外内容。",
+                    "source_evidence_refs": (
+                        SourceEvidenceRef(
+                            pointer=node.pointer,
+                            source_index=source_index,
+                            char_start=part_start,
+                            char_end=part_end,
+                            content_sha256=hashlib.sha256(
+                                self.text[part_start:part_end].encode("utf-8")
+                            ).hexdigest(),
+                        ),
+                    ),
                     **metadata,
                     "step_start_index": (
                         source_index if metadata.get("procedure_group") else None
@@ -697,6 +750,9 @@ class _UnitBuilder:
                     step_end_index=item.get("step_end_index"),
                     total_steps_in_group=item.get("total_steps_in_group"),
                     context_roles=tuple(item.get("context_roles") or ()),
+                    source_evidence_refs=tuple(
+                        item.get("source_evidence_refs") or ()
+                    ),
                 )
             )
         return tuple(result)

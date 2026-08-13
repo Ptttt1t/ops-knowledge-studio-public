@@ -1,0 +1,1808 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_OK",
+  "msg": "synthetic demo change order",
+  "data": {
+    "synthetic_demo_data": true,
+    "data_classification": "SYNTHETIC_DEIDENTIFIED_DEMO",
+    "ticket_id": "CHG-SYN-NET-003",
+    "title": "[合成演示] 合作方双隧道 IPsec VPN 密钥与 BGP 路由轮换",
+    "original_system": "synthetic-internal-change-platform",
+    "create_time": "2026-08-01T09:30:00+08:00",
+    "cloud_service": "Cloud Network",
+    "service": "production-network-foundation",
+    "micro_service": "network-control-plane",
+    "affected_service": "partner-order-ingress",
+    "change_scene": "IPSEC_VPN_KEY_AND_BGP_CUTOVER",
+    "change_notes": "使用 KMS 引用轮换双隧道策略；备用隧道采样丢包超阈值后按计划回退。",
+    "special_change_type": "PLANNED_HIGH_RISK_SYNTHETIC",
+    "change_guide": "分批执行、每批验证、异常立即停止并按逆序回退",
+    "severity": "S2",
+    "change_level": "HIGH",
+    "customer_sensed": "POSSIBLE_TRANSIENT_JITTER",
+    "affected_customer": "synthetic-internal-services",
+    "risk_level": "HIGH",
+    "impact_risk_level": "MEDIUM",
+    "region": "cn-south-1",
+    "expected_start_time": "2026-08-04T02:00:00+08:00",
+    "expected_end_time": "2026-08-04T04:00:00+08:00",
+    "expected_total_time": 120,
+    "executors": [
+      "network-operator-a",
+      "network-operator-b"
+    ],
+    "cooperators": [
+      "application-sre-a",
+      "monitoring-oncall-a"
+    ],
+    "reviewers": [
+      "change-manager-a",
+      "service-owner-a"
+    ],
+    "approval_status": "APPROVED_HISTORICAL_SYNTHETIC",
+    "high_risk_check": "PASSED_SYNTHETIC",
+    "authorization_reference": "AUTH-SYNTHETIC-ONLY",
+    "notification_status": "SIMULATED_COMPLETED",
+    "action_list": [
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-01",
+        "task_name": "校验 KMS 预共享密钥引用",
+        "task_type": "CHANGE",
+        "sequence": 1,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "kms-ref:vpn-partner-2026q3",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "VERIFY_SECRET_REFERENCE",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "密钥引用有效且正文未出现在工单中",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "密钥引用有效且正文未出现在工单中",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-02",
+        "task_name": "更新备用隧道 IKE 参数",
+        "task_type": "CHANGE",
+        "sequence": 2,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-partner-tunnel-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "UPDATE_IKE_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "备用隧道使用新策略版本",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "备用隧道使用新策略版本",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-03",
+        "task_name": "更新备用隧道 IPsec 参数",
+        "task_type": "CHANGE",
+        "sequence": 3,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-partner-tunnel-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "UPDATE_IPSEC_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "备用隧道协商成功",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "备用隧道协商成功",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-04",
+        "task_name": "建立备用隧道 BGP 邻居",
+        "task_type": "CHANGE",
+        "sequence": 4,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "bgp-partner-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENABLE_BGP_PEER",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "BGP 状态 ESTABLISHED 且前缀数为 24",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-05",
+        "task_name": "提高备用隧道路由优先级",
+        "task_type": "CHANGE",
+        "sequence": 5,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-route-policy-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "SET_ROUTE_PREFERENCE",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "合作方网段有效下一跳为 tunnel-b",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "合作方网段有效下一跳为 tunnel-b",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-06",
+        "task_name": "执行备用隧道业务采样",
+        "task_type": "CHANGE",
+        "sequence": 6,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "partner-probe-b",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "RUN_CANARY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-07",
+        "task_name": "更新主隧道 IKE 参数",
+        "task_type": "CHANGE",
+        "sequence": 7,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-partner-tunnel-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "UPDATE_IKE_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "主隧道使用新策略版本",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "主隧道使用新策略版本",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-08",
+        "task_name": "更新主隧道 IPsec 参数",
+        "task_type": "CHANGE",
+        "sequence": 8,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-partner-tunnel-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "UPDATE_IPSEC_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "主隧道协商成功",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "主隧道协商成功",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-09",
+        "task_name": "恢复主隧道 BGP 邻居",
+        "task_type": "CHANGE",
+        "sequence": 9,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "bgp-partner-a",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "ENABLE_BGP_PEER",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "BGP 状态 ESTABLISHED 且前缀数为 24",
+        "owner": "network-operator-a"
+      },
+      {
+        "task_id": "CHG-SYN-NET-003-TASK-10",
+        "task_name": "恢复双隧道路由策略",
+        "task_type": "CHANGE",
+        "sequence": 10,
+        "region": "cn-south-1",
+        "availability_zone": null,
+        "target_resource": "vpn-route-policy",
+        "tool_name": "cloud_network.apply_plan",
+        "operation": "RESTORE_ECMP_POLICY",
+        "parameters": {
+          "synthetic_only": true,
+          "desired_state": "双隧道 ECMP 生效且路径对称",
+          "change_ticket": "CHG-SYN-NET-003"
+        },
+        "timeout_seconds": 300,
+        "expected_result": "双隧道 ECMP 生效且路径对称",
+        "owner": "network-operator-a"
+      }
+    ],
+    "change_tool_relate_action": {
+      "preparation_and_canary": [
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-01",
+          "task_name": "校验 KMS 预共享密钥引用",
+          "task_type": "CHANGE",
+          "sequence": 1,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "kms-ref:vpn-partner-2026q3",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "VERIFY_SECRET_REFERENCE",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "密钥引用有效且正文未出现在工单中",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "密钥引用有效且正文未出现在工单中",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-02",
+          "task_name": "更新备用隧道 IKE 参数",
+          "task_type": "CHANGE",
+          "sequence": 2,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-partner-tunnel-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "UPDATE_IKE_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "备用隧道使用新策略版本",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "备用隧道使用新策略版本",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-03",
+          "task_name": "更新备用隧道 IPsec 参数",
+          "task_type": "CHANGE",
+          "sequence": 3,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-partner-tunnel-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "UPDATE_IPSEC_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "备用隧道协商成功",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "备用隧道协商成功",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-04",
+          "task_name": "建立备用隧道 BGP 邻居",
+          "task_type": "CHANGE",
+          "sequence": 4,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "bgp-partner-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENABLE_BGP_PEER",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "owner": "network-operator-a"
+        }
+      ],
+      "primary_change_wave": [
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-05",
+          "task_name": "提高备用隧道路由优先级",
+          "task_type": "CHANGE",
+          "sequence": 5,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-route-policy-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "SET_ROUTE_PREFERENCE",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "合作方网段有效下一跳为 tunnel-b",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "合作方网段有效下一跳为 tunnel-b",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-06",
+          "task_name": "执行备用隧道业务采样",
+          "task_type": "CHANGE",
+          "sequence": 6,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "partner-probe-b",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "RUN_CANARY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-07",
+          "task_name": "更新主隧道 IKE 参数",
+          "task_type": "CHANGE",
+          "sequence": 7,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-partner-tunnel-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "UPDATE_IKE_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "主隧道使用新策略版本",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "主隧道使用新策略版本",
+          "owner": "network-operator-a"
+        }
+      ],
+      "verification_and_closeout": [
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-08",
+          "task_name": "更新主隧道 IPsec 参数",
+          "task_type": "CHANGE",
+          "sequence": 8,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-partner-tunnel-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "UPDATE_IPSEC_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "主隧道协商成功",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "主隧道协商成功",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-09",
+          "task_name": "恢复主隧道 BGP 邻居",
+          "task_type": "CHANGE",
+          "sequence": 9,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "bgp-partner-a",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "ENABLE_BGP_PEER",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "owner": "network-operator-a"
+        },
+        {
+          "task_id": "CHG-SYN-NET-003-TASK-10",
+          "task_name": "恢复双隧道路由策略",
+          "task_type": "CHANGE",
+          "sequence": 10,
+          "region": "cn-south-1",
+          "availability_zone": null,
+          "target_resource": "vpn-route-policy",
+          "tool_name": "cloud_network.apply_plan",
+          "operation": "RESTORE_ECMP_POLICY",
+          "parameters": {
+            "synthetic_only": true,
+            "desired_state": "双隧道 ECMP 生效且路径对称",
+            "change_ticket": "CHG-SYN-NET-003"
+          },
+          "timeout_seconds": 300,
+          "expected_result": "双隧道 ECMP 生效且路径对称",
+          "owner": "network-operator-a"
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-01",
+          "step_name": "核对 KMS 密钥引用",
+          "step_description": "核对 KMS 密钥引用",
+          "step_type": "PRECHECK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "密钥引用可用且无明文泄漏",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "kms-ref:vpn-partner-2026q3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "密钥引用可用且无明文泄漏"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT kms-ref:vpn-partner-2026q3"
+          ],
+          "validation_rules": [
+            "密钥引用可用且无明文泄漏",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-02",
+          "step_name": "核对双隧道当前策略",
+          "step_description": "核对双隧道当前策略",
+          "step_type": "PRECHECK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "当前 IKE/IPsec 版本与快照一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpn-partner"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "当前 IKE/IPsec 版本与快照一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpn-partner"
+          ],
+          "validation_rules": [
+            "当前 IKE/IPsec 版本与快照一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-03",
+          "step_name": "检查合作方维护窗口",
+          "step_description": "检查合作方维护窗口",
+          "step_type": "PRECHECK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "双方窗口和联系人已确认",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "partner-change-window"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "双方窗口和联系人已确认"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT partner-change-window"
+          ],
+          "validation_rules": [
+            "双方窗口和联系人已确认",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-04",
+          "step_name": "检查 BGP 前缀基线",
+          "step_description": "检查 BGP 前缀基线",
+          "step_type": "PRECHECK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "双邻居前缀数均为 24",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "bgp-partner"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "双邻居前缀数均为 24"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT bgp-partner"
+          ],
+          "validation_rules": [
+            "双邻居前缀数均为 24",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-05",
+          "step_name": "检查隧道容量",
+          "step_description": "检查隧道容量",
+          "step_type": "PRECHECK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "任一单隧道可承载当前峰值",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpn-partner"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "任一单隧道可承载当前峰值"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpn-partner"
+          ],
+          "validation_rules": [
+            "任一单隧道可承载当前峰值",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-06",
+          "step_name": "检查路由对称性",
+          "step_description": "检查路由对称性",
+          "step_type": "PRECHECK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "基线不存在非对称路径",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "vpn-flow-logs"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "基线不存在非对称路径"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT vpn-flow-logs"
+          ],
+          "validation_rules": [
+            "基线不存在非对称路径",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-PRECHECK-07",
+          "step_name": "检查自动回退条件",
+          "step_description": "检查自动回退条件",
+          "step_type": "PRECHECK",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 3,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "连续两个采样周期丢包超过 1% 即回退",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.inspect",
+          "target_resources": [
+            "CHG-SYN-NET-003"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "INSPECT",
+            "desired_state": "连续两个采样周期丢包超过 1% 即回退"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.inspect INSPECT CHG-SYN-NET-003"
+          ],
+          "validation_rules": [
+            "连续两个采样周期丢包超过 1% 即回退",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-PRECHECK-06"
+          ]
+        }
+      ],
+      "change_implement": [
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-01",
+          "step_name": "校验 KMS 预共享密钥引用",
+          "step_description": "校验 KMS 预共享密钥引用",
+          "step_type": "IMPLEMENT",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "LOW",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "密钥引用有效且正文未出现在工单中",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "kms-ref:vpn-partner-2026q3"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VERIFY_SECRET_REFERENCE",
+            "desired_state": "密钥引用有效且正文未出现在工单中"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan VERIFY_SECRET_REFERENCE kms-ref:vpn-partner-2026q3"
+          ],
+          "validation_rules": [
+            "密钥引用有效且正文未出现在工单中",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-02",
+          "step_name": "更新备用隧道 IKE 参数",
+          "step_description": "更新备用隧道 IKE 参数",
+          "step_type": "IMPLEMENT",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "备用隧道使用新策略版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "UPDATE_IKE_POLICY",
+            "desired_state": "备用隧道使用新策略版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan UPDATE_IKE_POLICY vpn-partner-tunnel-b"
+          ],
+          "validation_rules": [
+            "备用隧道使用新策略版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-03",
+          "step_name": "更新备用隧道 IPsec 参数",
+          "step_description": "更新备用隧道 IPsec 参数",
+          "step_type": "IMPLEMENT",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "备用隧道协商成功",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "UPDATE_IPSEC_POLICY",
+            "desired_state": "备用隧道协商成功"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan UPDATE_IPSEC_POLICY vpn-partner-tunnel-b"
+          ],
+          "validation_rules": [
+            "备用隧道协商成功",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-04",
+          "step_name": "建立备用隧道 BGP 邻居",
+          "step_description": "建立备用隧道 BGP 邻居",
+          "step_type": "IMPLEMENT",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "bgp-partner-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENABLE_BGP_PEER",
+            "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENABLE_BGP_PEER bgp-partner-b"
+          ],
+          "validation_rules": [
+            "BGP 状态 ESTABLISHED 且前缀数为 24",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-05",
+          "step_name": "提高备用隧道路由优先级",
+          "step_description": "提高备用隧道路由优先级",
+          "step_type": "IMPLEMENT",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "合作方网段有效下一跳为 tunnel-b",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-route-policy-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "SET_ROUTE_PREFERENCE",
+            "desired_state": "合作方网段有效下一跳为 tunnel-b"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan SET_ROUTE_PREFERENCE vpn-route-policy-b"
+          ],
+          "validation_rules": [
+            "合作方网段有效下一跳为 tunnel-b",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-06",
+          "step_name": "执行备用隧道业务采样",
+          "step_description": "执行备用隧道业务采样",
+          "step_type": "IMPLEMENT",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "partner-probe-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RUN_CANARY",
+            "desired_state": "TCP 成功率不低于 99.5% 且丢包不高于 1%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RUN_CANARY partner-probe-b"
+          ],
+          "validation_rules": [
+            "TCP 成功率不低于 99.5% 且丢包不高于 1%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-07",
+          "step_name": "更新主隧道 IKE 参数",
+          "step_description": "更新主隧道 IKE 参数",
+          "step_type": "IMPLEMENT",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "主隧道使用新策略版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "UPDATE_IKE_POLICY",
+            "desired_state": "主隧道使用新策略版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan UPDATE_IKE_POLICY vpn-partner-tunnel-a"
+          ],
+          "validation_rules": [
+            "主隧道使用新策略版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-08",
+          "step_name": "更新主隧道 IPsec 参数",
+          "step_description": "更新主隧道 IPsec 参数",
+          "step_type": "IMPLEMENT",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "主隧道协商成功",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "UPDATE_IPSEC_POLICY",
+            "desired_state": "主隧道协商成功"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan UPDATE_IPSEC_POLICY vpn-partner-tunnel-a"
+          ],
+          "validation_rules": [
+            "主隧道协商成功",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-07"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-09",
+          "step_name": "恢复主隧道 BGP 邻居",
+          "step_description": "恢复主隧道 BGP 邻居",
+          "step_type": "IMPLEMENT",
+          "sequence": 9,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "MEDIUM",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "BGP 状态 ESTABLISHED 且前缀数为 24",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "bgp-partner-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "ENABLE_BGP_PEER",
+            "desired_state": "BGP 状态 ESTABLISHED 且前缀数为 24"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan ENABLE_BGP_PEER bgp-partner-a"
+          ],
+          "validation_rules": [
+            "BGP 状态 ESTABLISHED 且前缀数为 24",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-08"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-IMPLEMENT-10",
+          "step_name": "恢复双隧道路由策略",
+          "step_description": "恢复双隧道路由策略",
+          "step_type": "IMPLEMENT",
+          "sequence": 10,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": true,
+          "timeout_seconds": 300,
+          "success_criteria": "双隧道 ECMP 生效且路径对称",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-route-policy"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_ECMP_POLICY",
+            "desired_state": "双隧道 ECMP 生效且路径对称"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_ECMP_POLICY vpn-route-policy"
+          ],
+          "validation_rules": [
+            "双隧道 ECMP 生效且路径对称",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-IMPLEMENT-09"
+          ]
+        }
+      ],
+      "change_verified": [
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-01",
+          "step_name": "验证备用隧道协商",
+          "step_description": "验证备用隧道协商",
+          "step_type": "VALIDATE",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "IKE SA 和 IPsec SA 均为 UP",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpn-partner-tunnel-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "IKE SA 和 IPsec SA 均为 UP"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpn-partner-tunnel-b"
+          ],
+          "validation_rules": [
+            "IKE SA 和 IPsec SA 均为 UP",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-02",
+          "step_name": "验证备用 BGP 邻居",
+          "step_description": "验证备用 BGP 邻居",
+          "step_type": "VALIDATE",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "状态 ESTABLISHED 且前缀数 24",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "bgp-partner-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "状态 ESTABLISHED 且前缀数 24"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE bgp-partner-b"
+          ],
+          "validation_rules": [
+            "状态 ESTABLISHED 且前缀数 24",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-03",
+          "step_name": "验证合作方 API",
+          "step_description": "验证合作方 API",
+          "step_type": "VALIDATE",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "HTTPS 成功率不低于 99.5%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "partner-api-probe"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "HTTPS 成功率不低于 99.5%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE partner-api-probe"
+          ],
+          "validation_rules": [
+            "HTTPS 成功率不低于 99.5%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-04",
+          "step_name": "验证链路丢包",
+          "step_description": "验证链路丢包",
+          "step_type": "VALIDATE",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "连续两个周期丢包不高于 1%",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpn-packet-loss"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "连续两个周期丢包不高于 1%"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpn-packet-loss"
+          ],
+          "validation_rules": [
+            "连续两个周期丢包不高于 1%",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-05",
+          "step_name": "验证链路时延",
+          "step_description": "验证链路时延",
+          "step_type": "VALIDATE",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "P95 时延不高于 80ms",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpn-latency"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "P95 时延不高于 80ms"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpn-latency"
+          ],
+          "validation_rules": [
+            "P95 时延不高于 80ms",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-06",
+          "step_name": "验证双隧道对称性",
+          "step_description": "验证双隧道对称性",
+          "step_type": "VALIDATE",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "回程和去程隧道策略一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpn-flow-logs"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "回程和去程隧道策略一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpn-flow-logs"
+          ],
+          "validation_rules": [
+            "回程和去程隧道策略一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-VALIDATE-07",
+          "step_name": "验证最终路由哈希",
+          "step_description": "验证最终路由哈希",
+          "step_type": "VALIDATE",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 4,
+          "risk_level": "LOW",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "哈希与审批目标一致",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.validate",
+          "target_resources": [
+            "vpn-route-policy"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "VALIDATE",
+            "desired_state": "哈希与审批目标一致"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.validate VALIDATE vpn-route-policy"
+          ],
+          "validation_rules": [
+            "哈希与审批目标一致",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-VALIDATE-06"
+          ]
+        }
+      ],
+      "change_rollback": [
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-01",
+          "step_name": "恢复双隧道路由优先级",
+          "step_description": "恢复双隧道路由优先级",
+          "step_type": "ROLLBACK",
+          "sequence": 1,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "有效下一跳恢复主隧道",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-route-policy"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "有效下一跳恢复主隧道"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-route-policy"
+          ],
+          "validation_rules": [
+            "有效下一跳恢复主隧道",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": []
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-02",
+          "step_name": "关闭备用 BGP 新策略",
+          "step_description": "关闭备用 BGP 新策略",
+          "step_type": "ROLLBACK",
+          "sequence": 2,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "邻居恢复旧策略版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "bgp-partner-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "邻居恢复旧策略版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE bgp-partner-b"
+          ],
+          "validation_rules": [
+            "邻居恢复旧策略版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-01"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-03",
+          "step_name": "恢复备用 IPsec 策略",
+          "step_description": "恢复备用 IPsec 策略",
+          "step_type": "ROLLBACK",
+          "sequence": 3,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "IPsec 使用旧版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "IPsec 使用旧版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-partner-tunnel-b"
+          ],
+          "validation_rules": [
+            "IPsec 使用旧版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-02"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-04",
+          "step_name": "恢复备用 IKE 策略",
+          "step_description": "恢复备用 IKE 策略",
+          "step_type": "ROLLBACK",
+          "sequence": 4,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "IKE 使用旧版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-b"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "IKE 使用旧版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-partner-tunnel-b"
+          ],
+          "validation_rules": [
+            "IKE 使用旧版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-03"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-05",
+          "step_name": "恢复主 BGP 策略",
+          "step_description": "恢复主 BGP 策略",
+          "step_type": "ROLLBACK",
+          "sequence": 5,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "主邻居 ESTABLISHED",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "bgp-partner-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "主邻居 ESTABLISHED"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE bgp-partner-a"
+          ],
+          "validation_rules": [
+            "主邻居 ESTABLISHED",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-04"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-06",
+          "step_name": "恢复主 IPsec 策略",
+          "step_description": "恢复主 IPsec 策略",
+          "step_type": "ROLLBACK",
+          "sequence": 6,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "主隧道 IPsec 使用旧版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "主隧道 IPsec 使用旧版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-partner-tunnel-a"
+          ],
+          "validation_rules": [
+            "主隧道 IPsec 使用旧版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-05"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-07",
+          "step_name": "恢复主 IKE 策略",
+          "step_description": "恢复主 IKE 策略",
+          "step_type": "ROLLBACK",
+          "sequence": 7,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "主隧道 IKE 使用旧版本",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner-tunnel-a"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "主隧道 IKE 使用旧版本"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-partner-tunnel-a"
+          ],
+          "validation_rules": [
+            "主隧道 IKE 使用旧版本",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-06"
+          ]
+        },
+        {
+          "step_id": "CHG-SYN-NET-003-ROLLBACK-08",
+          "step_name": "核对回退状态哈希",
+          "step_description": "核对回退状态哈希",
+          "step_type": "ROLLBACK",
+          "sequence": 8,
+          "executor_role": "network-operator-a",
+          "estimated_minutes": 5,
+          "risk_level": "HIGH",
+          "manual_confirmation_required": false,
+          "timeout_seconds": 300,
+          "success_criteria": "最终哈希等于变更前哈希",
+          "failure_action": "停止后续步骤并依据已审批计划进入回退判断",
+          "tool_name": "cloud_network.apply_plan",
+          "target_resources": [
+            "vpn-partner"
+          ],
+          "input_parameters": {
+            "synthetic_only": true,
+            "operation": "RESTORE_PREVIOUS_STATE",
+            "desired_state": "最终哈希等于变更前哈希"
+          },
+          "preconditions": [
+            "当前环境快照与方案生成时一致",
+            "前序依赖步骤已经成功"
+          ],
+          "commands": [
+            "SIMULATED_ONLY cloud_network.apply_plan RESTORE_PREVIOUS_STATE vpn-partner"
+          ],
+          "validation_rules": [
+            "最终哈希等于变更前哈希",
+            "状态哈希和操作日志均已记录"
+          ],
+          "evidence_requirements": [
+            "工具返回码",
+            "变更前后快照",
+            "监控采样记录"
+          ],
+          "dependencies": [
+            "CHG-SYN-NET-003-ROLLBACK-07"
+          ]
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "execution_status": "ROLLED_BACK",
+          "started_at": "2026-08-04T02:00:00+08:00",
+          "ended_at": "2026-08-04T04:00:00+08:00",
+          "operator": "network-operator-a",
+          "approver": "change-manager-a",
+          "total_steps": 10,
+          "succeeded_steps": 6,
+          "failed_steps": 1,
+          "rollback_triggered": true,
+          "rollback_status": "SUCCEEDED",
+          "pre_state_hash": "1c1052325a99d797a6ad58ee91b8782f7b45356ec244b2b5b8117d55c4479378",
+          "post_state_hash": "1c1052325a99d797a6ad58ee91b8782f7b45356ec244b2b5b8117d55c4479378",
+          "summary": "备用隧道第二个采样周期丢包 2.4%，触发逆序回退并恢复基线哈希。",
+          "incident_id": "INC-SYN-VPN-003",
+          "result_items": [
+            "Canary packet loss 2.4%",
+            "Rollback triggered",
+            "Pre-state hash restored"
+          ]
+        }
+      }
+    ]
+  }
+}
