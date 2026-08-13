@@ -141,6 +141,18 @@ class KnowledgeStore:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS change_case_bundles (
+            case_id TEXT PRIMARY KEY,
+            document_id INTEGER NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            extraction_strategy TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_change_case_bundles_updated
+            ON change_case_bundles(updated_at DESC);
+
         CREATE TABLE IF NOT EXISTS card_lineage (
             card_id INTEGER PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,
             case_id TEXT NOT NULL,
@@ -243,6 +255,25 @@ class KnowledgeStore:
                     "ALTER TABLE card_lineage "
                     "ADD COLUMN unit_metadata TEXT NOT NULL DEFAULT '{}'"
                 )
+            # Databases created before case bundles existed already carry the
+            # authoritative case_id in card_lineage. Promote those structured
+            # change orders to first-class bundles without changing card IDs.
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO change_case_bundles
+                    (case_id, document_id, title, extraction_strategy,
+                     created_at, updated_at)
+                SELECT lineage.case_id, cards.source_document_id,
+                       documents.source_name, lineage.extraction_strategy,
+                       MIN(lineage.created_at), MAX(cards.updated_at)
+                FROM card_lineage AS lineage
+                JOIN cards ON cards.id = lineage.card_id
+                JOIN documents ON documents.id = cards.source_document_id
+                WHERE lineage.extraction_strategy = 'change_order_shape_v2'
+                GROUP BY lineage.case_id, cards.source_document_id,
+                         documents.source_name, lineage.extraction_strategy
+                """
+            )
 
     def add_document(
         self,
@@ -310,6 +341,197 @@ class KnowledgeStore:
         result["created_at"] = str(row["created_at"])
         result["updated_at"] = str(row["updated_at"])
         return result
+
+    def save_case_bundle(
+        self,
+        *,
+        case_id: str,
+        document_id: int,
+        title: str,
+        extraction_strategy: str,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO change_case_bundles
+                    (case_id, document_id, title, extraction_strategy,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(case_id) DO UPDATE SET
+                    document_id = excluded.document_id,
+                    title = excluded.title,
+                    extraction_strategy = excluded.extraction_strategy,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    case_id,
+                    document_id,
+                    title.strip() or case_id,
+                    extraction_strategy,
+                    now,
+                    now,
+                ),
+            )
+
+    @staticmethod
+    def _case_bundle_status(status_counts: dict[str, int]) -> str:
+        total = sum(status_counts.values())
+        if total == 0:
+            return "EMPTY"
+        if status_counts.get(CardStatus.APPROVED.value, 0) == total:
+            return CardStatus.APPROVED.value
+        if status_counts.get(CardStatus.REJECTED.value, 0) == total:
+            return CardStatus.REJECTED.value
+        if status_counts.get(CardStatus.SUPERSEDED.value, 0) == total:
+            return CardStatus.SUPERSEDED.value
+        reviewable = (
+            status_counts.get(CardStatus.DRAFT.value, 0)
+            + status_counts.get(CardStatus.PENDING_REVIEW.value, 0)
+        )
+        if reviewable == total:
+            return CardStatus.PENDING_REVIEW.value
+        return "PARTIAL"
+
+    @classmethod
+    def _decode_case_bundle(
+        cls,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        include_cards: bool,
+    ) -> dict[str, Any]:
+        card_rows = connection.execute(
+            """
+            SELECT cards.*, documents.source_name, documents.source_ref,
+                   documents.checksum AS source_checksum,
+                   lineage.extraction_strategy AS lineage_strategy,
+                   lineage.unit_role AS lineage_unit_role,
+                   lineage.unit_pointer AS lineage_unit_pointer,
+                   lineage.source_pointers AS lineage_source_pointers,
+                   lineage.source_order AS lineage_source_order,
+                   lineage.unit_metadata AS lineage_unit_metadata,
+                   lineage.created_at AS lineage_created_at
+            FROM card_lineage AS lineage
+            JOIN cards ON cards.id = lineage.card_id
+            JOIN documents ON documents.id = cards.source_document_id
+            WHERE lineage.case_id = ?
+            ORDER BY lineage.source_order, cards.id
+            """,
+            (str(row["case_id"]),),
+        ).fetchall()
+        cards: list[dict[str, Any]] = []
+        card_ids: list[int] = []
+        status_counts: dict[str, int] = {}
+        roles: list[str] = []
+        for card_row in card_rows:
+            card_ids.append(int(card_row["id"]))
+            status_value = str(card_row["status"])
+            status_counts[status_value] = status_counts.get(status_value, 0) + 1
+            role = str(card_row["lineage_unit_role"])
+            if role not in roles:
+                roles.append(role)
+            if not include_cards:
+                continue
+            card = cls._decode_card(card_row)
+            assert card is not None
+            metadata = json.loads(str(card.pop("lineage_unit_metadata") or "{}"))
+            lineage = {
+                "case_id": str(row["case_id"]),
+                "extraction_strategy": str(card.pop("lineage_strategy")),
+                "unit_role": role,
+                "unit_pointer": str(card.pop("lineage_unit_pointer")),
+                "source_pointers": json.loads(
+                    str(card.pop("lineage_source_pointers") or "[]")
+                ),
+                "source_order": int(card.pop("lineage_source_order")),
+                "created_at": str(card.pop("lineage_created_at")),
+                "unit_metadata": metadata,
+            }
+            if isinstance(metadata, dict):
+                lineage.update(metadata)
+            card["lineage"] = lineage
+            cards.append(card)
+
+        report_row = connection.execute(
+            "SELECT report, strategy, created_at, updated_at "
+            "FROM extraction_reports WHERE document_id = ?",
+            (int(row["document_id"]),),
+        ).fetchone()
+        extraction_report: dict[str, Any] | None = None
+        if report_row is not None:
+            decoded = json.loads(str(report_row["report"] or "{}"))
+            extraction_report = decoded if isinstance(decoded, dict) else {"report": decoded}
+            extraction_report.setdefault("strategy", str(report_row["strategy"]))
+            extraction_report["created_at"] = str(report_row["created_at"])
+            extraction_report["updated_at"] = str(report_row["updated_at"])
+
+        result = dict(row)
+        result.update(
+            status=cls._case_bundle_status(status_counts),
+            card_count=sum(status_counts.values()),
+            reviewable_count=(
+                status_counts.get(CardStatus.DRAFT.value, 0)
+                + status_counts.get(CardStatus.PENDING_REVIEW.value, 0)
+            ),
+            status_counts=status_counts,
+            card_ids=card_ids,
+            roles=roles,
+            extraction_report=extraction_report,
+        )
+        if include_cards:
+            result["cards"] = cards
+        return result
+
+    def get_case_bundle(
+        self, case_id: str, *, include_cards: bool = True
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT bundles.*, documents.source_name, documents.source_type,
+                       documents.source_ref, documents.checksum AS source_checksum
+                FROM change_case_bundles AS bundles
+                JOIN documents ON documents.id = bundles.document_id
+                WHERE bundles.case_id = ?
+                """,
+                (case_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._decode_case_bundle(
+                connection, row, include_cards=include_cards
+            )
+
+    def list_case_bundles(
+        self,
+        status: str | None = None,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        normalized_status = str(status or "").strip().upper()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT bundles.*, documents.source_name, documents.source_type,
+                       documents.source_ref, documents.checksum AS source_checksum
+                FROM change_case_bundles AS bundles
+                JOIN documents ON documents.id = bundles.document_id
+                ORDER BY bundles.updated_at DESC, bundles.case_id
+                """
+            ).fetchall()
+            bundles = [
+                self._decode_case_bundle(connection, row, include_cards=False)
+                for row in rows
+            ]
+        if normalized_status:
+            bundles = [
+                bundle for bundle in bundles if bundle["status"] == normalized_status
+            ]
+        start = max(offset, 0)
+        end = start + min(max(limit, 1), 2000)
+        return bundles[start:end]
 
     def save_card_lineage(
         self,
@@ -671,6 +893,9 @@ class KnowledgeStore:
             ).fetchone()
             if current is None:
                 raise StoreError(f"知识卡片不存在: {card_id}")
+            lineage = connection.execute(
+                "SELECT case_id FROM card_lineage WHERE card_id = ?", (card_id,)
+            ).fetchone()
 
             memory_rows = connection.execute(
                 "SELECT backend, memory_id FROM memory_links WHERE card_id = ?",
@@ -715,6 +940,11 @@ class KnowledgeStore:
                 (card_id, actor, json.dumps(detail, ensure_ascii=False), now),
             )
             connection.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+            if lineage is not None:
+                connection.execute(
+                    "UPDATE change_case_bundles SET updated_at = ? WHERE case_id = ?",
+                    (now, str(lineage["case_id"])),
+                )
         return detail
 
     def update_card_quality(
@@ -758,6 +988,11 @@ class KnowledgeStore:
                 VALUES (?, 'CARD_REGRADED', 'knowledge_pipeline', ?, ?)
                 """,
                 (card_id, json.dumps(detail, ensure_ascii=False), now),
+            )
+            connection.execute(
+                "UPDATE change_case_bundles SET updated_at = ? "
+                "WHERE case_id = (SELECT case_id FROM card_lineage WHERE card_id = ?)",
+                (now, card_id),
             )
         card = self.get_card(card_id)
         if card is None:
@@ -911,6 +1146,51 @@ class KnowledgeStore:
             ):
                 raise StoreError("结构化知识的输出项与逐源证据映射不一致")
 
+    @classmethod
+    def _validate_card_approval(
+        cls,
+        connection: sqlite3.Connection,
+        current: sqlite3.Row,
+    ) -> None:
+        quality_issues = json.loads(current["quality_issues"] or "[]")
+        evidence_issues = [issue for issue in quality_issues if "证据" in str(issue)]
+        if not current["evidence_quote"] or evidence_issues:
+            raise StoreError(
+                "该知识缺少可定位的原文证据，不能批准发布；请补充来源后重新抽取。"
+            )
+        blocking_issues = [
+            str(issue)
+            for issue in quality_issues
+            if str(issue).startswith("阻断：")
+        ]
+        if blocking_issues:
+            raise StoreError(
+                "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
+                + "；".join(blocking_issues)
+            )
+        cls._validate_structured_card_evidence(connection, current)
+        report_row = connection.execute(
+            "SELECT report FROM extraction_reports WHERE document_id = ?",
+            (int(current["source_document_id"]),),
+        ).fetchone()
+        if report_row is None:
+            return
+        report = json.loads(str(report_row["report"]) or "{}")
+        change_report = report.get("change_order") if isinstance(report, dict) else None
+        if (
+            isinstance(change_report, dict)
+            and change_report.get("matched") is True
+            and not change_report.get(
+                "safe_for_internal_index",
+                change_report.get("safe_to_publish", False),
+            )
+        ):
+            blockers = change_report.get("blockers") or ["结构完整性检查未通过"]
+            raise StoreError(
+                "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
+                + "；".join(str(item) for item in blockers)
+            )
+
     def review_card(
         self,
         card_id: int,
@@ -946,45 +1226,7 @@ class KnowledgeStore:
                     f"当前状态为 {current['status']}"
                 )
             if action in {"APPROVE", "SUPERSEDE"}:
-                quality_issues = json.loads(current["quality_issues"] or "[]")
-                evidence_issues = [issue for issue in quality_issues if "证据" in str(issue)]
-                if not current["evidence_quote"] or evidence_issues:
-                    raise StoreError(
-                        "该知识缺少可定位的原文证据，不能批准发布；请补充来源后重新抽取。"
-                    )
-                blocking_issues = [
-                    str(issue)
-                    for issue in quality_issues
-                    if str(issue).startswith("阻断：")
-                ]
-                if blocking_issues:
-                    raise StoreError(
-                        "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
-                        + "；".join(blocking_issues)
-                    )
-                self._validate_structured_card_evidence(connection, current)
-                report_row = connection.execute(
-                    "SELECT report FROM extraction_reports WHERE document_id = ?",
-                    (int(current["source_document_id"]),),
-                ).fetchone()
-                if report_row is not None:
-                    report = json.loads(str(report_row["report"]) or "{}")
-                    change_report = (
-                        report.get("change_order") if isinstance(report, dict) else None
-                    )
-                    if (
-                        isinstance(change_report, dict)
-                        and change_report.get("matched") is True
-                        and not change_report.get(
-                            "safe_for_internal_index",
-                            change_report.get("safe_to_publish", False),
-                        )
-                    ):
-                        blockers = change_report.get("blockers") or ["结构完整性检查未通过"]
-                        raise StoreError(
-                            "该知识所属变更单的结构覆盖或双视图对账未通过，不能批准发布："
-                            + "；".join(str(item) for item in blockers)
-                        )
+                self._validate_card_approval(connection, current)
 
             if action == "SUPERSEDE":
                 if supersedes_id is None or supersedes_id == card_id:
@@ -1077,10 +1319,119 @@ class KnowledgeStore:
                     now,
                 ),
             )
+            connection.execute(
+                "UPDATE change_case_bundles SET updated_at = ? "
+                "WHERE case_id = (SELECT case_id FROM card_lineage WHERE card_id = ?)",
+                (now, card_id),
+            )
         card = self.get_card(card_id)
         if card is None:
             raise StoreError("审核后无法读取知识卡片")
         return card
+
+    def review_case_bundle(
+        self,
+        case_id: str,
+        *,
+        action: str,
+        reviewer: str,
+        comment: str = "",
+    ) -> dict[str, Any]:
+        action = action.strip().upper()
+        reviewer = reviewer.strip()
+        if not reviewer:
+            raise StoreError("审核人不能为空")
+        if action not in {"APPROVE", "REJECT"}:
+            raise StoreError("案例包审核动作必须是 APPROVE 或 REJECT")
+
+        now = utc_now()
+        with self.connect() as connection:
+            bundle = connection.execute(
+                "SELECT case_id FROM change_case_bundles WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()
+            if bundle is None:
+                raise StoreError(f"案例包不存在: {case_id}")
+            cards = connection.execute(
+                """
+                SELECT cards.id, cards.status, cards.evidence_quote,
+                       cards.quality_issues, cards.source_document_id
+                FROM card_lineage AS lineage
+                JOIN cards ON cards.id = lineage.card_id
+                WHERE lineage.case_id = ?
+                ORDER BY lineage.source_order, cards.id
+                """,
+                (case_id,),
+            ).fetchall()
+            if not cards:
+                raise StoreError("案例包没有可审核的知识卡片")
+            reviewable_statuses = {
+                CardStatus.DRAFT.value,
+                CardStatus.PENDING_REVIEW.value,
+            }
+            target_status = (
+                CardStatus.APPROVED.value
+                if action == "APPROVE"
+                else CardStatus.REJECTED.value
+            )
+            conflicting = [
+                f"K{int(card['id'])}={card['status']}"
+                for card in cards
+                if card["status"] not in reviewable_statuses
+                and card["status"] != target_status
+            ]
+            if conflicting:
+                raise StoreError(
+                    "案例包含有与目标状态冲突的已审核子卡，不能整包变更；"
+                    + "、".join(conflicting)
+                )
+            if action == "APPROVE":
+                # Validate every child before the first write. A single failed
+                # evidence/coverage gate therefore rolls back the whole bundle.
+                for card in cards:
+                    self._validate_card_approval(connection, card)
+
+            new_status = target_status
+            published_at = now if action == "APPROVE" else None
+            for card in cards:
+                if card["status"] not in reviewable_statuses:
+                    continue
+                card_id = int(card["id"])
+                connection.execute(
+                    """
+                    UPDATE cards
+                    SET status = ?, reviewer = ?, review_comment = ?,
+                        published_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_status, reviewer, comment, published_at, now, card_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO audit_log
+                        (card_id, action, actor, detail, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        f"CASE_BUNDLE_{action}",
+                        reviewer,
+                        json.dumps(
+                            {"case_id": case_id, "comment": comment},
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
+                )
+            connection.execute(
+                "UPDATE change_case_bundles SET updated_at = ? WHERE case_id = ?",
+                (now, case_id),
+            )
+
+        reviewed = self.get_case_bundle(case_id)
+        if reviewed is None:
+            raise StoreError("审核后无法读取案例包")
+        return reviewed
 
     def stats(self) -> dict[str, Any]:
         with self.connect() as connection:
@@ -1093,6 +1444,9 @@ class KnowledgeStore:
             relation_count = connection.execute(
                 "SELECT COUNT(*) AS count FROM relations"
             ).fetchone()["count"]
+            bundle_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM change_case_bundles"
+            ).fetchone()["count"]
             average_quality = connection.execute(
                 "SELECT COALESCE(AVG(quality_score), 0) AS value FROM cards"
             ).fetchone()["value"]
@@ -1101,6 +1455,7 @@ class KnowledgeStore:
         return {
             "documents": document_count,
             "cards": sum(statuses.values()),
+            "case_bundles": bundle_count,
             "relations": relation_count,
             "average_quality": round(float(average_quality), 1),
             "statuses": statuses,

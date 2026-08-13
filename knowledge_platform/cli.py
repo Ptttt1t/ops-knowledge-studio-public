@@ -87,6 +87,30 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--comment", default="")
     review_parser.add_argument("--supersedes-id", type=int)
 
+    bundles_parser = subparsers.add_parser(
+        "case-bundles", help="列出结构化变更案例包"
+    )
+    bundles_parser.add_argument(
+        "--status",
+        choices=[status.value for status in CardStatus] + ["PARTIAL", "EMPTY"],
+    )
+    bundles_parser.add_argument("--limit", type=int, default=100)
+
+    bundle_parser = subparsers.add_parser(
+        "case-bundle", help="查看一个结构化变更案例包及其有序原子卡"
+    )
+    bundle_parser.add_argument("--case-id", required=True)
+
+    bundle_review_parser = subparsers.add_parser(
+        "review-case-bundle", help="原子地批准或驳回整个变更案例包"
+    )
+    bundle_review_parser.add_argument("--case-id", required=True)
+    bundle_review_parser.add_argument(
+        "--action", choices=["approve", "reject"], required=True
+    )
+    bundle_review_parser.add_argument("--reviewer", required=True)
+    bundle_review_parser.add_argument("--comment", default="")
+
     search_parser = subparsers.add_parser(
         "search",
         help="治理检索；默认使用本地索引，无命中时可选用 MindMemOS 语义后备",
@@ -246,6 +270,29 @@ def main(argv: list[str] | None = None) -> int:
                     reviewer=args.reviewer,
                     comment=args.comment,
                     supersedes_id=args.supersedes_id,
+                )
+            )
+        elif command == "case-bundles":
+            _print_json(
+                {
+                    "case_bundles": service.list_case_bundles(
+                        status=args.status,
+                        limit=args.limit,
+                    )
+                }
+            )
+        elif command == "case-bundle":
+            bundle = service.case_bundle_detail(args.case_id)
+            if bundle is None:
+                raise KnowledgeServiceError(f"案例包不存在: {args.case_id}")
+            _print_json(bundle)
+        elif command == "review-case-bundle":
+            _print_json(
+                service.review_case_bundle(
+                    args.case_id,
+                    action=args.action,
+                    reviewer=args.reviewer,
+                    comment=args.comment,
                 )
             )
         elif command == "search":

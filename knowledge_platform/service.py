@@ -85,6 +85,9 @@ class KnowledgeService:
     MAX_CARDS_PER_EXTRACTION = 5
     MAX_EXTRACTION_SPLIT_DEPTH = 2
     MAX_ANSWER_CLAIMS = 30
+    MAX_RAW_ANSWER_CLAIMS = 120
+    PREFERRED_ANSWER_CLAIMS = 12
+    ANSWER_CONTRACT_RETRIES = 1
     ANSWER_CATEGORIES = {
         "适用条件",
         "执行步骤",
@@ -636,13 +639,22 @@ class KnowledgeService:
         if not created:
             self.store.complete_ingestion(checksum, owner_token, document_id)
             extraction_report = self.store.get_extraction_report(document_id)
+            duplicate_case_id = (
+                extraction_report.get("case_id")
+                if extraction_report is not None
+                else None
+            )
             return {
                 "document_id": document_id,
                 "duplicate_document": True,
                 "card_ids": self.store.card_ids_for_document(document_id),
-                "case_id": (
-                    extraction_report.get("case_id")
-                    if extraction_report is not None
+                "case_id": duplicate_case_id,
+                "case_bundle": (
+                    self.store.get_case_bundle(
+                        str(duplicate_case_id), include_cards=False
+                    )
+                    if duplicate_case_id
+                    and str(duplicate_case_id).startswith("change-order:")
                     else None
                 ),
                 "cards_by_role": (
@@ -777,9 +789,51 @@ class KnowledgeService:
             document_id, extraction_strategy, extraction_report
         )
 
+        case_bundle: dict[str, Any] | None = None
+        if change_order_plan is not None:
+            model_identity_title = next(
+                (
+                    item.draft.title.strip()
+                    for item in extracted
+                    if extraction_units.get(item.chunk.index) is not None
+                    and extraction_units[item.chunk.index].role
+                    == "IDENTITY_METADATA_CONTEXT"
+                    and item.draft.title.strip()
+                ),
+                document.name,
+            )
+            identity_title = model_identity_title
+            try:
+                source_payload = json.loads(document.content)
+                source_data = (
+                    source_payload.get("data")
+                    if isinstance(source_payload, dict)
+                    else None
+                )
+                if isinstance(source_data, dict):
+                    source_title = str(source_data.get("title") or "").strip()
+                    ticket_id = str(source_data.get("ticket_id") or "").strip()
+                    if source_title and ticket_id:
+                        identity_title = f"{source_title} · {ticket_id}"
+                    elif source_title or ticket_id:
+                        identity_title = source_title or ticket_id
+            except (TypeError, ValueError):
+                # Structural matching already validated the source. A title is
+                # display metadata only, so preserve the grounded model/source
+                # filename fallback if this optional projection is unavailable.
+                pass
+            self.store.save_case_bundle(
+                case_id=case_id,
+                document_id=document_id,
+                title=identity_title,
+                extraction_strategy=extraction_strategy,
+            )
+            case_bundle = self.store.get_case_bundle(case_id, include_cards=False)
+
         result = {
             "document_id": document_id,
             "case_id": case_id,
+            "case_bundle": case_bundle,
             "duplicate_document": False,
             "chunks": len(chunks),
             "extraction_strategy": extraction_strategy,
@@ -794,7 +848,12 @@ class KnowledgeService:
                 if self.store.get_card(card_id)["status"] == CardStatus.PENDING_REVIEW.value
             ),
             "model_calls": budget.used,
-            "message": "知识抽取完成，正式发布前必须人工审核。",
+            "message": (
+                f"变更案例包已建立，包含 {len(card_ids)} 张原子知识卡；"
+                "正式发布前必须人工审核。"
+                if case_bundle is not None
+                else "知识抽取完成，正式发布前必须人工审核。"
+            ),
         }
         self.store.complete_ingestion(checksum, owner_token, document_id)
         self.trace.log("knowledge_ingest_completed", **result)
@@ -1331,9 +1390,9 @@ class KnowledgeService:
     ) -> list[dict[str, Any]]:
         if not isinstance(payload, dict) or not isinstance(payload.get("claims"), list):
             raise KnowledgeServiceError("模型答案不是规定的 claims JSON 对象")
-        if len(payload["claims"]) > self.MAX_ANSWER_CLAIMS:
+        if len(payload["claims"]) > self.MAX_RAW_ANSWER_CLAIMS:
             raise KnowledgeServiceError(
-                f"模型答案超过 {self.MAX_ANSWER_CLAIMS} 条结论限制"
+                f"模型答案原始 claims 超过 {self.MAX_RAW_ANSWER_CLAIMS} 条安全限制"
             )
 
         claims: list[dict[str, Any]] = []
@@ -1409,7 +1468,13 @@ class KnowledgeService:
                         )
                     text = str(value[support_index]).strip()
                 else:
-                    if raw_claim.get("support_index") not in (None, ""):
+                    raw_support_index = raw_claim.get("support_index")
+                    if isinstance(raw_support_index, bool) or raw_support_index not in (
+                        None,
+                        "",
+                        0,
+                        "0",
+                    ):
                         raise KnowledgeServiceError(
                             f"第 {index} 条标量字段不允许 support_index"
                         )
@@ -1423,6 +1488,10 @@ class KnowledgeService:
             if claim_key in seen_claims:
                 continue
             seen_claims.add(claim_key)
+            if len(claims) >= self.MAX_ANSWER_CLAIMS:
+                raise KnowledgeServiceError(
+                    f"模型答案去重后超过 {self.MAX_ANSWER_CLAIMS} 条结论限制"
+                )
             claims.append(
                 {
                     "category": category,
@@ -1471,19 +1540,57 @@ class KnowledgeService:
                 "usage": None,
                 "refusal_reason": "no_relevant_approved_knowledge",
             }
-        cards = [hit.card for hit in hits]
-        payload, usage = self.client.chat_json(
-            ANSWER_SYSTEM_PROMPT,
-            answer_user_prompt(question, cards),
-        )
+        cards = []
+        for hit in hits:
+            card = dict(hit.card)
+            lineage = self.store.get_card_lineage(int(card["id"])) or {}
+            if lineage.get("case_id"):
+                card["case_bundle"] = {
+                    "case_id": lineage["case_id"],
+                    "unit_role": lineage.get("unit_role"),
+                    "source_order": lineage.get("source_order"),
+                }
+            cards.append(card)
         retrieved_cards = {int(card["id"]): card for card in cards}
-        claims = self._validate_answer_claims(payload, retrieved_cards)
+        base_user_prompt = answer_user_prompt(question, cards)
+        claims: list[dict[str, Any]] = []
+        usage: dict[str, Any] | None = None
+        contract_retries = 0
+        validation_error = ""
+        for attempt in range(self.ANSWER_CONTRACT_RETRIES + 1):
+            user_prompt = base_user_prompt
+            if attempt:
+                user_prompt += (
+                    "\n\n上一次输出未通过平台协议："
+                    f"{validation_error}。请重新生成，最多 "
+                    f"{self.PREFERRED_ANSWER_CLAIMS} 条 claims；数组字段使用从 0 开始的"
+                    "索引，标量字段 support_index 必须为 null。"
+                )
+            payload, usage = self.client.chat_json(
+                ANSWER_SYSTEM_PROMPT,
+                user_prompt,
+            )
+            try:
+                claims = self._validate_answer_claims(payload, retrieved_cards)
+                break
+            except KnowledgeServiceError as exc:
+                validation_error = str(exc)
+                if attempt >= self.ANSWER_CONTRACT_RETRIES:
+                    raise
+                contract_retries += 1
+                self.trace.log(
+                    "trusted_answer_contract_retry",
+                    question=question,
+                    attempt=attempt + 1,
+                    reason=validation_error,
+                )
         if not claims:
             return {
                 "answer": "现有已审核知识不足，无法生成可信方案。",
                 "claims": [],
                 "sources": [],
                 "usage": usage,
+                "answer_contract": {"retries": contract_retries},
                 "refusal_reason": "model_found_insufficient_evidence",
             }
         answer = self._render_answer(claims)
@@ -1506,6 +1613,7 @@ class KnowledgeService:
                     in hit_by_id[int(card["id"])].matched_terms
                     else "local_lexical"
                 ),
+                "case_bundle": card.get("case_bundle"),
             }
             for card in cited_cards
         ]
@@ -1514,12 +1622,14 @@ class KnowledgeService:
             question=question,
             card_ids=sorted(cited_ids),
             usage=usage,
+            contract_retries=contract_retries,
         )
         return {
             "answer": answer,
             "claims": claims,
             "sources": sources,
             "usage": usage,
+            "answer_contract": {"retries": contract_retries},
             "refusal_reason": None,
         }
 
@@ -1571,6 +1681,67 @@ class KnowledgeService:
                 )
             card["memory_sync"] = memory_sync
         return card
+
+    def list_case_bundles(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_case_bundles(
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    def case_bundle_detail(self, case_id: str) -> dict[str, Any] | None:
+        return self.store.get_case_bundle(case_id, include_cards=True)
+
+    def review_case_bundle(
+        self,
+        case_id: str,
+        *,
+        action: str,
+        reviewer: str,
+        comment: str = "",
+    ) -> dict[str, Any]:
+        bundle = self.store.review_case_bundle(
+            case_id,
+            action=action,
+            reviewer=reviewer,
+            comment=comment,
+        )
+        sync_results: list[dict[str, Any]] = []
+        if bundle["status"] == CardStatus.APPROVED.value:
+            for card in bundle.get("cards", []):
+                try:
+                    sync_results.append(self.memory.sync_card(card))
+                except MindMemOSError as exc:
+                    failure = {
+                        "status": "FAILED",
+                        "card_id": int(card["id"]),
+                        "error": str(exc),
+                    }
+                    sync_results.append(failure)
+                    self.trace.log(
+                        "mindmemos_sync_degraded",
+                        card_id=int(card["id"]),
+                        case_id=case_id,
+                        error=str(exc),
+                    )
+        bundle["memory_sync"] = {
+            "processed": len(sync_results),
+            "results": sync_results,
+        }
+        self.trace.log(
+            "case_bundle_reviewed",
+            case_id=case_id,
+            action=action.upper(),
+            reviewer=reviewer,
+            card_ids=[int(card["id"]) for card in bundle.get("cards", [])],
+        )
+        return bundle
 
     def delete_card(self, card_id: int, *, actor: str) -> dict[str, Any]:
         result = self.store.delete_card(card_id, actor=actor)
@@ -1706,6 +1877,16 @@ class KnowledgeService:
         card["relations"] = self.store.list_relations(card_id)
         card["audit_log"] = self.store.list_audit(card_id)
         card["lineage"] = self.store.get_card_lineage(card_id)
+        card["case_bundle"] = (
+            self.store.get_case_bundle(
+                str(card["lineage"]["case_id"]), include_cards=False
+            )
+            if card["lineage"] is not None
+            and str(card["lineage"].get("case_id") or "").startswith(
+                "change-order:"
+            )
+            else None
+        )
         card["source_items"] = self.store.list_card_source_items(card_id)
         card["extraction_report"] = self.store.get_extraction_report(
             int(card["source_document_id"])

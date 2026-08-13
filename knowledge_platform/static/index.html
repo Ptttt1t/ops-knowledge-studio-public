@@ -275,7 +275,7 @@
             <div class="panel-head"><div><p class="eyebrow">PIPELINE</p><h2>加工流水线</h2></div></div>
             <div class="pipeline">
               <div><span>1</span><strong>分片与定位</strong><p>保留原文字符位置和来源校验和</p></div>
-              <div><span>2</span><strong>DeepSeek 抽取</strong><p>生成固定 Schema 的知识卡片</p></div>
+              <div><span>2</span><strong>DeepSeek 抽取</strong><p>变更单先建案例包，再生成包内原子卡</p></div>
               <div><span>3</span><strong>质量门禁</strong><p>检查字段、回退、验证和原文证据</p></div>
               <div><span>4</span><strong>知识比较</strong><p>识别 NEW / DUPLICATE / CONFLICT / NEW_VERSION</p></div>
               <div><span>5</span><strong>人工审核</strong><p>批准、驳回或替代旧版本</p></div>
@@ -287,7 +287,7 @@
 
       <section id="page-review" class="page">
         <article class="panel review-controls">
-          <div><p class="eyebrow">HUMAN IN THE LOOP</p><h2>人工知识审核</h2><small>Demo 默认使用 shared-operator；生产模式可重新启用令牌鉴权</small></div>
+          <div><p class="eyebrow">HUMAN IN THE LOOP</p><h2>人工知识审核</h2><small>结构化变更单可整包审核，普通知识仍支持单卡审核</small></div>
           <label class="grow">审核意见<input id="review-comment" placeholder="可选：判断依据、修改说明或驳回原因"></label>
         </article>
         <div id="review-queue" class="review-grid empty">当前没有待审核知识</div>

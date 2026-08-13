@@ -349,6 +349,7 @@ python scripts/ocr_smoke_test.py
 原始文档
   -> JSON 结构识别 / 普通文档分片与来源定位
   -> TaskRecord 双视图对账与覆盖率检查（匹配的变更单）
+  -> 建立 ChangeCaseBundle 并按结构顺序挂载原子卡
   -> DeepSeek 结构化抽取
   -> 字段与证据质量校验
   -> 重复 / 冲突 / 新版本比较
@@ -366,6 +367,11 @@ python run.py ingest --file sample_data\demo_upgrade_sop.md
 # 查看知识库状态
 python run.py stats
 python run.py list
+python run.py case-bundles
+
+# 查看或整包审核一个结构化变更案例
+python run.py case-bundle --case-id "change-order:<source-sha256>"
+python run.py review-case-bundle --case-id "change-order:<source-sha256>" --action approve --reviewer reviewer-name
 
 # 治理检索；默认本地，启用 MindMemOS 后可在无命中时使用语义后备
 python run.py search --query "路由切换 回退"
@@ -379,7 +385,11 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 使用 `python run.py <命令> --help` 查看完整参数。
 
-对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：先创建一个 `ChangeCaseBundle`，再把上下文、任务、前检、实施、验证、回退和执行结果等原子卡按来源顺序挂到包内。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过原有证据、覆盖或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
+
+结构适配中，`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+
+可信回答要求模型优先输出不超过 12 条字段指针 claims，平台仍保留去重后最多 30 条的硬上限。标量字段误带 `support_index: 0` 时会安全归一化为 `null`；其他非法索引、未检索卡片、未批准卡片和自由文本仍会被拒绝。协议校验失败时平台只允许一次有界纠错重试，直接查询和只读 Agent 共用这条校验链。
 
 Web 知识库中的每张卡片均提供“删除”按钮。删除操作会移除卡片、关系、结构 lineage 和检索映射，保留不可变审计记录；若卡片已同步到 MindMemOS，还会进入退休队列等待清理。此操作不可从界面撤销，删除前会再次确认。
 

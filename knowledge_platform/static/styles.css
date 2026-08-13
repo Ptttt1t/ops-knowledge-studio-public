@@ -86,6 +86,15 @@ h2 { margin-bottom: 0; font-size: 19px; font-weight: 600; }
 .review-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
 .empty { color: #8b948e; }
 .knowledge-card { border: 1px solid var(--line); border-left: 3px solid #73947f; border-radius: 7px; padding: 16px; background: #fff; }
+.case-bundle { grid-column: 1 / -1; border: 1px solid #aac3b5; border-left: 5px solid var(--green); border-radius: 9px; padding: 18px; background: linear-gradient(135deg, #f6fbf7, #fff); box-shadow: 0 8px 24px rgba(31,107,79,.06); }
+.bundle-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.bundle-heading h3 { margin: 3px 0 0; font-size: 17px; }
+.bundle-count { min-width: 62px; color: var(--green); font-family: Georgia, serif; font-size: 26px; text-align: right; }
+.bundle-count small { display: block; color: var(--muted); font-family: "Segoe UI", sans-serif; font-size: 9px; }
+.case-bundle > p, .case-bundle details { color: var(--muted); font-size: 11px; }
+.case-bundle summary { color: var(--green); cursor: pointer; }
+.bundle-identity { padding: 9px 11px; overflow-wrap: anywhere; border-radius: 5px; background: #edf3ef; font-family: Consolas, monospace; line-height: 1.6; }
+.bundle-card-list { display: grid; gap: 10px; margin-top: 22px; }
 .knowledge-card .card-top { display: flex; justify-content: space-between; gap: 16px; }
 .knowledge-card h3 { margin: 0 0 7px; font-size: 15px; }
 .knowledge-card p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 12px; }
