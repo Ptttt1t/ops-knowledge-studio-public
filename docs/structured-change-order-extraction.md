@@ -66,6 +66,18 @@ JSON 原文
   -> 人工审核
 ```
 
+## ChangeCaseBundle 案例包
+
+命中 `change_order_shape_v2` 后，平台不再只给每张卡写一个逻辑 `case_id`，而是持久化一级 `ChangeCaseBundle`：
+
+- 一个来源文档和内容校验和对应一个 `change-order:<sha256>` 案例包；
+- 包保存来源、抽取策略、更新时间和完整 extraction report；
+- 子卡继续保持原子化，通过 lineage 保存 `unit_role`、`source_order`、JSON Pointer 和证据矩阵；
+- 包状态由子卡实时聚合，可能为 `PENDING_REVIEW`、`PARTIAL`、`APPROVED`、`REJECTED` 或 `SUPERSEDED`；
+- 旧数据库若已有 `change_order_shape_v2` lineage，初始化时会自动回填案例包，不改变原卡 ID 和审核状态。
+
+Web 页面默认按案例包聚合显示结构化变更单。整包批准会先在同一 SQLite 事务中验证全部子卡，只有所有证据、覆盖、语义映射和来源哈希均通过后才统一更新状态；整包驳回同样统一提交。单卡审核接口继续保留，普通文档行为不变。对应只读接口为 `GET /api/knowledge-case-bundles` 和 `GET /api/knowledge-case-bundles/{case_id}`，整包审核为 `POST /api/knowledge-case-bundles/{case_id}/review`。
+
 - TaskRecord 对账完全一致时，`action_list` 是唯一抽取源；分组视图只计入已对账的 provenance。
 - 数量相等但内容未能逐项对齐时，两份视图都会保留，相关卡片停留在 `DRAFT`。
 - ProcedureStep 始终保持源数组顺序，不依赖自动猜测的 sequence 字段重排。

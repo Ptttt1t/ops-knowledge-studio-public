@@ -106,10 +106,13 @@ JSON 格式：
    - 结论：summary；
    - 适用条件：scenario、object_name、applicable_versions、prerequisites；
    - 执行步骤：procedure_steps；风险：risks；回退：rollback_steps；验证：validation_steps；
-4. support_field 为数组时，support_index 必须是从 0 开始的有效数组下标；标量字段应为 null；
-5. 只有字段为空时才可输出“知识不足”，support_field 指向该空字段，support_index 为 null；
-6. 每条 claim 只能选择一个卡片字段原子，不得使用模型常识补充建议；
-7. 如果知识完全无法回答问题，返回 {"claims": []}。"""
+4. 最多输出 12 条 claims，优先保留与问题直接相关的结论、关键步骤、风险、回退和验证；
+5. support_field 为数组时，support_index 必须是从 0 开始的有效数组下标；标量字段必须为 null；
+   - 数组字段示例：{"category":"执行步骤","card_id":1,"support_field":"procedure_steps","support_index":0}
+   - 标量字段示例：{"category":"结论","card_id":1,"support_field":"summary","support_index":null}
+6. 只有字段为空时才可输出“知识不足”，support_field 指向该空字段，support_index 为 null；
+7. 每条 claim 只能选择一个卡片字段原子，不得使用模型常识补充建议；
+8. 如果知识完全无法回答问题，返回 {"claims": []}。"""
 
 
 def extraction_user_prompt(source_name: str, locator: str, content: str) -> str:
@@ -175,6 +178,7 @@ def answer_user_prompt(question: str, cards: list[dict[str, Any]]) -> str:
                 "source": card["source_ref"],
                 "evidence_locator": card["evidence_locator"],
                 "evidence_quote": card["evidence_quote"],
+                "case_bundle": card.get("case_bundle"),
             }
         )
     return (

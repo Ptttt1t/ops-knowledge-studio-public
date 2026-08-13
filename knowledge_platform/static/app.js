@@ -36,6 +36,8 @@ const statusLabels = {
   APPROVED: "已批准",
   REJECTED: "已驳回",
   SUPERSEDED: "已替代",
+  PARTIAL: "部分已审核",
+  EMPTY: "空包",
 };
 
 const escapeHtml = (value) => String(value ?? "")
@@ -432,6 +434,41 @@ function cardHtml(card, reviewMode = false) {
   </article>`;
 }
 
+function caseBundleHtml(bundle, reviewMode = false) {
+  const counts = Object.entries(bundle.status_counts || {})
+    .map(([status, count]) => `${statusLabels[status] || escapeHtml(status)} ${count}`)
+    .join(" · ") || "暂无子卡";
+  const roles = (bundle.roles || [])
+    .map(role => `<span class="tag">${escapeHtml(role)}</span>`)
+    .join("");
+  const total = Number(bundle.card_count);
+  const reviewable = Number(bundle.reviewable_count);
+  const approved = Number((bundle.status_counts || {}).APPROVED || 0);
+  const rejected = Number((bundle.status_counts || {}).REJECTED || 0);
+  const canApprove = reviewMode && reviewable > 0 && reviewable + approved === total;
+  const canReject = reviewMode && reviewable > 0 && reviewable + rejected === total;
+  const actions = `${canApprove ? `
+    <button class="button primary small" data-bundle-action="approve" data-case-id="${escapeHtml(bundle.case_id)}">整包批准</button>` : ""}${canReject ? `
+    <button class="button danger small" data-bundle-action="reject" data-case-id="${escapeHtml(bundle.case_id)}">整包驳回</button>` : ""}`;
+  return `<article class="case-bundle">
+    <div class="bundle-heading">
+      <div><p class="eyebrow">CHANGE CASE BUNDLE</p><h3>${escapeHtml(bundle.title || bundle.source_name)}</h3></div>
+      <span class="bundle-count">${Number(bundle.card_count)}<small>张原子卡</small></span>
+    </div>
+    <div class="card-meta">
+      <span class="tag ${escapeHtml(bundle.status)}">${statusLabels[bundle.status] || escapeHtml(bundle.status)}</span>
+      <span class="tag">${escapeHtml(bundle.extraction_strategy)}</span>${roles}
+    </div>
+    <p>${escapeHtml(bundle.source_name)} · ${escapeHtml(counts)}</p>
+    <details><summary>查看包结构与来源标识</summary>
+      <p class="bundle-identity">${escapeHtml(bundle.case_id)}<br>${escapeHtml(bundle.source_ref)}</p>
+    </details>
+    <div class="card-actions">
+      <button class="button secondary small" data-bundle-action="detail" data-case-id="${escapeHtml(bundle.case_id)}">展开整包</button>${actions}
+    </div>
+  </article>`;
+}
+
 async function refreshStats() {
   const data = await api("/api/stats");
   document.getElementById("metric-documents").textContent = data.documents;
@@ -476,26 +513,51 @@ async function loadRecent() {
 }
 
 async function loadReviewQueue() {
-  const [pending, drafts] = await Promise.all([
+  const [pending, drafts, bundleData] = await Promise.all([
     api("/api/cards?status=PENDING_REVIEW&limit=200"),
     api("/api/cards?status=DRAFT&limit=200"),
+    api("/api/knowledge-case-bundles?limit=200"),
   ]);
-  const cards = [...pending.cards, ...drafts.cards];
+  const bundles = (bundleData.case_bundles || [])
+    .filter(bundle => Number(bundle.reviewable_count) > 0);
+  const bundledIds = new Set(bundles.flatMap(bundle => bundle.card_ids || []).map(Number));
+  const cards = [...pending.cards, ...drafts.cards]
+    .filter(card => !bundledIds.has(Number(card.id)));
   const target = document.getElementById("review-queue");
-  target.classList.toggle("empty", !cards.length);
-  target.innerHTML = cards.length ? cards.map(card => cardHtml(card, true)).join("") : "当前没有待审核知识";
+  const content = [
+    ...bundles.map(bundle => caseBundleHtml(bundle, true)),
+    ...cards.map(card => cardHtml(card, true)),
+  ];
+  target.classList.toggle("empty", !content.length);
+  target.innerHTML = content.length ? content.join("") : "当前没有待审核知识";
 }
 
 async function loadLibrary() {
   const query = document.getElementById("library-query").value.trim();
   const status = document.getElementById("library-status").value;
-  const data = query
-    ? await api("/api/search", { method: "POST", body: JSON.stringify({ query, status, top_k: 50 }) })
-    : await api(`/api/cards?status=${encodeURIComponent(status)}&limit=500`);
+  const [data, bundleData] = await Promise.all([
+    query
+      ? api("/api/search", { method: "POST", body: JSON.stringify({ query, status, top_k: 50 }) })
+      : api(`/api/cards?status=${encodeURIComponent(status)}&limit=500`),
+    api("/api/knowledge-case-bundles?limit=500"),
+  ]);
   const cards = query ? data.hits.map(hit => hit.card) : data.cards;
+  const visibleCardIds = new Set(cards.map(card => Number(card.id)));
+  const bundles = (bundleData.case_bundles || []).filter(bundle => {
+    const bundleIds = (bundle.card_ids || []).map(Number);
+    return query
+      ? bundleIds.some(cardId => visibleCardIds.has(cardId))
+      : Number((bundle.status_counts || {})[status] || 0) > 0;
+  });
+  const bundledIds = new Set(bundles.flatMap(bundle => bundle.card_ids || []).map(Number));
+  const standaloneCards = cards.filter(card => !bundledIds.has(Number(card.id)));
   const target = document.getElementById("library-cards");
-  target.classList.toggle("empty", !cards.length);
-  target.innerHTML = cards.length ? cards.map(card => cardHtml(card)).join("") : "没有匹配知识";
+  const content = [
+    ...bundles.map(bundle => caseBundleHtml(bundle)),
+    ...standaloneCards.map(card => cardHtml(card)),
+  ];
+  target.classList.toggle("empty", !content.length);
+  target.innerHTML = content.length ? content.join("") : "没有匹配知识";
 }
 
 async function refreshAll() {
@@ -550,6 +612,47 @@ window.reviewCard = async function reviewCard(id, action) {
     await refreshAll();
   } catch (error) { toast(error.message, true); }
 };
+
+async function showCaseBundle(caseId) {
+  const bundle = await api(`/api/knowledge-case-bundles/${encodeURIComponent(caseId)}`);
+  const coverage = bundle.extraction_report?.content_coverage || {};
+  const cards = bundle.cards || [];
+  document.getElementById("dialog-content").innerHTML = `
+    <p class="eyebrow">CHANGE CASE BUNDLE</p><h2>${escapeHtml(bundle.title)}</h2>
+    <div class="card-meta"><span class="tag ${escapeHtml(bundle.status)}">${statusLabels[bundle.status] || escapeHtml(bundle.status)}</span><span class="tag">${cards.length} 张原子卡</span><span class="tag">覆盖 ${escapeHtml(coverage.status || "未评估")}</span></div>
+    <dl class="detail-grid">
+      <dt>案例包 ID</dt><dd>${escapeHtml(bundle.case_id)}</dd>
+      <dt>来源</dt><dd>${escapeHtml(bundle.source_ref)}</dd>
+      <dt>内容哈希</dt><dd>${escapeHtml(bundle.source_checksum)}</dd>
+      <dt>原子卡状态</dt><dd>${escapeHtml(Object.entries(bundle.status_counts || {}).map(([key, value]) => `${statusLabels[key] || key} ${value}`).join(" · "))}</dd>
+      <dt>覆盖账本</dt><dd>${escapeHtml(`${coverage.mapped_source_items ?? "-"}/${coverage.expected_source_items ?? "-"} 条源记录`)}</dd>
+    </dl>
+    <div class="bundle-card-list">${cards.map(card => cardHtml(card)).join("")}</div>`;
+  document.getElementById("detail-dialog").showModal();
+}
+
+async function reviewCaseBundle(caseId, action) {
+  const label = action === "approve" ? "批准" : "驳回";
+  if (!window.confirm(`确认${label}整个变更案例包？该操作会一次性审核包内全部原子卡。`)) return;
+  const comment = document.getElementById("review-comment").value.trim();
+  await api(`/api/knowledge-case-bundles/${encodeURIComponent(caseId)}/review`, {
+    method: "POST",
+    body: JSON.stringify({ action, comment }),
+  });
+  toast(`案例包已整包${label}`);
+  await refreshAll();
+}
+
+document.addEventListener("click", event => {
+  const button = event.target.closest("[data-bundle-action]");
+  if (!button) return;
+  const caseId = button.dataset.caseId;
+  const action = button.dataset.bundleAction;
+  const task = action === "detail"
+    ? showCaseBundle(caseId)
+    : reviewCaseBundle(caseId, action);
+  task.catch(error => toast(error.message, true));
+});
 
 window.deleteCard = async function deleteCard(id) {
   if (!window.confirm(`确认永久删除知识卡片 K${id}？关联关系和本地索引会同步清理。`)) return;

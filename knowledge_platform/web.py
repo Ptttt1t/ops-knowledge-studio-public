@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from uuid import uuid4
 
 from harness.api_client import APIError
@@ -34,6 +34,10 @@ from .store import StoreError
 
 CARD_DETAIL_PATTERN = re.compile(r"^/api/cards/(\d+)$")
 CARD_REVIEW_PATTERN = re.compile(r"^/api/cards/(\d+)/review$")
+CASE_BUNDLE_DETAIL_PATTERN = re.compile(r"^/api/knowledge-case-bundles/(.+)$")
+CASE_BUNDLE_REVIEW_PATTERN = re.compile(
+    r"^/api/knowledge-case-bundles/(.+)/review$"
+)
 RUN_DETAIL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})$")
 RUN_EVENTS_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/events$")
 RUN_CANCEL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/cancel$")
@@ -384,6 +388,31 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 cards = self.server.service.store.list_cards(status=status, limit=limit)
                 self._send_json({"cards": cards})
                 return
+            if path == "/api/knowledge-case-bundles":
+                query = parse_qs(parsed.query)
+                status = query.get("status", [None])[0]
+                limit = int(query.get("limit", ["200"])[0])
+                offset = int(query.get("offset", ["0"])[0])
+                self._send_json(
+                    {
+                        "case_bundles": self.server.service.list_case_bundles(
+                            status=status,
+                            limit=limit,
+                            offset=offset,
+                        )
+                    }
+                )
+                return
+            bundle_match = CASE_BUNDLE_DETAIL_PATTERN.match(path)
+            if bundle_match:
+                bundle = self.server.service.case_bundle_detail(
+                    unquote(bundle_match.group(1))
+                )
+                if bundle is None:
+                    self._send_json({"error": "变更案例包不存在"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(bundle)
+                return
             match = CARD_DETAIL_PATTERN.match(path)
             if match:
                 card = self.server.service.card_detail(int(match.group(1)))
@@ -553,6 +582,16 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/agent-query":
                 result = self.server.service.agent_query(
                     str(payload.get("question", ""))
+                )
+                self._send_json(result)
+                return
+            bundle_review_match = CASE_BUNDLE_REVIEW_PATTERN.match(path)
+            if bundle_review_match:
+                result = self.server.service.review_case_bundle(
+                    unquote(bundle_review_match.group(1)),
+                    action=str(payload.get("action", "")),
+                    reviewer=principal,
+                    comment=str(payload.get("comment", "")),
                 )
                 self._send_json(result)
                 return
