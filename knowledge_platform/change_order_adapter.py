@@ -370,12 +370,12 @@ def _container_record_signature(
     node: JsonSpanNode,
     *,
     array_count_min: int,
-    array_count_max: int,
+    array_count_max: int | None,
     field_count: int,
 ) -> tuple[str, ...] | None:
-    if node.kind != "object" or not (
-        array_count_min <= len(node.children) <= array_count_max
-    ):
+    if node.kind != "object" or len(node.children) < array_count_min:
+        return None
+    if array_count_max is not None and len(node.children) > array_count_max:
         return None
     if not all(child.kind == "array" for child in node.children):
         return None
@@ -873,7 +873,7 @@ def build_change_order_extraction_plan(
         node
         for node in nodes
         if _container_record_signature(
-            node, array_count_min=1, array_count_max=3, field_count=13
+            node, array_count_min=1, array_count_max=None, field_count=13
         )
         is not None
     ]
@@ -927,14 +927,15 @@ def build_change_order_extraction_plan(
             grouped_signature = _container_record_signature(
                 grouped_tasks,
                 array_count_min=1,
-                array_count_max=3,
+                array_count_max=None,
                 field_count=13,
             )
             if flat_signature is None:
                 exact_errors.append("/data/action_list 不符合 13-field TaskRecord 数组")
             if grouped_signature is None:
                 exact_errors.append(
-                    "/data/change_tool_relate_action 不符合 1~3 组 TaskRecord 投影"
+                    "/data/change_tool_relate_action 必须包含至少一组 TaskRecord 数组，"
+                    "且所有非空组使用一致的 13-field Schema"
                 )
             if flat_signature is not None and grouped_signature != flat_signature:
                 exact_errors.append("TaskRecord 主视图与分组投影字段 Schema 冲突")
@@ -975,7 +976,7 @@ def build_change_order_extraction_plan(
                 if flat_signature != _container_record_signature(
                     grouped,
                     array_count_min=1,
-                    array_count_max=3,
+                    array_count_max=None,
                     field_count=13,
                 ):
                     continue

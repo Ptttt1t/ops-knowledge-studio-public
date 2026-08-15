@@ -388,6 +388,14 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 cards = self.server.service.store.list_cards(status=status, limit=limit)
                 self._send_json({"cards": cards})
                 return
+            if path == "/api/knowledge-graph":
+                query = parse_qs(parsed.query)
+                status = query.get("status", [None])[0]
+                limit = int(query.get("limit", ["300"])[0])
+                self._send_json(
+                    self.server.service.knowledge_graph(status=status, limit=limit)
+                )
+                return
             if path == "/api/knowledge-case-bundles":
                 query = parse_qs(parsed.query)
                 status = query.get("status", [None])[0]

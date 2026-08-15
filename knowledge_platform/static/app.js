@@ -5,6 +5,7 @@ const pageTitles = {
   ingest: "知识采集与加工",
   review: "知识审核队列",
   library: "知识资产库",
+  graph: "知识关系图",
 };
 
 const changeStatusLabels = {
@@ -27,6 +28,10 @@ let changeExecutionSubmitting = false;
 let changeFailureMode = "";
 let changeCases = [];
 let selectedChangeCaseId = "dc-route-failover";
+let knowledgeGraphData = { nodes: [], edges: [], meta: {} };
+let knowledgeGraphSelectedId = "";
+let knowledgeGraphFrame = null;
+let knowledgeGraphTransform = { x: 0, y: 0, scale: 1 };
 const accessTokenKey = "ops-knowledge-studio-access-token";
 let accessToken = sessionStorage.getItem(accessTokenKey) || "";
 
@@ -560,6 +565,403 @@ async function loadLibrary() {
   target.innerHTML = content.length ? content.join("") : "没有匹配知识";
 }
 
+const graphRelationLabels = {
+  SOURCE_OF: "来源生成",
+  DESCRIBES: "描述对象",
+  CONTAINS: "案例包含",
+  DUPLICATE_OF: "重复于",
+  CONFLICTS_WITH: "冲突于",
+  CANDIDATE_VERSION_OF: "候选新版本",
+  SUPERSEDES: "替代",
+  RELATED_TO: "相关于",
+};
+
+function graphSvgElement(name, attributes = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)));
+  return element;
+}
+
+function graphHash(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function graphNodeRadius(node) {
+  return { case: 15, card: 10, object: 12, source: 9 }[node.kind] || 9;
+}
+
+function graphShortLabel(value, maxLength = 16) {
+  const text = String(value || "未命名");
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function resetKnowledgeGraphTransform() {
+  knowledgeGraphTransform = { x: 0, y: 0, scale: 1 };
+  const scene = document.getElementById("knowledge-graph-scene");
+  if (scene) scene.setAttribute("transform", "translate(0 0) scale(1)");
+}
+
+function applyKnowledgeGraphTransform() {
+  const scene = document.getElementById("knowledge-graph-scene");
+  if (!scene) return;
+  const { x, y, scale } = knowledgeGraphTransform;
+  scene.setAttribute("transform", `translate(${x} ${y}) scale(${scale})`);
+}
+
+function zoomKnowledgeGraph(factor, center = { x: 500, y: 310 }) {
+  const current = knowledgeGraphTransform;
+  const nextScale = Math.min(3, Math.max(0.45, current.scale * factor));
+  const worldX = (center.x - current.x) / current.scale;
+  const worldY = (center.y - current.y) / current.scale;
+  knowledgeGraphTransform = {
+    x: center.x - worldX * nextScale,
+    y: center.y - worldY * nextScale,
+    scale: nextScale,
+  };
+  applyKnowledgeGraphTransform();
+}
+
+function graphNodeSearchText(node) {
+  return [
+    node.label, node.summary, node.status, node.knowledge_type,
+    node.object_type, node.object_name, node.source_type, node.source_ref,
+    node.unit_role, node.entity_id,
+  ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
+}
+
+function applyKnowledgeGraphEmphasis() {
+  const query = document.getElementById("graph-query").value.trim().toLocaleLowerCase("zh-CN");
+  const matched = new Set(
+    knowledgeGraphData.nodes
+      .filter(node => query && graphNodeSearchText(node).includes(query))
+      .map(node => node.id)
+  );
+  const focusIds = knowledgeGraphSelectedId
+    ? new Set([knowledgeGraphSelectedId])
+    : matched;
+  const neighborIds = new Set(focusIds);
+  knowledgeGraphData.edges.forEach(edge => {
+    if (focusIds.has(edge.source)) neighborIds.add(edge.target);
+    if (focusIds.has(edge.target)) neighborIds.add(edge.source);
+  });
+  const hasFocus = focusIds.size > 0;
+  document.querySelectorAll("#knowledge-graph-svg .graph-node").forEach(element => {
+    const nodeId = element.dataset.nodeId;
+    element.classList.toggle("selected", nodeId === knowledgeGraphSelectedId);
+    element.classList.toggle("matched", matched.has(nodeId));
+    element.classList.toggle("dimmed", hasFocus && !neighborIds.has(nodeId));
+  });
+  document.querySelectorAll("#knowledge-graph-svg .graph-edge").forEach(element => {
+    const connected = focusIds.has(element.dataset.source) || focusIds.has(element.dataset.target);
+    element.classList.toggle("active", hasFocus && connected);
+    element.classList.toggle("dimmed", hasFocus && !connected);
+  });
+}
+
+function renderKnowledgeGraphDetail(node) {
+  knowledgeGraphSelectedId = node?.id || "";
+  const title = document.getElementById("graph-detail-title");
+  const summary = document.getElementById("graph-detail-summary");
+  const facts = document.getElementById("graph-detail-facts");
+  const neighbors = document.getElementById("graph-neighbors");
+  const openButton = document.getElementById("graph-open-card");
+  facts.replaceChildren();
+  neighbors.replaceChildren();
+  openButton.hidden = true;
+  openButton.dataset.cardId = "";
+  if (!node) {
+    title.textContent = "选择一个节点";
+    summary.textContent = "点击图中节点，可查看它的治理状态、来源以及与周边知识的真实关系。";
+    applyKnowledgeGraphEmphasis();
+    return;
+  }
+
+  title.textContent = node.label;
+  summary.textContent = node.summary || ({
+    case: "结构化变更单案例包",
+    object: "知识卡描述的业务对象",
+    source: "知识卡保留的来源文档",
+  }[node.kind] || "治理型知识节点");
+  const addFact = (label, value) => {
+    if (value === undefined || value === null || value === "") return;
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = String(value);
+    facts.append(term, detail);
+  };
+  addFact("节点类型", { card: "知识卡", case: "案例包", object: "业务对象", source: "来源文档" }[node.kind]);
+  if (node.kind === "card") {
+    addFact("卡片编号", `K${node.entity_id}`);
+    addFact("治理状态", statusLabels[node.status] || node.status);
+    addFact("知识类型", node.knowledge_type);
+    addFact("质量评分", node.quality_score);
+    addFact("结构角色", node.unit_role);
+    addFact("比较判断", node.comparison_label);
+    openButton.hidden = false;
+    openButton.dataset.cardId = String(node.entity_id);
+  } else if (node.kind === "case") {
+    addFact("案例标识", node.entity_id);
+  } else if (node.kind === "object") {
+    addFact("对象类型", node.object_type);
+    addFact("对象名称", node.label);
+  } else if (node.kind === "source") {
+    addFact("来源类型", node.source_type);
+    addFact("来源标识", node.source_ref);
+  }
+
+  const nodeById = new Map(knowledgeGraphData.nodes.map(item => [item.id, item]));
+  const connected = knowledgeGraphData.edges
+    .filter(edge => edge.source === node.id || edge.target === node.id)
+    .map(edge => ({
+      edge,
+      other: nodeById.get(edge.source === node.id ? edge.target : edge.source),
+    }))
+    .filter(item => item.other);
+  if (connected.length) {
+    const heading = document.createElement("h3");
+    heading.textContent = `直接关系（${connected.length}）`;
+    neighbors.append(heading);
+    connected.slice(0, 30).forEach(({ edge, other }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "graph-neighbor";
+      const relation = graphRelationLabels[edge.relation_type] || edge.relation_type;
+      button.textContent = `${relation} · ${other.label}`;
+      button.addEventListener("click", () => renderKnowledgeGraphDetail(other));
+      neighbors.append(button);
+    });
+  }
+  applyKnowledgeGraphEmphasis();
+}
+
+function updateKnowledgeGraphPositions() {
+  const nodeById = new Map(knowledgeGraphData.nodes.map(node => [node.id, node]));
+  document.querySelectorAll("#knowledge-graph-svg .graph-edge").forEach(element => {
+    const source = nodeById.get(element.dataset.source);
+    const target = nodeById.get(element.dataset.target);
+    if (!source || !target) return;
+    element.setAttribute("x1", source.x);
+    element.setAttribute("y1", source.y);
+    element.setAttribute("x2", target.x);
+    element.setAttribute("y2", target.y);
+  });
+  document.querySelectorAll("#knowledge-graph-svg .graph-node").forEach(element => {
+    const node = nodeById.get(element.dataset.nodeId);
+    if (node) element.setAttribute("transform", `translate(${node.x} ${node.y})`);
+  });
+}
+
+function runKnowledgeGraphLayout() {
+  if (knowledgeGraphFrame) cancelAnimationFrame(knowledgeGraphFrame);
+  const nodes = knowledgeGraphData.nodes;
+  const nodeById = new Map(nodes.map(node => [node.id, node]));
+  const kindRadius = { case: 70, object: 160, card: 260, source: 360 };
+  const kindIndex = { case: 0, object: 1, card: 2, source: 3 };
+  const kindTotals = Object.fromEntries(Object.keys(kindRadius).map(kind => [kind, nodes.filter(node => node.kind === kind).length]));
+  const kindSeen = { case: 0, object: 0, card: 0, source: 0 };
+  nodes.forEach(node => {
+    const index = kindSeen[node.kind]++;
+    const total = Math.max(1, kindTotals[node.kind]);
+    const jitter = (graphHash(node.id) % 1000) / 1000;
+    const angle = ((index + jitter) / total) * Math.PI * 2 + (kindIndex[node.kind] || 0) * 0.37;
+    const radius = kindRadius[node.kind] || 250;
+    node.x = 500 + Math.cos(angle) * radius;
+    node.y = 310 + Math.sin(angle) * radius * 0.72;
+    node.vx = 0;
+    node.vy = 0;
+  });
+  let iteration = 0;
+  const step = () => {
+    const alpha = Math.max(0.08, 1 - iteration / 150);
+    knowledgeGraphData.edges.forEach(edge => {
+      const source = nodeById.get(edge.source);
+      const target = nodeById.get(edge.target);
+      if (!source || !target) return;
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.max(1, Math.hypot(dx, dy));
+      const ideal = edge.explicit ? 165 : edge.relation_type === "CONTAINS" ? 95 : 135;
+      const force = (distance - ideal) * 0.0018 * alpha;
+      const fx = (dx / distance) * force;
+      const fy = (dy / distance) * force;
+      source.vx += fx;
+      source.vy += fy;
+      target.vx -= fx;
+      target.vy -= fy;
+    });
+    for (let left = 0; left < nodes.length; left += 1) {
+      for (let right = left + 1; right < nodes.length; right += 1) {
+        const first = nodes[left];
+        const second = nodes[right];
+        let dx = second.x - first.x;
+        let dy = second.y - first.y;
+        let distanceSquared = dx * dx + dy * dy;
+        if (distanceSquared > 18000) continue;
+        if (distanceSquared < 1) {
+          dx = ((graphHash(first.id + second.id) % 11) - 5) || 1;
+          dy = ((graphHash(second.id + first.id) % 11) - 5) || -1;
+          distanceSquared = dx * dx + dy * dy;
+        }
+        const distance = Math.sqrt(distanceSquared);
+        const minimum = graphNodeRadius(first) + graphNodeRadius(second) + 24;
+        const force = Math.min(0.65, (minimum * minimum) / distanceSquared) * alpha;
+        const fx = (dx / distance) * force;
+        const fy = (dy / distance) * force;
+        first.vx -= fx;
+        first.vy -= fy;
+        second.vx += fx;
+        second.vy += fy;
+      }
+    }
+    nodes.forEach(node => {
+      node.vx += (500 - node.x) * 0.00045 * alpha;
+      node.vy += (310 - node.y) * 0.00045 * alpha;
+      node.vx *= 0.82;
+      node.vy *= 0.82;
+      node.x = Math.min(970, Math.max(30, node.x + node.vx));
+      node.y = Math.min(590, Math.max(30, node.y + node.vy));
+    });
+    updateKnowledgeGraphPositions();
+    iteration += 1;
+    if (iteration < 150) knowledgeGraphFrame = requestAnimationFrame(step);
+    else knowledgeGraphFrame = null;
+  };
+  updateKnowledgeGraphPositions();
+  knowledgeGraphFrame = requestAnimationFrame(step);
+}
+
+function renderKnowledgeGraph() {
+  const svg = document.getElementById("knowledge-graph-svg");
+  const empty = document.getElementById("knowledge-graph-empty");
+  const title = graphSvgElement("title", { id: "knowledge-graph-title" });
+  title.textContent = "知识资产关系图";
+  const description = graphSvgElement("desc", { id: "knowledge-graph-description" });
+  description.textContent = "案例包、知识卡、业务对象和来源文档之间的可交互关系网络。";
+  const defs = graphSvgElement("defs");
+  const marker = graphSvgElement("marker", {
+    id: "graph-arrow", viewBox: "0 0 10 10", refX: 10, refY: 5,
+    markerWidth: 5, markerHeight: 5, orient: "auto-start-reverse",
+  });
+  marker.append(graphSvgElement("path", { d: "M 0 0 L 10 5 L 0 10 z" }));
+  defs.append(marker);
+  const scene = graphSvgElement("g", { id: "knowledge-graph-scene" });
+  const edgeLayer = graphSvgElement("g", { class: "graph-edge-layer" });
+  const nodeLayer = graphSvgElement("g", { class: "graph-node-layer" });
+  scene.append(edgeLayer, nodeLayer);
+  svg.replaceChildren(title, description, defs, scene);
+  empty.hidden = knowledgeGraphData.nodes.length > 0;
+  resetKnowledgeGraphTransform();
+  renderKnowledgeGraphDetail(null);
+  if (!knowledgeGraphData.nodes.length) return;
+
+  knowledgeGraphData.edges.forEach(edge => {
+    const line = graphSvgElement("line", {
+      class: `graph-edge${edge.explicit ? " explicit" : ""}`,
+      "data-source": edge.source,
+      "data-target": edge.target,
+      "data-relation": edge.relation_type,
+      "marker-end": "url(#graph-arrow)",
+    });
+    edgeLayer.append(line);
+  });
+  knowledgeGraphData.nodes.forEach(node => {
+    const group = graphSvgElement("g", {
+      class: `graph-node kind-${node.kind}${node.status ? ` status-${node.status}` : ""}`,
+      "data-node-id": node.id,
+      role: "button",
+      tabindex: "0",
+      "aria-label": `${node.label}，${node.kind}`,
+    });
+    group.append(graphSvgElement("circle", { r: graphNodeRadius(node) }));
+    const label = graphSvgElement("text", {
+      class: "graph-node-label",
+      y: graphNodeRadius(node) + 15,
+      "text-anchor": "middle",
+    });
+    label.textContent = graphShortLabel(node.label);
+    group.append(label);
+    const select = () => renderKnowledgeGraphDetail(node);
+    group.addEventListener("click", select);
+    group.addEventListener("keydown", event => {
+      if (["Enter", " "].includes(event.key)) {
+        event.preventDefault();
+        select();
+      }
+    });
+    let dragged = false;
+    group.addEventListener("pointerdown", event => {
+      event.stopPropagation();
+      dragged = false;
+      group.setPointerCapture(event.pointerId);
+      const move = moveEvent => {
+        dragged = true;
+        const rect = svg.getBoundingClientRect();
+        const svgX = ((moveEvent.clientX - rect.left) / rect.width) * 1000;
+        const svgY = ((moveEvent.clientY - rect.top) / rect.height) * 620;
+        node.x = (svgX - knowledgeGraphTransform.x) / knowledgeGraphTransform.scale;
+        node.y = (svgY - knowledgeGraphTransform.y) / knowledgeGraphTransform.scale;
+        node.vx = 0;
+        node.vy = 0;
+        updateKnowledgeGraphPositions();
+      };
+      const end = () => {
+        group.removeEventListener("pointermove", move);
+        group.removeEventListener("pointerup", end);
+        group.removeEventListener("pointercancel", end);
+        if (dragged) renderKnowledgeGraphDetail(node);
+      };
+      group.addEventListener("pointermove", move);
+      group.addEventListener("pointerup", end);
+      group.addEventListener("pointercancel", end);
+    });
+    nodeLayer.append(group);
+  });
+
+  let pan = null;
+  svg.onpointerdown = event => {
+    if (event.target.closest(".graph-node")) return;
+    pan = { x: event.clientX, y: event.clientY, originX: knowledgeGraphTransform.x, originY: knowledgeGraphTransform.y };
+    svg.setPointerCapture(event.pointerId);
+  };
+  svg.onpointermove = event => {
+    if (!pan) return;
+    const rect = svg.getBoundingClientRect();
+    knowledgeGraphTransform.x = pan.originX + ((event.clientX - pan.x) / rect.width) * 1000;
+    knowledgeGraphTransform.y = pan.originY + ((event.clientY - pan.y) / rect.height) * 620;
+    applyKnowledgeGraphTransform();
+  };
+  const stopPan = () => { pan = null; };
+  svg.onpointerup = stopPan;
+  svg.onpointercancel = stopPan;
+  svg.onwheel = event => {
+    event.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    zoomKnowledgeGraph(event.deltaY < 0 ? 1.12 : 0.89, {
+      x: ((event.clientX - rect.left) / rect.width) * 1000,
+      y: ((event.clientY - rect.top) / rect.height) * 620,
+    });
+  };
+  runKnowledgeGraphLayout();
+}
+
+async function loadKnowledgeGraph() {
+  const status = document.getElementById("graph-status").value;
+  knowledgeGraphData = await api(`/api/knowledge-graph?status=${encodeURIComponent(status)}&limit=160`);
+  knowledgeGraphSelectedId = "";
+  const meta = knowledgeGraphData.meta || {};
+  document.getElementById("graph-node-count").textContent = meta.node_count || 0;
+  document.getElementById("graph-edge-count").textContent = meta.edge_count || 0;
+  document.getElementById("graph-card-count").textContent = meta.nodes_by_kind?.card || 0;
+  document.getElementById("graph-relation-count").textContent = meta.explicit_relation_count || 0;
+  renderKnowledgeGraph();
+}
+
 async function refreshAll() {
   try {
     await Promise.all([refreshHealth(), refreshStats(), loadRecent(), loadReviewQueue(), loadLibrary()]);
@@ -672,6 +1074,7 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   document.getElementById(`page-${page}`).classList.add("active");
   document.getElementById("page-title").textContent = pageTitles[page];
   if (["query", "results"].includes(page)) loadLatestChangeSession().catch(error => toast(error.message, true));
+  if (page === "graph") loadKnowledgeGraph().catch(error => toast(error.message, true));
 }));
 
 document.getElementById("refresh-button").addEventListener("click", async () => {
@@ -680,8 +1083,24 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
     || document.getElementById("page-results").classList.contains("active")) {
     await loadLatestChangeSession();
   }
+  if (document.getElementById("page-graph").classList.contains("active")) {
+    await loadKnowledgeGraph();
+  }
 });
 document.getElementById("library-search").addEventListener("click", () => loadLibrary().catch(error => toast(error.message, true)));
+document.getElementById("graph-reload").addEventListener("click", () => loadKnowledgeGraph().catch(error => toast(error.message, true)));
+document.getElementById("graph-status").addEventListener("change", () => loadKnowledgeGraph().catch(error => toast(error.message, true)));
+document.getElementById("graph-query").addEventListener("input", applyKnowledgeGraphEmphasis);
+document.getElementById("graph-zoom-in").addEventListener("click", () => zoomKnowledgeGraph(1.2));
+document.getElementById("graph-zoom-out").addEventListener("click", () => zoomKnowledgeGraph(0.83));
+document.getElementById("graph-reset").addEventListener("click", () => {
+  resetKnowledgeGraphTransform();
+  runKnowledgeGraphLayout();
+});
+document.getElementById("graph-open-card").addEventListener("click", event => {
+  const cardId = Number(event.currentTarget.dataset.cardId);
+  if (cardId) window.showDetail(cardId);
+});
 document.getElementById("dialog-close").addEventListener("click", () => document.getElementById("detail-dialog").close());
 
 document.getElementById("change-generate").addEventListener("click", async event => {

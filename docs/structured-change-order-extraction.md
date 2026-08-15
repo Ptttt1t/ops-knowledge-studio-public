@@ -17,6 +17,8 @@
 | `/data/change_plan/0/result` | `EXECUTION_RESULT` | `post_execution` 执行结果 |
 | `/code`、`/provider_code`、`/msg` | `API_ENVELOPE` | API 包装字段，默认不进入 RAG |
 
+`change_tool_relate_action` 的 group name 和 group count 是动态业务数据。Adapter 要求它至少包含一个数组且至少一个数组非空，但不限制 group 数量上限；所有非空 group 中的记录必须使用一致的 13-field TaskRecord Schema，并与 `action_list` 通过稳定 JSON 序列化和 SHA-256 multiset reconciliation 完整对账。
+
 Procedure 四组元素统一使用 `ProcedureStep`，不为检查、实施、验证和回退各设计一套重复 Schema。若输入没有命中上述真实路径、只能通过结构指纹识别，Adapter 会将候选标记为 `HEURISTIC`，且不会再根据数组位置猜成回滚或验证步骤。
 
 ## 领域结构

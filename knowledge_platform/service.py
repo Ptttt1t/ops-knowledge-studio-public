@@ -1695,6 +1695,14 @@ class KnowledgeService:
             offset=offset,
         )
 
+    def knowledge_graph(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 300,
+    ) -> dict[str, Any]:
+        return self.store.knowledge_graph(status=status, limit=limit)
+
     def case_bundle_detail(self, case_id: str) -> dict[str, Any] | None:
         return self.store.get_case_bundle(case_id, include_cards=True)
 
