@@ -1042,6 +1042,187 @@ class KnowledgeStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def knowledge_graph(
+        self,
+        status: CardStatus | str | None = None,
+        *,
+        limit: int = 300,
+    ) -> dict[str, Any]:
+        """Return a bounded graph projection of governed local knowledge."""
+
+        normalized_status = str(
+            status.value if isinstance(status, CardStatus) else status or ""
+        ).strip().upper()
+        where = ""
+        params: list[Any] = []
+        if normalized_status and normalized_status != "ALL":
+            where = "WHERE cards.status = ?"
+            params.append(normalized_status)
+        params.append(min(max(int(limit), 1), 500))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT cards.id, cards.title, cards.summary, cards.knowledge_type,
+                       cards.object_type, cards.object_name, cards.status,
+                       cards.quality_score, cards.comparison_label,
+                       cards.source_document_id, cards.updated_at,
+                       documents.source_name, documents.source_type,
+                       documents.source_ref,
+                       lineage.case_id, lineage.unit_role,
+                       bundles.title AS case_title
+                FROM cards
+                JOIN documents ON documents.id = cards.source_document_id
+                LEFT JOIN card_lineage AS lineage ON lineage.card_id = cards.id
+                LEFT JOIN change_case_bundles AS bundles
+                       ON bundles.case_id = lineage.case_id
+                {where}
+                ORDER BY cards.updated_at DESC, cards.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+            card_ids = [int(row["id"]) for row in rows]
+            relation_rows: list[sqlite3.Row] = []
+            if card_ids:
+                placeholders = ",".join("?" for _ in card_ids)
+                relation_rows = connection.execute(
+                    f"""
+                    SELECT card_id, related_card_id, relation_type,
+                           confidence, reason
+                    FROM relations
+                    WHERE card_id IN ({placeholders})
+                      AND related_card_id IN ({placeholders})
+                    ORDER BY id
+                    """,
+                    [*card_ids, *card_ids],
+                ).fetchall()
+
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        source_nodes: dict[int, dict[str, Any]] = {}
+        object_nodes: dict[str, dict[str, Any]] = {}
+        case_nodes: dict[str, dict[str, Any]] = {}
+
+        def add_edge(
+            source: str,
+            target: str,
+            relation_type: str,
+            *,
+            confidence: float = 1.0,
+            reason: str = "",
+            explicit: bool = False,
+        ) -> None:
+            edge_key = f"{source}\0{target}\0{relation_type}"
+            edges.append(
+                {
+                    "id": "edge:" + hashlib.sha256(
+                        edge_key.encode("utf-8")
+                    ).hexdigest()[:20],
+                    "source": source,
+                    "target": target,
+                    "relation_type": relation_type,
+                    "confidence": round(float(confidence), 4),
+                    "reason": reason,
+                    "explicit": explicit,
+                }
+            )
+
+        for row in rows:
+            card_id = int(row["id"])
+            card_node_id = f"card:{card_id}"
+            source_document_id = int(row["source_document_id"])
+            source_node_id = f"source:{source_document_id}"
+            object_key = f"{row['object_type']}\0{row['object_name']}"
+            object_node_id = "object:" + hashlib.sha256(
+                object_key.encode("utf-8")
+            ).hexdigest()[:20]
+            nodes.append(
+                {
+                    "id": card_node_id,
+                    "kind": "card",
+                    "entity_id": card_id,
+                    "label": str(row["title"]),
+                    "summary": str(row["summary"]),
+                    "status": str(row["status"]),
+                    "knowledge_type": str(row["knowledge_type"]),
+                    "object_type": str(row["object_type"]),
+                    "object_name": str(row["object_name"]),
+                    "quality_score": round(float(row["quality_score"]), 1),
+                    "comparison_label": str(row["comparison_label"]),
+                    "unit_role": str(row["unit_role"] or ""),
+                    "updated_at": str(row["updated_at"]),
+                }
+            )
+            source_nodes.setdefault(
+                source_document_id,
+                {
+                    "id": source_node_id,
+                    "kind": "source",
+                    "entity_id": source_document_id,
+                    "label": str(row["source_name"]),
+                    "source_type": str(row["source_type"]),
+                    "source_ref": str(row["source_ref"]),
+                },
+            )
+            object_nodes.setdefault(
+                object_node_id,
+                {
+                    "id": object_node_id,
+                    "kind": "object",
+                    "label": str(row["object_name"]),
+                    "object_type": str(row["object_type"]),
+                },
+            )
+            add_edge(source_node_id, card_node_id, "SOURCE_OF")
+            add_edge(card_node_id, object_node_id, "DESCRIBES")
+            case_id = str(row["case_id"] or "")
+            if case_id:
+                case_node_id = "case:" + hashlib.sha256(
+                    case_id.encode("utf-8")
+                ).hexdigest()[:20]
+                case_nodes.setdefault(
+                    case_node_id,
+                    {
+                        "id": case_node_id,
+                        "kind": "case",
+                        "entity_id": case_id,
+                        "label": str(row["case_title"] or case_id),
+                    },
+                )
+                add_edge(case_node_id, card_node_id, "CONTAINS")
+
+        card_node_ids = {card_id: f"card:{card_id}" for card_id in card_ids}
+        for row in relation_rows:
+            add_edge(
+                card_node_ids[int(row["card_id"])],
+                card_node_ids[int(row["related_card_id"])],
+                str(row["relation_type"]),
+                confidence=float(row["confidence"]),
+                reason=str(row["reason"]),
+                explicit=True,
+            )
+
+        nodes.extend(source_nodes.values())
+        nodes.extend(object_nodes.values())
+        nodes.extend(case_nodes.values())
+        kind_counts = {
+            kind: sum(1 for node in nodes if node["kind"] == kind)
+            for kind in ("card", "case", "object", "source")
+        }
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "meta": {
+                "status_filter": normalized_status or "ALL",
+                "card_limit": min(max(int(limit), 1), 500),
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "explicit_relation_count": len(relation_rows),
+                "nodes_by_kind": kind_counts,
+            },
+        }
+
     def list_audit(self, card_id: int) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(

@@ -387,7 +387,9 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：先创建一个 `ChangeCaseBundle`，再把上下文、任务、前检、实施、验证、回退和执行结果等原子卡按来源顺序挂到包内。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过原有证据、覆盖或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
 
-结构适配中，`action_list` 是 canonical task source，`change_tool_relate_action` 只保留已对账分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+结构适配中，`action_list` 是 canonical task source；`change_tool_relate_action` 的 group name 和 group count 作为动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+
+Web 工作台的“知识关系图”把现有 SQLite 治理数据投影为可交互网络：案例包、知识卡、业务对象和来源文档作为节点，案例归属、对象描述、来源追溯以及 `DUPLICATE_OF`、`CONFLICTS_WITH`、`CANDIDATE_VERSION_OF`、`SUPERSEDES` 等已落库关系作为边。该页面不推断新的概念关系，也不改变审批、检索或存储语义；只读接口为 `GET /api/knowledge-graph`。
 
 可信回答要求模型优先输出不超过 12 条字段指针 claims，平台仍保留去重后最多 30 条的硬上限。标量字段误带 `support_index: 0` 时会安全归一化为 `null`；其他非法索引、未检索卡片、未批准卡片和自由文本仍会被拒绝。协议校验失败时平台只允许一次有界纠错重试，直接查询和只读 Agent 共用这条校验链。
 

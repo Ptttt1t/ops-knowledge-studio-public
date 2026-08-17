@@ -33,6 +33,7 @@
         <button class="nav-item" data-page="ingest">知识采集</button>
         <button class="nav-item" data-page="review">知识审核队列 <span id="review-count" class="nav-count">0</span></button>
         <button class="nav-item" data-page="library">知识库</button>
+        <button class="nav-item" data-page="graph">知识关系图</button>
       </nav>
       <div class="sidebar-foot">
         <span id="api-dot" class="status-dot"></span>
@@ -307,6 +308,70 @@
           <button id="library-search" class="button secondary">检索</button>
         </article>
         <div id="library-cards" class="card-list empty">暂无知识</div>
+      </section>
+
+      <section id="page-graph" class="page">
+        <article class="panel graph-tools">
+          <div>
+            <p class="eyebrow">KNOWLEDGE RELATION MAP</p>
+            <h2>知识资产关系图</h2>
+            <p>展示已落库的案例包、知识卡、业务对象、来源文档和显式版本关系，不生成未经证据确认的概念连线。</p>
+          </div>
+          <label>知识状态
+            <select id="graph-status">
+              <option value="ALL">全部状态</option>
+              <option value="APPROVED">已批准</option>
+              <option value="PENDING_REVIEW">待审核</option>
+              <option value="DRAFT">草稿</option>
+              <option value="REJECTED">已驳回</option>
+              <option value="SUPERSEDED">已替代</option>
+            </select>
+          </label>
+          <label>查找节点
+            <input id="graph-query" type="search" placeholder="卡片、对象、案例或来源">
+          </label>
+          <button id="graph-reload" class="button secondary" type="button">重新加载</button>
+        </article>
+
+        <div class="metric-grid graph-metrics">
+          <article class="metric"><span>图谱节点</span><strong id="graph-node-count">0</strong><small>当前筛选范围</small></article>
+          <article class="metric"><span>关系边</span><strong id="graph-edge-count">0</strong><small>归属、来源、对象和语义关系</small></article>
+          <article class="metric accent"><span>知识卡</span><strong id="graph-card-count">0</strong><small>可打开原卡详情</small></article>
+          <article class="metric warning"><span>显式语义关系</span><strong id="graph-relation-count">0</strong><small>版本、冲突和重复判断</small></article>
+        </div>
+
+        <div class="graph-layout">
+          <article class="panel graph-panel">
+            <div class="panel-head graph-panel-head">
+              <div><p class="eyebrow">INTERACTIVE GRAPH</p><h2>关系网络</h2></div>
+              <div class="graph-legend" aria-label="节点类型图例">
+                <span class="case">案例包</span><span class="card">知识卡</span>
+                <span class="object">业务对象</span><span class="source">来源文档</span>
+              </div>
+            </div>
+            <div id="knowledge-graph-stage" class="knowledge-graph-stage">
+              <svg id="knowledge-graph-svg" viewBox="0 0 1000 620" role="img" aria-labelledby="knowledge-graph-title knowledge-graph-description">
+                <title id="knowledge-graph-title">知识资产关系图</title>
+                <desc id="knowledge-graph-description">案例包、知识卡、业务对象和来源文档之间的可交互关系网络。</desc>
+              </svg>
+              <div id="knowledge-graph-empty" class="graph-empty" hidden>当前筛选范围内没有知识节点</div>
+              <div class="graph-zoom-controls" aria-label="图谱缩放控制">
+                <button id="graph-zoom-in" class="button small secondary" type="button" aria-label="放大图谱">＋</button>
+                <button id="graph-zoom-out" class="button small secondary" type="button" aria-label="缩小图谱">－</button>
+                <button id="graph-reset" class="button small secondary" type="button">复位</button>
+              </div>
+            </div>
+          </article>
+
+          <aside class="panel graph-inspector" aria-live="polite">
+            <p class="eyebrow">SELECTED NODE</p>
+            <h2 id="graph-detail-title">选择一个节点</h2>
+            <p id="graph-detail-summary" class="muted-copy">点击图中节点，可查看它的治理状态、来源以及与周边知识的真实关系。</p>
+            <dl id="graph-detail-facts" class="graph-detail-facts"></dl>
+            <div id="graph-neighbors" class="graph-neighbors"></div>
+            <button id="graph-open-card" class="button secondary" type="button" hidden>打开知识卡详情</button>
+          </aside>
+        </div>
       </section>
     </main>
   </div>

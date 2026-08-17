@@ -59,7 +59,10 @@ class RealisticChangeOrderSampleTests(unittest.TestCase):
                 grouped = data["change_tool_relate_action"]
                 self.assertIsInstance(grouped, dict)
                 self.assertGreaterEqual(len(grouped), 1)
-                self.assertLessEqual(len(grouped), 3)
+                self.assertTrue(
+                    all(isinstance(group, list) for group in grouped.values())
+                )
+                self.assertTrue(any(group for group in grouped.values()))
                 projected_tasks = [item for group in grouped.values() for item in group]
                 self.assertEqual(projected_tasks, canonical_tasks)
 

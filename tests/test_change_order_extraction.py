@@ -175,6 +175,39 @@ class ExecutionAwareStructuralClient(StructuralFakeClient):
 
 
 class ChangeOrderExtractionTests(unittest.TestCase):
+    def test_grouped_task_projection_accepts_dynamic_group_counts(self):
+        for group_count in (4, 5, 8, 9):
+            with self.subTest(group_count=group_count):
+                payload = make_change_order(task_count=group_count)
+                data = payload["data"]
+                assert isinstance(data, dict)
+                tasks = data["action_list"]
+                assert isinstance(tasks, list)
+                data["change_tool_relate_action"] = {
+                    f"dynamic_group_{index + 1}": [dict(tasks[index])]
+                    for index in range(group_count)
+                }
+
+                plan, report = build_change_order_extraction_plan(
+                    source_json(payload),
+                    chunk_size=6000,
+                )
+
+                self.assertIsNotNone(plan)
+                self.assertTrue(report["matched"])
+                self.assertEqual(report["semantic_mapping_status"], "CONFIRMED")
+                self.assertTrue(report["safe_for_internal_index"])
+                self.assertEqual(report["blockers"], [])
+                self.assertEqual(
+                    report["task_record"]["group_sizes"],
+                    [1] * group_count,
+                )
+                self.assertEqual(
+                    report["task_record"]["exact_record_matches"],
+                    group_count,
+                )
+                self.assertTrue(report["task_record"]["reconciled"])
+
     def test_adapter_reconciles_task_views_and_preserves_procedure_roles(self):
         text = source_json(make_change_order())
         plan, report = build_change_order_extraction_plan(text, chunk_size=6000)
