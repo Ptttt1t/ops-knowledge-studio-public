@@ -15,6 +15,7 @@ from knowledge_platform.service import KnowledgeRequestError, KnowledgeService
 from knowledge_platform.store import StoreError
 
 from tests.test_platform import FakeDeepSeekClient, SOURCE_TEXT, make_settings
+from tests.test_change_order_card_builder import make_payload as make_semantic_payload
 
 
 def _record(prefix: str, index: int, fields: int) -> dict[str, object]:
@@ -259,8 +260,12 @@ class ChangeOrderExtractionTests(unittest.TestCase):
         precheck = next(unit for unit in units if unit.role == "PRECHECK_STEPS")
         self.assertEqual(precheck.procedure_group, "PRECHECK")
         self.assertEqual(precheck.step_start_index, 0)
-        self.assertEqual(precheck.step_end_index, 1)
+        self.assertEqual(precheck.step_end_index, 0)
         self.assertEqual(precheck.total_steps_in_group, 2)
+        self.assertEqual(
+            [unit.step_start_index for unit in units if unit.role == "PRECHECK_STEPS"],
+            [0, 1],
+        )
         execution = next(unit for unit in units if unit.role == "EXECUTION_RESULT")
         self.assertEqual(execution.lifecycle_stage, "post_execution")
         self.assertFalse(execution.include_in_generation)
@@ -382,7 +387,7 @@ class ChangeOrderExtractionTests(unittest.TestCase):
                 source_name="真实变更单脱敏结构.json",
                 source_ref="ticket://sanitized-change-order",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
 
             self.assertEqual(result["extraction_strategy"], "change_order_shape_v2")
@@ -392,32 +397,31 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             self.assertEqual(
                 report["coverage"]["structural_coverage_ratio"], 1.0
             )
-            self.assertEqual(result["extracted_cards"], 7)
+            self.assertEqual(result["extracted_cards"], 6)
             self.assertEqual(
                 set(result["cards_by_role"]),
                 {
-                    "IDENTITY_METADATA_CONTEXT",
-                    "TASKS_CANONICAL",
-                    "PRECHECK_STEPS",
-                    "IMPLEMENTATION_STEPS",
-                    "VALIDATION_STEPS",
-                    "ROLLBACK_STEPS",
-                    "EXECUTION_RESULT",
+                    "CASE_CONTEXT",
+                    "PROCEDURE_STEP",
+                    "EXECUTION_OUTCOME",
                 },
             )
             self.assertEqual(
-                result["extraction_report"]["content_coverage"]["status"],
+                result["extraction_report"]["structural_source_coverage"]["status"],
                 "COMPLETE",
             )
             card = next(
                 service.card_detail(card_id)
                 for card_id in result["card_ids"]
                 if service.card_detail(card_id)["lineage"]["unit_role"]
-                == "ROLLBACK_STEPS"
+                == "PROCEDURE_STEP"
+                and service.card_detail(card_id)["lineage"]["procedure_group"]
+                == "ROLLBACK"
             )
-            self.assertEqual(card["knowledge_type"], "rollback")
+            self.assertEqual(card["knowledge_type"], "procedure_step")
+            self.assertEqual(card["card_type"], "PROCEDURE_STEP")
             self.assertEqual(card["status"], CardStatus.PENDING_REVIEW.value)
-            self.assertEqual(card["lineage"]["unit_role"], "ROLLBACK_STEPS")
+            self.assertEqual(card["lineage"]["unit_role"], "PROCEDURE_STEP")
             self.assertEqual(
                 card["lineage"]["case_id"], result["extraction_report"]["case_id"]
             )
@@ -428,21 +432,17 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             )
             self.assertEqual(card["lineage"]["procedure_group"], "ROLLBACK")
             self.assertEqual(card["lineage"]["semantic_mapping_status"], "CONFIRMED")
-            self.assertEqual(card["lineage"]["content_coverage_status"], "COMPLETE")
+            self.assertEqual(
+                card["lineage"]["structural_source_coverage_status"], "COMPLETE"
+            )
             self.assertEqual(card["lineage"]["evidence_mode"], "STRUCTURED_JSON_POINTERS")
-            self.assertEqual(len(card["source_items"]), 3)
+            self.assertEqual(len(card["source_items"]), 1)
             self.assertTrue(all(item["source_hash"] for item in card["source_items"]))
 
             persisted = service.store.get_extraction_report(result["document_id"])
             self.assertEqual(persisted["strategy"], "change_order_shape_v2")
             self.assertTrue(persisted["change_order"]["safe_for_internal_index"])
-            self.assertTrue(
-                any(
-                    "role=ROLLBACK_STEPS" in call[1]
-                    for call in client.json_calls
-                    if "运维变更知识工程师" in call[0]
-                )
-            )
+            self.assertEqual(client.json_calls, [])
             approved = service.review(
                 card["id"],
                 action="approve",
@@ -507,10 +507,11 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             result = service.ingest_text(
                 source_name="overproducing.json",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
-            self.assertEqual(result["extracted_cards"], 7)
-            self.assertEqual(result["cards_by_role"]["ROLLBACK_STEPS"], 1)
+            self.assertEqual(result["extracted_cards"], 6)
+            self.assertEqual(result["cards_by_role"]["PROCEDURE_STEP"], 4)
+            self.assertEqual(result["model_calls"], 0)
 
     def test_unreconciled_structure_blocks_card_approval(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -567,13 +568,13 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             result = service.ingest_text(
                 source_name="post-execution.json",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             execution_id = next(
                 card_id
                 for card_id in result["card_ids"]
                 if service.card_detail(card_id)["lineage"]["unit_role"]
-                == "EXECUTION_RESULT"
+                == "EXECUTION_OUTCOME"
             )
             service.review(
                 execution_id,
@@ -583,11 +584,11 @@ class ChangeOrderExtractionTests(unittest.TestCase):
             )
 
             searchable, _ = service.trusted_search_hits(
-                "execution result success", top_k=10, for_generation=False
+                "SUCCESS 虚构服务验证通过", top_k=10, for_generation=False
             )
             self.assertIn(execution_id, [int(hit.card["id"]) for hit in searchable])
             planning, diagnostics = service.trusted_search_hits(
-                "execution result success", top_k=10, for_generation=True
+                "SUCCESS 虚构服务验证通过", top_k=10, for_generation=True
             )
             self.assertNotIn(execution_id, [int(hit.card["id"]) for hit in planning])
             self.assertTrue(

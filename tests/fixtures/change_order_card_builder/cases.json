@@ -1,0 +1,117 @@
+{
+  "case_a": {
+    "check_name": "<p><strong>单步骤容量检查</strong></p>",
+    "operate_description": "<p>检查虚构容器 <span style=\"color:red\">demo-api</span> 的资源配置。<br>不涉及业务中断。<img src=\"https://synthetic.invalid/evidence.png\"></p>",
+    "operate_verified": "<p>确认配置读取成功，<strong>无影响</strong>。</p>",
+    "operate_rollback": "<p>不涉及</p>",
+    "impact_analysis": "<p>无影响</p>"
+  },
+  "case_b": [
+    {
+      "check_name": "检查虚构服务入口",
+      "operate_description": "确认 demo-edge 入口状态正常。"
+    },
+    {
+      "check_name": "检查虚构服务容量",
+      "operate_description": "确认 demo-api 剩余容量满足窗口要求。"
+    }
+  ],
+  "case_c": {
+    "check_name": "综合变更前分析",
+    "operate_description": "1、容量分析\n确认虚构集群剩余容量。\n2、版本分析\n核对目标版本兼容性。\n3、API分析\n核对虚构接口依赖。\n4、监控分析\n确认监控指标可用。\n5、高危操作分析\n确认无未授权高危命令。\n6、客户影响分析\n确认演练窗口无客户影响。\n7、配置检查\n核对虚构工作负载配置。\n8、备份检查\n方式一：导出配置快照。\n方式二：保存回退参数。"
+  },
+  "case_d": {
+    "validation": {
+      "check_name": "检查活动告警",
+      "operate_description": "检查活动告警并确认没有新增严重告警。"
+    },
+    "rollback": {
+      "check_name": "检查活动告警",
+      "operate_description": "检查活动告警并确认没有新增严重告警。"
+    }
+  },
+  "case_e": [
+    {
+      "action_id": "action-a",
+      "action_name": "ActionA",
+      "capability": "read-only-check",
+      "object_type": "synthetic-service",
+      "service": "demo-edge",
+      "region": "region-lab-a",
+      "tool_id": "tool-a",
+      "tool_name": "SyntheticToolA",
+      "input_schema": "none",
+      "output_schema": "status",
+      "risk_level": "low",
+      "version": "v1",
+      "enabled": true
+    },
+    {
+      "action_id": "action-b",
+      "action_name": "ActionB",
+      "capability": "configuration-preview",
+      "object_type": "synthetic-service",
+      "service": "demo-api",
+      "region": "region-lab-a",
+      "tool_id": "tool-b",
+      "tool_name": "SyntheticToolB",
+      "input_schema": "object",
+      "output_schema": "preview",
+      "risk_level": "medium",
+      "version": "v1",
+      "enabled": true
+    },
+    {
+      "action_id": "action-c",
+      "action_name": "ActionC",
+      "capability": "validation",
+      "object_type": "synthetic-service",
+      "service": "demo-worker",
+      "region": "region-lab-b",
+      "tool_id": "tool-c",
+      "tool_name": "SyntheticToolC",
+      "input_schema": "object",
+      "output_schema": "metrics",
+      "risk_level": "low",
+      "version": "v2",
+      "enabled": true
+    }
+  ],
+  "case_f": {
+    "ticket_id": "SYNTH-CO-0001",
+    "title": "虚构服务容量调整",
+    "original_system": "synthetic-change-lab",
+    "cloud_service": "SyntheticCloud",
+    "affected_service": "demo-api",
+    "change_scene": "capacity-adjustment",
+    "region": "region-lab-a",
+    "expected_start_time": 1785772800000,
+    "expected_end_time": 1785776400000,
+    "approval_status": "approved-for-test",
+    "grayscale_policy": "先一实例后全量",
+    "rollback_requirement": "验证失败时恢复原参数",
+    "risk_level": "medium"
+  },
+  "case_g": {
+    "change_result": "SUCCESS",
+    "verified_note": "虚构服务验证通过",
+    "rollback_start_time": null,
+    "start_time": 1785772800000,
+    "end_time": 1785773100000,
+    "executor": "synthetic-operator",
+    "reviewer": "synthetic-reviewer",
+    "failure_reason": "",
+    "result_summary": "演练完成",
+    "status": "COMPLETED",
+    "duration": 300,
+    "success": true,
+    "change_id": "SYNTH-CO-0001",
+    "update_time": 1785773100000,
+    "result_items": ["validation-passed"]
+  },
+  "case_h": {
+    "timestamp": 1785772800000,
+    "timezone": "Asia/Shanghai",
+    "expected": "2026-08-04 00:00:00"
+  }
+}

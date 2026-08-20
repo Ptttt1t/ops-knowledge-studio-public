@@ -148,6 +148,32 @@ DEEPSEEK_ALLOW_INSECURE_HTTP=false
 
 直接拒绝、关闭标准输入或输入错误确认串都不会修改模拟网络。
 
+## 真实 ChangeOrder 草案生成 BETA
+
+左侧新增的 **真实变更生成 BETA** 与上述合成 Demo 完全隔离。它只读取已审核知识并生成、校验、留版和人工审核真实结构草案，不注册执行工具，也不会把草案或审核结果写回知识库。功能默认关闭；内网管理员必须先从一份已批准的代表案例建立并激活 `SchemaProfile`：
+
+```powershell
+python run.py change-schema-profile-inspect --case-id "change-order:<source-sha256>" |
+  Out-File -Encoding utf8 .\schema_profile.json
+
+# 人工检查字段类型和 policy 后激活；该文件含真实字段样例，不要提交仓库
+python run.py change-schema-profile-activate --file .\schema_profile.json --actor schema-admin
+python run.py change-schema-profile-show
+```
+
+然后在内网 `.env` 中显式启用并重启服务：
+
+```dotenv
+REAL_CHANGE_GENERATION_ENABLED=true
+CHANGE_DRAFT_DB_PATH=data/change_drafts.db
+CHANGE_GENERATION_MAX_CASE_BUNDLES=3
+CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
+```
+
+页面先推荐最多三个完整且为 `APPROVED` 的案例包，操作者确认后才异步生成。模型只输出规范化草案，真实 `action_list`、分组任务视图和 `ExecutionResult` 由程序装配并硬校验；只有 `REVIEW_APPROVED` revision 可以下载 `change_order_draft.json` 和 `provenance_report.json`。留一案例盲测会隔离目标及近重复案例，生成后才读取隐藏答案并输出 `evaluation_report.json`。
+
+该页面持续标注“未鉴权能力试验”。默认 Demo 配置下的申请人和审核人都是自报身份，不能作为正式审计证据；禁止公网暴露，也不要把内网 Profile、真实案例、Prompt、数据库或评测报告提交到公开仓库。完整流程、字段策略和接口见 [真实 ChangeOrder 草案生成与盲测](docs/real-change-generation.md)。
+
 ## 可选 MindMemOS 长期记忆
 
 平台现在支持把 [MindMemOS](https://github.com/mindscale-noah/MindMemOS) `vanilla` 模式作为实验性的可插拔语义记忆后端。本地检索仍是第一路径；只有本地没有可信命中时，才调用 MindMemOS 处理“含义相同、说法不同”的问题。该能力默认关闭，启用服务和允许知识内容外发是两个独立开关。
@@ -385,9 +411,9 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 使用 `python run.py <命令> --help` 查看完整参数。
 
-对于目前已分析的真实 JSON 变更单形态，平台会自动启用 `change_order_shape_v2`：先创建一个 `ChangeCaseBundle`，再把上下文、任务、前检、实施、验证、回退和执行结果等原子卡按来源顺序挂到包内。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过原有证据、覆盖或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
+对于已确认结构的 JSON ChangeOrder，平台自动启用 `change_order_shape_v2` Adapter 和 `change_order_semantic_builder_v1` Card Builder：先创建一个 `ChangeCaseBundle`，再按业务语义生成最多一张 `CASE_CONTEXT`、逐源 `PROCEDURE_STEP` 和独立 `EXECUTION_OUTCOME`。Extraction Unit 只承担证据分块，不再直接决定卡片边界。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过证据、双 Coverage、正文 QA 或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
 
-结构适配中，`action_list` 是 canonical task source；`change_tool_relate_action` 的 group name 和 group count 作为动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的分组来源；四组真实 Procedure Key 分别映射为前检、实施、验证和回退步骤；`change_plan/0/result` 作为 `post_execution` 经验保存且不会泄漏进新方案生成。任务与步骤由 Adapter 确定性落卡，模型只负责表达性字段；每个输出项保存 JSON Pointer、字符范围和 SHA-256，审批时重新核验逐源覆盖与内容哈希。报告区分结构覆盖、内容覆盖与语义映射状态，并将 API envelope 排除在 RAG 之外。详见[结构化变更单知识抽取](docs/structured-change-order-extraction.md)。
+结构适配中，`action_list` 是 canonical action metadata；它进入 `CASE_CONTEXT.actions`，不再伪装成有序 Procedure。`change_tool_relate_action` 的 group name 和 group count 是动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的来源；四组 Procedure Key 分别映射为前检、实施、验证和回退。正文只消费已确认的 Procedure 业务字段，HTML/图片/转义由 `normalize_rich_text()` 清理，timestamp 等确定性字段由 Python 按显式时区转换。跨阶段相同知识按 semantic fingerprint 复用；`EXECUTION_OUTCOME` 固定 `planning_rag_enabled=false`。报告明确区分 `structural_source_coverage` 和 `semantic_content_coverage`，并输出逐卡 QA 与 `skip_reason`。详见 [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)。
 
 Web 工作台的“知识关系图”把现有 SQLite 治理数据投影为可交互网络：案例包、知识卡、业务对象和来源文档作为节点，案例归属、对象描述、来源追溯以及 `DUPLICATE_OF`、`CONFLICTS_WITH`、`CANDIDATE_VERSION_OF`、`SUPERSEDES` 等已落库关系作为边。该页面不推断新的概念关系，也不改变审批、检索或存储语义；只读接口为 `GET /api/knowledge-graph`。
 
@@ -526,6 +552,8 @@ python run.py demo-change --case-id nat-egress-bluegreen
 - [部署指南](docs/deployment.md)
 - [云网络变更单最小闭环演示](docs/change-demo.md)
 - [结构化变更单知识抽取](docs/structured-change-order-extraction.md)
+- [card_build_report 合成示例](docs/card_build_report.example.json)
+- [真实 ChangeOrder 草案生成与盲测](docs/real-change-generation.md)
 - [第一阶段加固说明](docs/first-stage-hardening.md)
 - [Web 与资源安全基线](docs/security-hardening.md)
 - [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)

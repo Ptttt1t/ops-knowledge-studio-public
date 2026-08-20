@@ -17,6 +17,7 @@ from tests.test_change_order_extraction import (
     make_change_order,
     source_json,
 )
+from tests.test_change_order_card_builder import make_payload as make_semantic_payload
 from tests.test_platform import make_settings
 
 
@@ -67,14 +68,14 @@ class CaseBundleTests(unittest.TestCase):
                 source_name="完整变更单.json",
                 source_ref="ticket://bundle-001",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
 
             summary = result["case_bundle"]
             self.assertIsNotNone(summary)
             self.assertEqual(summary["case_id"], result["case_id"])
             self.assertEqual(
-                summary["title"], "脱敏结构回归变更单 · CHG-REAL-SHAPE-001"
+                summary["title"], "虚构服务容量调整 · SYNTH-CO-0001"
             )
             self.assertEqual(summary["card_count"], result["extracted_cards"])
             self.assertEqual(summary["status"], CardStatus.PENDING_REVIEW.value)
@@ -108,7 +109,7 @@ class CaseBundleTests(unittest.TestCase):
                 source_name="整包审核.json",
                 source_ref="ticket://bundle-review",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             detail = service.case_bundle_detail(result["case_id"])
             assert detail is not None
@@ -143,7 +144,7 @@ class CaseBundleTests(unittest.TestCase):
                 source_name="整包批准.json",
                 source_ref="ticket://bundle-approve",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             first_card_id = result["card_ids"][0]
             service.review(
@@ -173,7 +174,7 @@ class CaseBundleTests(unittest.TestCase):
                 source_name="接口案例包.json",
                 source_ref="ticket://bundle-api",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             server = create_server(service, host="127.0.0.1", port=0)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -183,7 +184,7 @@ class CaseBundleTests(unittest.TestCase):
             try:
                 with urlopen(f"{base}/api/knowledge-case-bundles", timeout=10) as response:
                     listed = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(listed["case_bundles"][0]["card_count"], 7)
+                self.assertEqual(listed["case_bundles"][0]["card_count"], 6)
 
                 request = Request(
                     f"{base}/api/knowledge-case-bundles/{encoded_case_id}/review",
@@ -196,7 +197,7 @@ class CaseBundleTests(unittest.TestCase):
                 with urlopen(request, timeout=10) as response:
                     reviewed = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(reviewed["status"], CardStatus.REJECTED.value)
-                self.assertEqual(reviewed["status_counts"], {"REJECTED": 7})
+                self.assertEqual(reviewed["status_counts"], {"REJECTED": 6})
             finally:
                 server.shutdown()
                 server.server_close()

@@ -24,23 +24,32 @@ from .documents import (
 )
 from .change_order_adapter import (
     ChangeOrderExtractionPlan,
-    ChangeOrderExtractionUnit,
-    SourceEvidenceRef,
     build_change_order_extraction_plan,
+)
+from .change_order_cards import (
+    CARD_MODEL_VERSION,
+    CardType,
+    ChangeOrderCardBuilder,
+    ChangeOrderCardBuilderConfig,
+    DedupStatus,
+    PublishStatus,
 )
 from .prompts import (
     ANSWER_SYSTEM_PROMPT,
-    CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT,
     COMPARISON_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
     answer_user_prompt,
-    change_order_extraction_user_prompt,
     comparison_user_prompt,
     extraction_user_prompt,
 )
 from .long_term_memory import MindMemOSBridge, MindMemOSError
 from .retrieval import HybridRetriever, SearchHit, tokenize
-from .schema import CardStatus, ComparisonResult, KnowledgeCardDraft
+from .schema import (
+    CardStatus,
+    ComparisonDecision,
+    ComparisonResult,
+    KnowledgeCardDraft,
+)
 from .safe_documents import read_document_safely
 from .store import KnowledgeStore
 
@@ -250,6 +259,17 @@ class KnowledgeService:
         self._ingestion_slots = threading.BoundedSemaphore(
             settings.max_concurrent_ingestions
         )
+        self._change_drafts: Any | None = None
+
+    @property
+    def change_drafts(self) -> Any:
+        """Lazily create the isolated real-ChangeOrder draft service."""
+
+        if self._change_drafts is None:
+            from .change_drafts import RealChangeDraftService
+
+            self._change_drafts = RealChangeDraftService(self)
+        return self._change_drafts
 
     def ingest_file(
         self, path: Path, *, source_name: str | None = None
@@ -438,12 +458,16 @@ class KnowledgeService:
                     code="change_order_schema_ambiguous",
                 )
         if change_order_plan is not None:
-            chunks = [unit.chunk for unit in change_order_plan.units]
-            extraction_units = {
-                unit.chunk.index: unit for unit in change_order_plan.units
-            }
             extraction_strategy = str(
                 change_order_plan.report.get("adapter") or "change_order_shape_v2"
+            )
+            return self._ingest_semantic_change_order(
+                document,
+                checksum=checksum,
+                owner_token=owner_token,
+                plan=change_order_plan,
+                adapter_diagnostics=adapter_diagnostics or {},
+                extraction_strategy=extraction_strategy,
             )
         else:
             chunks = chunk_text(
@@ -451,29 +475,9 @@ class KnowledgeService:
                 self.settings.chunk_size,
                 self.settings.chunk_overlap,
             )
-            extraction_units = {}
             extraction_strategy = "generic_text_v1"
 
-        def apply_structural_blockers(
-            score: float, issues: list[str]
-        ) -> tuple[float, list[str]]:
-            if change_order_plan is None or change_order_plan.report.get(
-                "safe_for_internal_index", False
-            ):
-                return score, issues
-            updated = list(issues)
-            updated.extend(
-                f"阻断：{blocker}"
-                for blocker in change_order_plan.report.get("blockers", [])
-                if f"阻断：{blocker}" not in updated
-            )
-            return min(score, 64.0), updated
-
-        chunk_limit = (
-            self.settings.max_change_order_chunks
-            if change_order_plan is not None
-            else self.settings.max_document_chunks
-        )
+        chunk_limit = self.settings.max_document_chunks
         if len(chunks) > chunk_limit:
             raise KnowledgeRequestError(
                 f"文档分片数 {len(chunks)} 超过 {chunk_limit} 个限制",
@@ -494,9 +498,8 @@ class KnowledgeService:
         )
 
         for chunk in chunks:
-            unit = extraction_units.get(chunk.index)
             for extracted_chunk, payload, usage, split_depth in self._extract_chunk(
-                document.name, chunk, budget=budget, structural_unit=unit
+                document.name, chunk, budget=budget
             ):
                 self.trace.log(
                     "knowledge_extraction_response",
@@ -514,24 +517,10 @@ class KnowledgeService:
                 if not isinstance(raw_cards, list):
                     raise KnowledgeServiceError("模型返回的 knowledge_cards 不是数组")
 
-                if unit is not None:
-                    prepared_cards = self._merge_structural_cards(
-                        raw_cards, unit
-                    )
-                else:
-                    prepared_cards = [
-                        KnowledgeCardDraft.from_dict(raw_card)
-                        for raw_card in raw_cards[: self.MAX_CARDS_PER_EXTRACTION]
-                    ]
-                if unit is not None and len(raw_cards) > 1:
-                    self.trace.log(
-                        "change_order_unit_cards_merged",
-                        source_name=document.name,
-                        chunk_index=chunk.index,
-                        unit_role=unit.role,
-                        returned_cards=len(raw_cards),
-                        merged_cards=len(prepared_cards),
-                    )
+                prepared_cards = [
+                    KnowledgeCardDraft.from_dict(raw_card)
+                    for raw_card in raw_cards[: self.MAX_CARDS_PER_EXTRACTION]
+                ]
                 for draft in prepared_cards:
                     evidence_span = ground_evidence_quote(
                         extracted_chunk.content, draft.evidence_quote
@@ -556,18 +545,11 @@ class KnowledgeService:
                         ),
                     )
                     batch_key = self._batch_card_key(draft)
-                    if unit is not None:
-                        batch_key = f"structural:{unit.chunk.index}:{batch_key}"
                     if batch_key in batch_seen:
                         existing_index = batch_seen[batch_key]
                         existing_item = extracted[existing_index]
                         batch_duplicates_skipped += 1
-                        score, issues = apply_structural_blockers(
-                            *draft.quality(
-                                extracted_chunk.content,
-                                unit_role=unit.role if unit is not None else None,
-                            )
-                        )
+                        score, issues = draft.quality(extracted_chunk.content)
                         replace_existing = (
                             evidence_span is not None,
                             score,
@@ -600,23 +582,14 @@ class KnowledgeService:
                         )
                         continue
                     batch_seen[batch_key] = len(extracted)
-                    card_document_limit = (
-                        self.settings.max_change_order_chunks
-                        if change_order_plan is not None
-                        else self.settings.max_cards_per_document
-                    )
+                    card_document_limit = self.settings.max_cards_per_document
                     if len(extracted) >= card_document_limit:
                         raise KnowledgeRequestError(
                             "单份文档生成的候选知识卡片超过限制",
                             status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                             code="document_card_limit_exceeded",
                         )
-                    score, issues = apply_structural_blockers(
-                        *draft.quality(
-                            extracted_chunk.content,
-                            unit_role=unit.role if unit is not None else None,
-                        )
-                    )
+                    score, issues = draft.quality(extracted_chunk.content)
                     comparison = self._compare(draft, budget=budget)
                     extracted.append(
                         ExtractedCard(
@@ -676,11 +649,7 @@ class KnowledgeService:
             "change_order": adapter_diagnostics,
             "chunks": len(chunks),
         }
-        case_id = (
-            f"change-order:{checksum}"
-            if change_order_plan is not None
-            else f"document:{checksum}"
-        )
+        case_id = f"document:{checksum}"
         extraction_report["case_id"] = case_id
         self.store.save_extraction_report(
             document_id, extraction_strategy, extraction_report
@@ -698,7 +667,6 @@ class KnowledgeService:
         }
         card_ids: list[int] = []
         cards_by_role: dict[str, int] = {}
-        mapped_source_items = 0
         for item in extracted:
             status = (
                 CardStatus.PENDING_REVIEW
@@ -728,107 +696,15 @@ class KnowledgeService:
                 quality_issues=item.quality_issues,
                 comparison=item.comparison,
             )
-            lineage_unit = extraction_units.get(item.chunk.index)
-            if lineage_unit is not None:
-                if lineage_unit.source_evidence_refs:
-                    first_reference = lineage_unit.source_evidence_refs[0]
-                    evidence_locator = (
-                        f"{document.name}#pointer={first_reference.pointer};"
-                        f"chars={first_reference.char_start}-{first_reference.char_end};"
-                        f"sha256={first_reference.content_sha256};match=structured"
-                    )
-                    self.store.update_card_quality(
-                        card_id,
-                        evidence_quote=item.draft.evidence_quote,
-                        evidence_locator=evidence_locator,
-                        quality_score=item.quality_score,
-                        quality_issues=item.quality_issues,
-                        status=status,
-                        detail={
-                            "reason": "structured_evidence_locator_assigned",
-                            "unit_role": lineage_unit.role,
-                        },
-                    )
-                self.store.save_card_lineage(
-                    card_id,
-                    case_id=case_id,
-                    extraction_strategy=extraction_strategy,
-                    unit_role=lineage_unit.role,
-                    unit_pointer=lineage_unit.pointer,
-                    source_pointers=list(lineage_unit.source_pointers),
-                    source_order=lineage_unit.chunk.index,
-                    unit_metadata=lineage_unit.lineage_metadata(),
-                )
-                source_item_rows = self._structured_source_item_rows(lineage_unit)
-                self.store.save_card_source_items(card_id, source_item_rows)
-                mapped_source_items += len(source_item_rows)
-                cards_by_role[lineage_unit.role] = (
-                    cards_by_role.get(lineage_unit.role, 0) + 1
-                )
             card_ids.append(card_id)
 
         extraction_report["generated_cards"] = len(card_ids)
         extraction_report["cards_by_role"] = cards_by_role
-        if change_order_plan is not None:
-            expected_source_items = sum(
-                len(unit.source_evidence_refs) for unit in change_order_plan.units
-            )
-            extraction_report["content_coverage"] = {
-                "status": (
-                    "COMPLETE"
-                    if len(card_ids) == len(change_order_plan.units)
-                    and mapped_source_items == expected_source_items
-                    else "INCOMPLETE"
-                ),
-                "expected_units": len(change_order_plan.units),
-                "generated_cards": len(card_ids),
-                "expected_source_items": expected_source_items,
-                "mapped_source_items": mapped_source_items,
-            }
         self.store.save_extraction_report(
             document_id, extraction_strategy, extraction_report
         )
 
         case_bundle: dict[str, Any] | None = None
-        if change_order_plan is not None:
-            model_identity_title = next(
-                (
-                    item.draft.title.strip()
-                    for item in extracted
-                    if extraction_units.get(item.chunk.index) is not None
-                    and extraction_units[item.chunk.index].role
-                    == "IDENTITY_METADATA_CONTEXT"
-                    and item.draft.title.strip()
-                ),
-                document.name,
-            )
-            identity_title = model_identity_title
-            try:
-                source_payload = json.loads(document.content)
-                source_data = (
-                    source_payload.get("data")
-                    if isinstance(source_payload, dict)
-                    else None
-                )
-                if isinstance(source_data, dict):
-                    source_title = str(source_data.get("title") or "").strip()
-                    ticket_id = str(source_data.get("ticket_id") or "").strip()
-                    if source_title and ticket_id:
-                        identity_title = f"{source_title} · {ticket_id}"
-                    elif source_title or ticket_id:
-                        identity_title = source_title or ticket_id
-            except (TypeError, ValueError):
-                # Structural matching already validated the source. A title is
-                # display metadata only, so preserve the grounded model/source
-                # filename fallback if this optional projection is unavailable.
-                pass
-            self.store.save_case_bundle(
-                case_id=case_id,
-                document_id=document_id,
-                title=identity_title,
-                extraction_strategy=extraction_strategy,
-            )
-            case_bundle = self.store.get_case_bundle(case_id, include_cards=False)
 
         result = {
             "document_id": document_id,
@@ -859,159 +735,309 @@ class KnowledgeService:
         self.trace.log("knowledge_ingest_completed", **result)
         return result
 
-    @staticmethod
-    def _merge_structural_cards(
-        raw_cards: list[Any], unit: ChangeOrderExtractionUnit
-    ) -> list[KnowledgeCardDraft]:
-        """Merge all cards returned for one structural unit without losing lists.
+    def _ingest_semantic_change_order(
+        self,
+        document: SourceDocument,
+        *,
+        checksum: str,
+        owner_token: str,
+        plan: ChangeOrderExtractionPlan,
+        adapter_diagnostics: dict[str, Any],
+        extraction_strategy: str,
+    ) -> dict[str, Any]:
+        """Persist Card Builder output while preserving Adapter evidence.
 
-        A ChangeOrder extraction unit maps to exactly one persisted knowledge card.
-        Models may nevertheless return several cards for that unit. Scalar fields
-        therefore use the first non-empty value and supporting lists are concatenated
-        in model-return order with stable de-duplication. The role's authoritative
-        list and evidence are always rebuilt from Adapter-owned source records.
+        The Adapter units remain lossless evidence carriers. Card boundaries and
+        bodies are produced from normalized business objects, so no raw JSON is
+        copied into procedure, validation, rollback, or impact fields.
         """
 
-        drafts = [KnowledgeCardDraft.from_dict(raw_card) for raw_card in raw_cards]
-
-        scalar_fields = (
-            "title",
-            "summary",
-            "knowledge_type",
-            "scenario",
-            "object_type",
-            "object_name",
-        )
-        list_fields = (
-            "applicable_versions",
-            "prerequisites",
-            "procedure_steps",
-            "risks",
-            "rollback_steps",
-            "validation_steps",
-            "keywords",
-        )
-
-        merged: dict[str, Any] = {}
-        for field_name in scalar_fields:
-            merged[field_name] = next(
-                (
-                    value
-                    for draft in drafts
-                    if (value := getattr(draft, field_name))
+        builder = ChangeOrderCardBuilder(
+            ChangeOrderCardBuilderConfig(
+                timezone_name=self.settings.change_order_card_timezone,
+                long_step_chars=self.settings.change_order_procedure_split_chars,
+                semantic_section_threshold=(
+                    self.settings.change_order_semantic_section_threshold
                 ),
-                "",
+                semantic_reuse_threshold=(
+                    self.settings.change_order_semantic_reuse_threshold
+                ),
             )
-
-        default_type = (
-            "rollback"
-            if unit.role == "ROLLBACK_STEPS"
-            else "case"
-            if unit.role == "EXECUTION_RESULT"
-            else "procedure"
         )
-        explicit_type = next(
-            (
-                str(raw_card.get("knowledge_type") or "").strip()
-                for raw_card in raw_cards
-                if isinstance(raw_card, dict)
-                and str(raw_card.get("knowledge_type") or "").strip()
-            ),
-            "",
+        built = builder.build(
+            document.content,
+            plan,
+            source_name=document.name,
         )
-        merged["title"] = merged["title"] or f"{unit.role} 结构化知识"
-        merged["summary"] = merged["summary"] or (
-            f"按源 JSON Pointer 保留 {len(unit.source_evidence_refs)} 条结构化记录。"
+        self.trace.log(
+            "change_order_semantic_units_built",
+            source_name=document.name,
+            checksum=checksum,
+            **{
+                key: built.report[key]
+                for key in (
+                    "case_context_count",
+                    "procedure_source_step_count",
+                    "procedure_unit_count",
+                    "semantic_reuse_count",
+                    "execution_outcome_count",
+                    "skipped_unit_count",
+                )
+            },
         )
-        merged["knowledge_type"] = explicit_type or default_type
-        merged["scenario"] = merged["scenario"] or "结构化变更单抽取"
-        merged["object_type"] = merged["object_type"] or "ChangeOrder"
-        merged["object_name"] = merged["object_name"] or (unit.pointer or "/")
 
-        for field_name in list_fields:
-            values: list[str] = []
-            for draft in drafts:
-                for value in getattr(draft, field_name):
-                    if value not in values:
-                        values.append(value)
-            merged[field_name] = values
-
-        primary_field = KnowledgeService._structured_primary_field(unit.role)
-        if primary_field is not None:
-            merged[primary_field] = [
-                KnowledgeService._render_structured_source_item(unit, reference)
-                for reference in unit.source_evidence_refs
-            ]
-
-        merged["evidence_quote"] = KnowledgeService._structured_evidence_quote(unit)
-        return [KnowledgeCardDraft.from_dict(merged)]
-
-    @staticmethod
-    def _structured_primary_field(role: str) -> str | None:
-        return {
-            "TASKS_CANONICAL": "procedure_steps",
-            "PRECHECK_STEPS": "procedure_steps",
-            "IMPLEMENTATION_STEPS": "procedure_steps",
-            "VALIDATION_STEPS": "validation_steps",
-            "ROLLBACK_STEPS": "rollback_steps",
-        }.get(role)
-
-    @staticmethod
-    def _source_fragment(
-        unit: ChangeOrderExtractionUnit, reference: SourceEvidenceRef
-    ) -> str:
-        start = reference.char_start - unit.chunk.char_start
-        end = reference.char_end - unit.chunk.char_start
-        if not 0 <= start < end <= len(unit.chunk.content):
-            raise KnowledgeServiceError("结构化证据范围不在所属抽取单元内")
-        fragment = unit.chunk.content[start:end]
-        if hashlib.sha256(fragment.encode("utf-8")).hexdigest() != reference.content_sha256:
-            raise KnowledgeServiceError("结构化证据哈希与抽取单元内容不一致")
-        return fragment
-
-    @staticmethod
-    def _render_structured_source_item(
-        unit: ChangeOrderExtractionUnit, reference: SourceEvidenceRef
-    ) -> str:
-        fragment = KnowledgeService._source_fragment(unit, reference).strip()
-        try:
-            value = json.loads(fragment)
-        except json.JSONDecodeError:
-            # Object members used as context may include their key. Procedure and
-            # task array members are complete JSON values and take the branch above.
-            compact = " ".join(fragment.split())
-        else:
-            compact = json.dumps(
-                value, ensure_ascii=False, sort_keys=False, separators=(",", ":")
-            )
-        return f"{reference.pointer}: {compact}"
-
-    @staticmethod
-    def _structured_evidence_quote(unit: ChangeOrderExtractionUnit) -> str:
-        if not unit.source_evidence_refs:
-            return ""
-        fragment = KnowledgeService._source_fragment(
-            unit, unit.source_evidence_refs[0]
-        ).strip()
-        return fragment[:300].rstrip()
-
-    @classmethod
-    def _structured_source_item_rows(
-        cls, unit: ChangeOrderExtractionUnit
-    ) -> list[dict[str, Any]]:
-        output_field = cls._structured_primary_field(unit.role) or "__evidence__"
-        return [
-            {
-                "output_field": output_field,
-                "output_index": output_index,
-                "source_index": reference.source_index,
-                "source_pointer": reference.pointer,
-                "source_hash": reference.content_sha256,
-                "char_start": reference.char_start,
-                "char_end": reference.char_end,
+        document_id, created = self.store.add_document(
+            document.name,
+            document.source_type,
+            document.source_ref,
+            checksum,
+            document.content,
+        )
+        if not created:
+            self.store.complete_ingestion(checksum, owner_token, document_id)
+            extraction_report = self.store.get_extraction_report(document_id)
+            return {
+                "document_id": document_id,
+                "duplicate_document": True,
+                "card_ids": self.store.card_ids_for_document(document_id),
+                "case_id": (
+                    extraction_report.get("case_id")
+                    if extraction_report is not None
+                    else None
+                ),
+                "extraction_strategy": extraction_strategy,
+                "extraction_report": extraction_report,
+                "message": "相同内容已经导入。",
             }
-            for output_index, reference in enumerate(unit.source_evidence_refs)
-        ]
+
+        chunks = [unit.chunk for unit in plan.units]
+        chunk_ids = {
+            chunk.index: self.store.add_chunk(
+                document_id,
+                chunk.index,
+                chunk.char_start,
+                chunk.char_end,
+                chunk.content,
+            )
+            for chunk in chunks
+        }
+        case_id = f"change-order:{checksum}"
+        card_ids: list[int] = []
+        cards_by_role: dict[str, int] = {}
+
+        for report_row, semantic_card in zip(
+            built.report["cards"], built.cards
+        ):
+            existing = self.store.find_card_by_semantic_fingerprint(
+                semantic_card.semantic_fingerprint
+            )
+            comparison = ComparisonResult()
+            if existing is not None:
+                semantic_card.dedup_status = DedupStatus.DUPLICATE.value
+                semantic_card.publish_status = PublishStatus.SKIPPED.value
+                semantic_card.finalize()
+                comparison = ComparisonResult(
+                    decision=ComparisonDecision.DUPLICATE,
+                    related_card_id=int(existing["id"]),
+                    confidence=1.0,
+                    reason="canonical semantic fingerprint 完全一致",
+                )
+
+            draft = semantic_card.to_legacy_draft()
+            first_reference = (
+                semantic_card.source_evidence_refs[0]
+                if semantic_card.source_evidence_refs
+                else None
+            )
+            if first_reference is not None:
+                evidence_quote = semantic_card.evidence_excerpt(limit=300)
+                evidence_locator = (
+                    f"{document.name}#pointer={first_reference.pointer};"
+                    f"chars={first_reference.char_start}-{first_reference.char_end};"
+                    f"sha256={first_reference.content_sha256};match=structured"
+                )
+            else:
+                evidence_quote = ""
+                evidence_locator = f"{document.name}#unverified"
+            draft.evidence_quote = evidence_quote
+            quality_score = float(semantic_card.qa["content_quality"])
+            quality_issues = list(semantic_card.qa["quality_issues"])
+            if not adapter_diagnostics.get("safe_for_internal_index", False):
+                quality_score = min(quality_score, 64.0)
+                quality_issues.extend(
+                    f"阻断：{blocker}"
+                    for blocker in adapter_diagnostics.get("blockers", [])
+                    if f"阻断：{blocker}" not in quality_issues
+                )
+            status = (
+                CardStatus.PENDING_REVIEW
+                if quality_score >= 65 and first_reference is not None
+                else CardStatus.DRAFT
+            )
+            card_id = self.store.add_card(
+                draft,
+                document_id=document_id,
+                chunk_id=chunk_ids[semantic_card.source_chunk_index],
+                evidence_locator=evidence_locator,
+                status=status,
+                quality_score=quality_score,
+                quality_issues=quality_issues,
+                comparison=comparison,
+                semantic_metadata={
+                    "card_type": semantic_card.card_type.value,
+                    "card_model_version": CARD_MODEL_VERSION,
+                    "dedup_status": semantic_card.dedup_status,
+                    "content_quality": quality_score,
+                    "publish_status": semantic_card.publish_status,
+                    "planning_rag_enabled": semantic_card.planning_rag_enabled,
+                    "semantic_fingerprint": semantic_card.semantic_fingerprint,
+                    "semantic_payload": semantic_card.semantic_payload,
+                },
+            )
+            references = semantic_card.source_evidence_refs
+            lineage_metadata = {
+                "semantic_mapping_status": "CONFIRMED",
+                "include_in_rag": semantic_card.publish_status
+                != PublishStatus.SKIPPED.value,
+                "include_in_generation": semantic_card.planning_rag_enabled
+                and semantic_card.publish_status != PublishStatus.SKIPPED.value,
+                "planning_rag_enabled": semantic_card.planning_rag_enabled,
+                "lifecycle_stage": (
+                    "post_execution"
+                    if semantic_card.card_type is CardType.EXECUTION_OUTCOME
+                    else "planning_context"
+                ),
+                "procedure_group": semantic_card.procedure_group,
+                "procedure_step_index": semantic_card.procedure_step_index,
+                "applicable_phases": semantic_card.applicable_phases,
+                "card_type": semantic_card.card_type.value,
+                "card_model_version": CARD_MODEL_VERSION,
+                "quality_policy_version": "change_order_semantic_v1",
+                "evidence_mode": "STRUCTURED_JSON_POINTERS",
+                "expected_source_items": len(references),
+                "structural_source_coverage_status": "COMPLETE",
+                "source_evidence_refs": [item.to_dict() for item in references],
+                "source_identities": semantic_card.source_identities,
+                "semantic_fingerprint": semantic_card.semantic_fingerprint,
+                "qa": semantic_card.qa,
+                "dedup_status": semantic_card.dedup_status,
+                "publish_status": semantic_card.publish_status,
+            }
+            self.store.save_card_lineage(
+                card_id,
+                case_id=case_id,
+                extraction_strategy=extraction_strategy,
+                unit_role=semantic_card.card_type.value,
+                unit_pointer=(
+                    str(semantic_card.source_identities[0].get("source_pointer") or "/")
+                    if semantic_card.source_identities
+                    else "/"
+                ),
+                source_pointers=[item.pointer for item in references],
+                source_order=semantic_card.source_order,
+                unit_metadata=lineage_metadata,
+            )
+            self.store.save_card_source_items(
+                card_id,
+                [
+                    {
+                        "output_field": "__evidence__",
+                        "output_index": index,
+                        "source_index": reference.source_index,
+                        "source_pointer": reference.pointer,
+                        "source_hash": reference.content_sha256,
+                        "char_start": reference.char_start,
+                        "char_end": reference.char_end,
+                    }
+                    for index, reference in enumerate(references)
+                ],
+            )
+            if comparison.related_card_id is not None:
+                # add_card already records DUPLICATE_OF; the explicit semantic
+                # statuses ensure the duplicate cannot enter retrieval indexes.
+                pass
+            report_row["card_id"] = card_id
+            report_row["dedup_status"] = semantic_card.dedup_status
+            report_row["publish_status"] = semantic_card.publish_status
+            report_row["semantic_fingerprint"] = semantic_card.semantic_fingerprint
+            card_ids.append(card_id)
+            cards_by_role[semantic_card.card_type.value] = (
+                cards_by_role.get(semantic_card.card_type.value, 0) + 1
+            )
+
+        case_title = next(
+            (
+                card.title
+                for card in built.cards
+                if card.card_type is CardType.CASE_CONTEXT
+            ),
+            document.name,
+        )
+        self.store.save_case_bundle(
+            case_id=case_id,
+            document_id=document_id,
+            title=case_title,
+            extraction_strategy=extraction_strategy,
+        )
+
+        report_directory = self.settings.change_order_card_report_dir
+        report_path: Path | None = None
+        if report_directory is not None:
+            report_path = report_directory / checksum / "card_build_report.json"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(built.report, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        extraction_report = {
+            "strategy": extraction_strategy,
+            "change_order": adapter_diagnostics,
+            "case_id": case_id,
+            "chunks": len(chunks),
+            "generated_cards": len(card_ids),
+            "cards_by_role": cards_by_role,
+            "structural_source_coverage": built.report[
+                "structural_source_coverage"
+            ],
+            "semantic_content_coverage": built.report[
+                "semantic_content_coverage"
+            ],
+            "card_build_report": built.report,
+            "card_build_report_path": str(report_path) if report_path else None,
+        }
+        self.store.save_extraction_report(
+            document_id, extraction_strategy, extraction_report
+        )
+        case_bundle = self.store.get_case_bundle(case_id, include_cards=False)
+        result = {
+            "document_id": document_id,
+            "case_id": case_id,
+            "case_bundle": case_bundle,
+            "duplicate_document": False,
+            "chunks": len(chunks),
+            "extraction_strategy": extraction_strategy,
+            "extraction_report": extraction_report,
+            "card_build_report": built.report,
+            "card_build_report_path": str(report_path) if report_path else None,
+            "extracted_cards": len(card_ids),
+            "cards_by_role": cards_by_role,
+            "batch_duplicates_skipped": built.report["semantic_reuse_count"],
+            "card_ids": card_ids,
+            "pending_review": sum(
+                1
+                for card_id in card_ids
+                if self.store.get_card(card_id)["status"]
+                == CardStatus.PENDING_REVIEW.value
+            ),
+            "model_calls": 0,
+            "message": (
+                f"变更案例包已建立，包含 {len(card_ids)} 张语义知识卡；"
+                "正式发布前必须人工审核。"
+            ),
+        }
+        self.store.complete_ingestion(checksum, owner_token, document_id)
+        self.trace.log("knowledge_ingest_completed", **result)
+        return result
 
     @staticmethod
     def _normalize_batch_value(value: Any) -> str:
@@ -1090,25 +1116,15 @@ class KnowledgeService:
         *,
         split_depth: int = 0,
         budget: ModelCallBudget | None = None,
-        structural_unit: ChangeOrderExtractionUnit | None = None,
     ) -> list[tuple[DocumentChunk, Any, dict[str, Any] | None, int]]:
         budget = budget or ModelCallBudget(self.settings.max_model_calls_per_ingest)
         locator = f"字符 {chunk.char_start}-{chunk.char_end}"
         try:
             budget.consume("extract")
-            if structural_unit is None:
-                system_prompt = EXTRACTION_SYSTEM_PROMPT
-                user_prompt = extraction_user_prompt(
-                    source_name, locator, chunk.content
-                )
-            else:
-                system_prompt = CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT
-                user_prompt = change_order_extraction_user_prompt(
-                    source_name,
-                    locator,
-                    structural_unit.prompt_context(),
-                    chunk.content,
-                )
+            system_prompt = EXTRACTION_SYSTEM_PROMPT
+            user_prompt = extraction_user_prompt(
+                source_name, locator, chunk.content
+            )
             payload, usage = self.client.chat_json(
                 system_prompt,
                 user_prompt,
@@ -1116,12 +1132,6 @@ class KnowledgeService:
             )
             return [(chunk, payload, usage, split_depth)]
         except APIError as exc:
-            if structural_unit is not None:
-                raise KnowledgeServiceError(
-                    f"来源 {source_name} 在 {locator} 的结构化抽取失败；"
-                    "为避免破坏源对象边界，未继续拆分该结构单元："
-                    f"{exc}"
-                ) from exc
             if (
                 split_depth >= self.MAX_EXTRACTION_SPLIT_DEPTH
                 or len(chunk.content) < 800
@@ -1155,7 +1165,6 @@ class KnowledgeService:
                         part,
                         split_depth=split_depth + 1,
                         budget=budget,
-                        structural_unit=structural_unit,
                     )
                 )
             return results
@@ -1259,7 +1268,10 @@ class KnowledgeService:
         for hit in lexical_candidates:
             if for_generation:
                 lineage = self.store.get_card_lineage(int(hit.card["id"])) or {}
-                if lineage.get("include_in_generation") is False:
+                if (
+                    lineage.get("include_in_generation") is False
+                    or hit.card.get("planning_rag_enabled") is False
+                ):
                     lexical_rejected.append(
                         {
                             "card_id": int(hit.card["id"]),
@@ -1815,10 +1827,23 @@ class KnowledgeService:
                     f"chars={first_source['char_start']}-{first_source['char_end']};"
                     f"sha256={first_source['source_hash']};match=structured"
                 )
-            score, issues = draft.quality(
-                chunk["content"],
-                unit_role=str(unit_role) if unit_role else None,
-            )
+            if (
+                card.get("card_model_version") == CARD_MODEL_VERSION
+                and lineage is not None
+                and isinstance(lineage.get("qa"), dict)
+            ):
+                semantic_qa = lineage["qa"]
+                score = float(
+                    semantic_qa.get("content_quality", card.get("content_quality", 0))
+                )
+                issues = [
+                    str(item) for item in semantic_qa.get("quality_issues") or []
+                ]
+            else:
+                score, issues = draft.quality(
+                    chunk["content"],
+                    unit_role=str(unit_role) if unit_role else None,
+                )
             extraction_report = self.store.get_extraction_report(
                 int(card["source_document_id"])
             )

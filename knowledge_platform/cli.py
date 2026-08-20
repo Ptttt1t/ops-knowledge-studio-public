@@ -131,6 +131,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_query_parser.add_argument("--question", required=True)
 
+    schema_profile_inspect = subparsers.add_parser(
+        "change-schema-profile-inspect",
+        help="从已审核真实案例包生成待确认的 ChangeOrder SchemaProfile",
+    )
+    schema_profile_inspect.add_argument("--case-id", required=True)
+
+    schema_profile_activate = subparsers.add_parser(
+        "change-schema-profile-activate",
+        help="激活管理员已确认的 ChangeOrder SchemaProfile JSON",
+    )
+    schema_profile_activate.add_argument("--file", type=Path, required=True)
+    schema_profile_activate.add_argument("--actor", required=True)
+
+    subparsers.add_parser(
+        "change-schema-profile-show",
+        help="查看真实变更生成功能及当前激活的 SchemaProfile",
+    )
+
     subparsers.add_parser("stats", help="查看知识库统计")
     memory_status = subparsers.add_parser(
         "memory-status", help="查看 MindMemOS 长期记忆连接与同步状态"
@@ -307,6 +325,21 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(service.query(args.question))
         elif command == "agent-query":
             _print_json(service.agent_query(args.question))
+        elif command == "change-schema-profile-inspect":
+            _print_json(service.change_drafts.inspect_schema_profile(args.case_id))
+        elif command == "change-schema-profile-activate":
+            try:
+                profile = json.loads(args.file.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"无法读取 SchemaProfile: {exc}") from exc
+            _print_json(
+                service.change_drafts.activate_schema_profile(
+                    profile,
+                    actor=args.actor,
+                )
+            )
+        elif command == "change-schema-profile-show":
+            _print_json(service.change_drafts.profile_status())
         elif command == "stats":
             _print_json(service.stats())
         elif command == "memory-status":

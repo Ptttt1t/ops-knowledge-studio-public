@@ -13,11 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = PROJECT_ROOT / "sample_data" / "realistic_change_orders"
 
 EXPECTED_CASES = {
-    "01-direct_connect_route_failover.json": (6, (5, 6, 5, 4), 7),
-    "02-nat_egress_blue_green_migration.json": (8, (6, 8, 6, 6), 7),
-    "03-ipsec_vpn_key_and_bgp_cutover.json": (10, (7, 10, 7, 8), 8),
-    "04-security_group_micro_segmentation.json": (12, (6, 12, 8, 12), 9),
-    "05-transit_hub_route_domain_migration.json": (14, (8, 14, 10, 12), 10),
+    "01-direct_connect_route_failover.json": (6, (5, 6, 5, 4), 23),
+    "02-nat_egress_blue_green_migration.json": (8, (6, 8, 6, 6), 29),
+    "03-ipsec_vpn_key_and_bgp_cutover.json": (10, (7, 10, 7, 8), 35),
+    "04-security_group_micro_segmentation.json": (12, (6, 12, 8, 12), 41),
+    "05-transit_hub_route_domain_migration.json": (14, (8, 14, 10, 12), 47),
 }
 
 PROCEDURE_MAPPING = {

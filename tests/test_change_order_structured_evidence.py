@@ -20,6 +20,7 @@ from tests.test_change_order_extraction import (
     source_json,
 )
 from tests.test_platform import make_settings
+from tests.test_change_order_card_builder import make_payload as make_semantic_payload
 
 
 LIST_FIELD_BY_ROLE = {
@@ -101,15 +102,13 @@ class ChangeOrderStructuredEvidenceTests(unittest.TestCase):
             result = service.ingest_text(
                 source_name="evidence-matrix.json",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
 
-            coverage = result["extraction_report"]["content_coverage"]
+            coverage = result["extraction_report"]["structural_source_coverage"]
             self.assertEqual(coverage["status"], "COMPLETE")
-            self.assertEqual(coverage["expected_units"], 7)
-            self.assertEqual(coverage["generated_cards"], 7)
             self.assertEqual(
-                coverage["expected_source_items"], coverage["mapped_source_items"]
+                coverage["expected_source_items"], coverage["accounted_source_items"]
             )
 
             for card_id in result["card_ids"]:
@@ -118,29 +117,31 @@ class ChangeOrderStructuredEvidenceTests(unittest.TestCase):
                 assert card is not None
                 lineage = card["lineage"]
                 self.assertEqual(
-                    lineage["quality_policy_version"], "change_order_role_v2"
+                    lineage["quality_policy_version"], "change_order_semantic_v1"
                 )
                 self.assertEqual(
                     lineage["evidence_mode"], "STRUCTURED_JSON_POINTERS"
                 )
-                self.assertEqual(lineage["content_coverage_status"], "COMPLETE")
+                self.assertEqual(
+                    lineage["structural_source_coverage_status"], "COMPLETE"
+                )
                 self.assertEqual(
                     len(card["source_items"]), lineage["expected_source_items"]
                 )
                 self.assertIn("match=structured", card["evidence_locator"])
-                field = LIST_FIELD_BY_ROLE.get(lineage["unit_role"])
-                if field is not None:
-                    self.assertEqual(
-                        len(card[field]), lineage["expected_source_items"]
-                    )
+                self.assertTrue(card["semantic_fingerprint"])
 
             regraded = service.regrade_existing_cards()
-            self.assertEqual(regraded["processed"], 7)
-            self.assertEqual(regraded["grounded"], 7)
+            self.assertEqual(regraded["processed"], len(result["card_ids"]))
+            self.assertEqual(regraded["grounded"], len(result["card_ids"]))
             for card_id in result["card_ids"]:
                 self.assertIn(
                     "match=structured",
                     service.card_detail(card_id)["evidence_locator"],
+                )
+                self.assertEqual(
+                    service.card_detail(card_id)["quality_score"],
+                    service.card_detail(card_id)["content_quality"],
                 )
 
     def test_approval_rejects_incomplete_or_tampered_source_matrix(self) -> None:
@@ -149,20 +150,26 @@ class ChangeOrderStructuredEvidenceTests(unittest.TestCase):
             result = service.ingest_text(
                 source_name="approval-matrix.json",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             cards = [service.card_detail(card_id) for card_id in result["card_ids"]]
             task = next(
-                card for card in cards if card["lineage"]["unit_role"] == "TASKS_CANONICAL"
+                card for card in cards if card["lineage"]["unit_role"] == "CASE_CONTEXT"
             )
             rollback = next(
-                card for card in cards if card["lineage"]["unit_role"] == "ROLLBACK_STEPS"
+                card
+                for card in cards
+                if card["lineage"]["unit_role"] == "PROCEDURE_STEP"
+                and card["lineage"]["procedure_group"] == "ROLLBACK"
             )
             execution = next(
-                card for card in cards if card["lineage"]["unit_role"] == "EXECUTION_RESULT"
+                card for card in cards if card["lineage"]["unit_role"] == "EXECUTION_OUTCOME"
             )
             precheck = next(
-                card for card in cards if card["lineage"]["unit_role"] == "PRECHECK_STEPS"
+                card
+                for card in cards
+                if card["lineage"]["unit_role"] == "PROCEDURE_STEP"
+                and card["lineage"]["procedure_group"] == "PRECHECK"
             )
             self.assertEqual(task["status"], CardStatus.PENDING_REVIEW.value)
             self.assertEqual(rollback["status"], CardStatus.PENDING_REVIEW.value)
@@ -173,7 +180,7 @@ class ChangeOrderStructuredEvidenceTests(unittest.TestCase):
                     (task["id"],),
                 ).fetchone()
                 metadata = json.loads(row["unit_metadata"])
-                metadata["content_coverage_status"] = "INCOMPLETE"
+                metadata["structural_source_coverage_status"] = "INCOMPLETE"
                 connection.execute(
                     "UPDATE card_lineage SET unit_metadata = ? WHERE card_id = ?",
                     (json.dumps(metadata, ensure_ascii=False), task["id"]),
@@ -236,7 +243,7 @@ class ChangeOrderStructuredEvidenceTests(unittest.TestCase):
             result = service.ingest_text(
                 source_name="delete-matrix.json",
                 source_type="json",
-                content=source_json(make_change_order()),
+                content=source_json(make_semantic_payload()),
             )
             card_id = result["card_ids"][0]
             self.assertTrue(service.store.list_card_source_items(card_id))

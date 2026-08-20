@@ -20,6 +20,7 @@ from change_management.service import DemoChangeError
 from change_management.simulator import SimulationError
 
 from .change_web import ChangeDemoWebManager, ChangeSessionLimitError
+from .change_drafts import ChangeDraftError
 from .documents import (
     DocumentError,
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -53,6 +54,16 @@ CHANGE_DECISION_PATTERN = re.compile(
 CHANGE_FEEDBACK_PATTERN = re.compile(
     r"^/api/change-demos/([0-9A-Za-z_-]+)/publish-feedback$"
 )
+REAL_CHANGE_DRAFT_PATTERN = re.compile(r"^/api/change-drafts/([^/]+)$")
+REAL_CHANGE_DRAFT_REVIEW_PATTERN = re.compile(
+    r"^/api/change-drafts/([^/]+)/review$"
+)
+REAL_CHANGE_DRAFT_EXPORT_PATTERN = re.compile(
+    r"^/api/change-drafts/([^/]+)/export$"
+)
+REAL_CHANGE_EVALUATION_PATTERN = re.compile(
+    r"^/api/change-evaluations/([^/]+)$"
+)
 
 
 class KnowledgeHTTPServer(ThreadingHTTPServer):
@@ -70,6 +81,7 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self.static_dir = static_dir
         self.runtime = runtime
         self.change_demos = ChangeDemoWebManager(service)
+        self.change_drafts = service.change_drafts
         self.security = WebSecurity(service.settings)
 
     def server_close(self) -> None:
@@ -251,7 +263,13 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             json.JSONDecodeError,
         )
         if isinstance(
-            exc, (WebSecurityError, KnowledgeRequestError, ChangeSessionLimitError)
+            exc,
+            (
+                WebSecurityError,
+                KnowledgeRequestError,
+                ChangeSessionLimitError,
+                ChangeDraftError,
+            ),
         ):
             headers = (
                 {"WWW-Authenticate": 'Bearer realm="Ops Knowledge Studio"'}
@@ -347,6 +365,50 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             change_match = CHANGE_DEMO_PATTERN.match(path)
             if change_match:
                 self._send_json(self.server.change_demos.describe(change_match.group(1)))
+                return
+            if path == "/api/change-schema-profile":
+                self._send_json(self.server.change_drafts.profile_status())
+                return
+            if path == "/api/change-drafts":
+                query = parse_qs(parsed.query)
+                limit = int(query.get("limit", ["50"])[0])
+                self._send_json({"drafts": self.server.change_drafts.store.list_drafts(limit=limit)})
+                return
+            export_match = REAL_CHANGE_DRAFT_EXPORT_PATTERN.match(path)
+            if export_match:
+                self._send_json(
+                    self.server.change_drafts.export_draft(unquote(export_match.group(1))),
+                    headers={
+                        "Content-Disposition": (
+                            f'attachment; filename="{export_match.group(1)}.json"'
+                        )
+                    },
+                )
+                return
+            draft_match = REAL_CHANGE_DRAFT_PATTERN.match(path)
+            if draft_match:
+                draft = self.server.change_drafts.store.get_draft(unquote(draft_match.group(1)))
+                if draft is None:
+                    self._send_json({"error": "真实变更草案不存在"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(draft)
+                return
+            if path == "/api/change-evaluations":
+                query = parse_qs(parsed.query)
+                limit = int(query.get("limit", ["50"])[0])
+                self._send_json(
+                    {"evaluations": self.server.change_drafts.store.list_evaluations(limit=limit)}
+                )
+                return
+            evaluation_match = REAL_CHANGE_EVALUATION_PATTERN.match(path)
+            if evaluation_match:
+                evaluation = self.server.change_drafts.store.get_evaluation(
+                    unquote(evaluation_match.group(1))
+                )
+                if evaluation is None:
+                    self._send_json({"error": "盲测评测不存在"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(evaluation)
                 return
             if path == "/api/runs":
                 query = parse_qs(parsed.query)
@@ -462,6 +524,93 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.CREATED)
                 return
             payload = self._read_json()
+            if path == "/api/change-drafts/recommend":
+                result = self.server.change_drafts.recommend(
+                    payload.get("request"),
+                    held_out_case_id=str(payload.get("held_out_case_id") or ""),
+                )
+                self._send_json(result)
+                return
+            if path == "/api/change-drafts":
+                selected = payload.get("selected_case_ids") or []
+                if not isinstance(selected, list):
+                    raise ValueError("selected_case_ids 必须是数组")
+                draft = self.server.change_drafts.create_draft(
+                    payload.get("request"),
+                    selected_case_ids=[str(item) for item in selected],
+                    actor=principal,
+                    mode=str(payload.get("mode") or "normal"),
+                    held_out_case_id=str(payload.get("held_out_case_id") or ""),
+                )
+                try:
+                    run, _created = self.server.runtime.submit(
+                        "change.generate_real_draft",
+                        {"draft_id": draft["draft_id"], "actor": principal},
+                        idempotency_key=f"real-change:{draft['draft_id']}",
+                    )
+                except Exception as exc:
+                    self.server.change_drafts.store.set_draft_failure(
+                        str(draft["draft_id"]), str(exc)
+                    )
+                    raise
+                self.server.change_drafts.store.set_draft_run(
+                    str(draft["draft_id"]), str(run["id"])
+                )
+                self._send_json(
+                    {
+                        "draft": self.server.change_drafts.store.get_draft(
+                            str(draft["draft_id"])
+                        ),
+                        "run": run,
+                    },
+                    HTTPStatus.ACCEPTED,
+                )
+                return
+            review_match = REAL_CHANGE_DRAFT_REVIEW_PATTERN.match(path)
+            if review_match:
+                result = self.server.change_drafts.review_draft(
+                    unquote(review_match.group(1)),
+                    decision=str(payload.get("decision") or ""),
+                    reviewer=(
+                        str(payload.get("reviewer") or principal)
+                        if self.server.service.settings.demo_mode
+                        else principal
+                    ),
+                    comment=str(payload.get("comment") or ""),
+                )
+                self._send_json(result)
+                return
+            if path == "/api/change-evaluations":
+                evaluation = self.server.change_drafts.create_evaluation(
+                    str(payload.get("held_out_case_id") or ""), actor=principal
+                )
+                try:
+                    run, _created = self.server.runtime.submit(
+                        "change.evaluate_leave_one_out",
+                        {
+                            "evaluation_id": evaluation["evaluation_id"],
+                            "actor": principal,
+                        },
+                        idempotency_key=f"change-eval:{evaluation['evaluation_id']}",
+                    )
+                except Exception as exc:
+                    self.server.change_drafts.store.finish_evaluation(
+                        str(evaluation["evaluation_id"]), error=str(exc)
+                    )
+                    raise
+                self.server.change_drafts.store.set_evaluation_run(
+                    str(evaluation["evaluation_id"]), str(run["id"])
+                )
+                self._send_json(
+                    {
+                        "evaluation": self.server.change_drafts.store.get_evaluation(
+                            str(evaluation["evaluation_id"])
+                        ),
+                        "run": run,
+                    },
+                    HTTPStatus.ACCEPTED,
+                )
+                return
             if path == "/api/change-demos":
                 result = self.server.change_demos.create(
                     requested_by=principal,
@@ -617,6 +766,24 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 return
             self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except Exception as exc:
+            self._handle_error(exc)
+
+    def do_PATCH(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            principal = self._authorize_api(path, "PATCH")
+            match = REAL_CHANGE_DRAFT_PATTERN.match(path)
+            if not match:
+                self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            payload = self._read_json()
+            result = self.server.change_drafts.update_draft(
+                unquote(match.group(1)),
+                payload.get("normalized"),
+                actor=principal,
+            )
+            self._send_json(result)
         except Exception as exc:
             self._handle_error(exc)
 

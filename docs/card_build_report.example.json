@@ -1,0 +1,88 @@
+{
+  "builder": "change_order_semantic_builder_v1",
+  "card_model_version": "change_order_card_model_v1",
+  "source_name": "synthetic-change-order.json",
+  "case_context_count": 1,
+  "procedure_source_step_count": 4,
+  "procedure_unit_count": 4,
+  "semantic_reuse_count": 0,
+  "execution_outcome_count": 1,
+  "skipped_unit_count": 2,
+  "structural_source_coverage": {
+    "status": "COMPLETE",
+    "expected_source_items": 35,
+    "accounted_source_items": 35,
+    "unaccounted_source_items": 0
+  },
+  "semantic_content_coverage": {
+    "status": "COMPLETE",
+    "source_procedure_steps": 4,
+    "expressed_or_reused_steps": 4,
+    "ratio": 1.0
+  },
+  "cards": [
+    {
+      "card_id": 1,
+      "card_type": "CASE_CONTEXT",
+      "title": "虚构服务容量调整 · SYNTH-CO-0001",
+      "procedure_group": null,
+      "procedure_step_index": null,
+      "source_pointer": "/data/ticket_id",
+      "source_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "has_raw_json": false,
+      "has_html_residue": false,
+      "has_empty_required_section": false,
+      "source_fact_count": 13,
+      "inferred_fact_count": 0,
+      "semantic_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dedup_status": "NEW",
+      "publish_status": "CANDIDATE"
+    },
+    {
+      "card_id": 2,
+      "card_type": "PROCEDURE_STEP",
+      "title": "虚构变更步骤",
+      "procedure_group": "PRECHECK",
+      "procedure_step_index": 0,
+      "source_pointer": "/data/sop_change_step/check_before_change/0",
+      "source_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "has_raw_json": false,
+      "has_html_residue": false,
+      "has_empty_required_section": false,
+      "source_fact_count": 6,
+      "inferred_fact_count": 0,
+      "semantic_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dedup_status": "NEW",
+      "publish_status": "CANDIDATE"
+    },
+    {
+      "card_id": 6,
+      "card_type": "EXECUTION_OUTCOME",
+      "title": "SYNTH-CO-0001 · 执行结果",
+      "procedure_group": null,
+      "procedure_step_index": null,
+      "source_pointer": "/data/change_plan/0/result/change_result",
+      "source_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "has_raw_json": false,
+      "has_html_residue": false,
+      "has_empty_required_section": false,
+      "source_fact_count": 15,
+      "inferred_fact_count": 0,
+      "semantic_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "dedup_status": "NEW",
+      "publish_status": "CANDIDATE"
+    }
+  ],
+  "skipped_units": [
+    {
+      "unit_role": "IDENTITY_METADATA_CONTEXT",
+      "source_pointer": "/data/ticket_id",
+      "skip_reason": "MERGED_INTO_CASE_CONTEXT"
+    },
+    {
+      "unit_role": "TASKS_CANONICAL",
+      "source_pointer": "/data/action_list/0",
+      "skip_reason": "MERGED_INTO_CASE_CONTEXT"
+    }
+  ]
+}

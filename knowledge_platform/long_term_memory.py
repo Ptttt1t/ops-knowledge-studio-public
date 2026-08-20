@@ -217,6 +217,12 @@ class MindMemOSBridge:
                 "card_id": card_id,
                 "memory_count": 0,
             }
+        if str(card.get("publish_status") or "CANDIDATE").upper() == "SKIPPED":
+            return {
+                "status": "SKIPPED_NOT_PUBLISHABLE",
+                "card_id": card_id,
+                "memory_count": 0,
+            }
         if not self.enabled:
             return {"status": "DISABLED", "card_id": card_id, "memory_count": 0}
         if not self.configured:

@@ -76,6 +76,15 @@ class KnowledgeStore:
             rollback_steps TEXT NOT NULL,
             validation_steps TEXT NOT NULL,
             keywords TEXT NOT NULL,
+            card_type TEXT NOT NULL DEFAULT 'LEGACY',
+            card_model_version TEXT NOT NULL DEFAULT 'legacy_v1',
+            review_status TEXT NOT NULL DEFAULT 'DRAFT',
+            dedup_status TEXT NOT NULL DEFAULT 'NEW',
+            content_quality REAL NOT NULL DEFAULT 0,
+            publish_status TEXT NOT NULL DEFAULT 'CANDIDATE',
+            planning_rag_enabled INTEGER NOT NULL DEFAULT 1,
+            semantic_fingerprint TEXT NOT NULL DEFAULT '',
+            semantic_payload TEXT NOT NULL DEFAULT '{}',
             source_document_id INTEGER NOT NULL REFERENCES documents(id),
             source_chunk_id INTEGER NOT NULL REFERENCES chunks(id),
             evidence_quote TEXT NOT NULL,
@@ -255,6 +264,41 @@ class KnowledgeStore:
                     "ALTER TABLE card_lineage "
                     "ADD COLUMN unit_metadata TEXT NOT NULL DEFAULT '{}'"
                 )
+            card_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(cards)").fetchall()
+            }
+            for column, declaration in (
+                ("card_type", "TEXT NOT NULL DEFAULT 'LEGACY'"),
+                ("card_model_version", "TEXT NOT NULL DEFAULT 'legacy_v1'"),
+                ("review_status", "TEXT NOT NULL DEFAULT 'DRAFT'"),
+                ("dedup_status", "TEXT NOT NULL DEFAULT 'NEW'"),
+                ("content_quality", "REAL NOT NULL DEFAULT 0"),
+                ("publish_status", "TEXT NOT NULL DEFAULT 'CANDIDATE'"),
+                ("planning_rag_enabled", "INTEGER NOT NULL DEFAULT 1"),
+                ("semantic_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+                ("semantic_payload", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if column not in card_columns:
+                    connection.execute(
+                        f"ALTER TABLE cards ADD COLUMN {column} {declaration}"
+                    )
+            connection.execute(
+                "UPDATE cards SET review_status = status "
+                "WHERE review_status != status"
+            )
+            connection.execute(
+                "UPDATE cards SET content_quality = quality_score "
+                "WHERE card_model_version = 'legacy_v1'"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cards_semantic_fingerprint "
+                "ON cards(semantic_fingerprint)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cards_publish_status "
+                "ON cards(publish_status, planning_rag_enabled)"
+            )
             # Databases created before case bundles existed already carry the
             # authoritative case_id in card_lineage. Promote those structured
             # change orders to first-class bundles without changing card IDs.
@@ -768,9 +812,25 @@ class KnowledgeStore:
         quality_score: float,
         quality_issues: list[str],
         comparison: ComparisonResult,
+        semantic_metadata: dict[str, Any] | None = None,
     ) -> int:
         now = utc_now()
         values = draft.to_dict()
+        semantic = semantic_metadata or {}
+        card_type = str(semantic.get("card_type") or "LEGACY")
+        card_model_version = str(
+            semantic.get("card_model_version") or "legacy_v1"
+        )
+        dedup_status = str(
+            semantic.get("dedup_status") or comparison.decision.value
+        )
+        publish_status = str(semantic.get("publish_status") or "CANDIDATE")
+        content_quality = float(semantic.get("content_quality", quality_score))
+        planning_rag_enabled = bool(
+            semantic.get("planning_rag_enabled", True)
+        )
+        semantic_fingerprint = str(semantic.get("semantic_fingerprint") or "")
+        semantic_payload = semantic.get("semantic_payload") or {}
         with self.connect() as connection:
             cursor = connection.execute(
                 """
@@ -778,12 +838,16 @@ class KnowledgeStore:
                     title, summary, knowledge_type, scenario, object_type, object_name,
                     applicable_versions, prerequisites, procedure_steps, risks,
                     rollback_steps, validation_steps, keywords,
+                    card_type, card_model_version, review_status, dedup_status,
+                    content_quality, publish_status, planning_rag_enabled,
+                    semantic_fingerprint, semantic_payload,
                     source_document_id, source_chunk_id, evidence_quote, evidence_locator,
                     status, quality_score, quality_issues,
                     comparison_label, comparison_confidence, comparison_reason,
                     created_at, updated_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -800,6 +864,15 @@ class KnowledgeStore:
                     json.dumps(values["rollback_steps"], ensure_ascii=False),
                     json.dumps(values["validation_steps"], ensure_ascii=False),
                     json.dumps(values["keywords"], ensure_ascii=False),
+                    card_type,
+                    card_model_version,
+                    status.value,
+                    dedup_status,
+                    content_quality,
+                    publish_status,
+                    1 if planning_rag_enabled else 0,
+                    semantic_fingerprint,
+                    json.dumps(semantic_payload, ensure_ascii=False, sort_keys=True),
                     document_id,
                     chunk_id,
                     values["evidence_quote"],
@@ -863,7 +936,47 @@ class KnowledgeStore:
         for field in LIST_FIELDS:
             result[field] = json.loads(result[field] or "[]")
         result["quality_issues"] = json.loads(result["quality_issues"] or "[]")
+        result["semantic_payload"] = json.loads(
+            result.get("semantic_payload") or "{}"
+        )
+        result["planning_rag_enabled"] = bool(
+            result.get("planning_rag_enabled", 1)
+        )
+        for field in (
+            "operation",
+            "generalized_operation",
+            "validation",
+            "rollback",
+            "impact_analysis",
+            "risk_level",
+            "risk_control",
+            "inferred_risk",
+            "instance_parameters",
+            "applicable_phases",
+            "actions",
+            "context",
+            "outcome",
+            "attachments",
+            "source_facts",
+            "inferred_facts",
+        ):
+            if field in result["semantic_payload"]:
+                result[field] = result["semantic_payload"][field]
         return result
+
+    def find_card_by_semantic_fingerprint(
+        self, semantic_fingerprint: str
+    ) -> dict[str, Any] | None:
+        fingerprint = semantic_fingerprint.strip()
+        if not fingerprint:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM cards WHERE semantic_fingerprint = ? "
+                "ORDER BY CASE WHEN status = 'APPROVED' THEN 0 ELSE 1 END, id LIMIT 1",
+                (fingerprint,),
+            ).fetchone()
+        return self._decode_card(row)
 
     def get_card(self, card_id: int) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -969,14 +1082,17 @@ class KnowledgeStore:
                 """
                 UPDATE cards
                 SET evidence_quote = ?, evidence_locator = ?, quality_score = ?,
-                    quality_issues = ?, status = ?, updated_at = ?
+                    content_quality = ?, quality_issues = ?, status = ?,
+                    review_status = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     evidence_quote,
                     evidence_locator,
                     quality_score,
+                    quality_score,
                     json.dumps(quality_issues, ensure_ascii=False),
+                    status.value,
                     status.value,
                     now,
                     card_id,
@@ -1063,6 +1179,7 @@ class KnowledgeStore:
             rows = connection.execute(
                 f"""
                 SELECT cards.id, cards.title, cards.summary, cards.knowledge_type,
+                       cards.card_type, cards.dedup_status, cards.publish_status,
                        cards.object_type, cards.object_name, cards.status,
                        cards.quality_score, cards.comparison_label,
                        cards.source_document_id, cards.updated_at,
@@ -1146,6 +1263,9 @@ class KnowledgeStore:
                     "summary": str(row["summary"]),
                     "status": str(row["status"]),
                     "knowledge_type": str(row["knowledge_type"]),
+                    "card_type": str(row["card_type"]),
+                    "dedup_status": str(row["dedup_status"]),
+                    "publish_status": str(row["publish_status"]),
                     "object_type": str(row["object_type"]),
                     "object_name": str(row["object_name"]),
                     "quality_score": round(float(row["quality_score"]), 1),
@@ -1252,14 +1372,38 @@ class KnowledgeStore:
             return
 
         metadata = json.loads(str(lineage["unit_metadata"] or "{}"))
-        if metadata.get("quality_policy_version") != "change_order_role_v2":
+        quality_policy = metadata.get("quality_policy_version")
+        if quality_policy not in {
+            "change_order_role_v2",
+            "change_order_semantic_v1",
+        }:
             # Existing cards created before the structured evidence matrix remain
             # reviewable under the legacy exact-quote gate.
             return
         if metadata.get("evidence_mode") != "STRUCTURED_JSON_POINTERS":
             raise StoreError("结构化知识缺少受信任的 JSON Pointer 证据模式")
-        if metadata.get("content_coverage_status") != "COMPLETE":
+        coverage_status = (
+            metadata.get("structural_source_coverage_status")
+            if quality_policy == "change_order_semantic_v1"
+            else metadata.get("content_coverage_status")
+        )
+        if coverage_status != "COMPLETE":
             raise StoreError("结构化知识的逐源记录覆盖不完整，不能批准")
+        if quality_policy == "change_order_semantic_v1":
+            qa = metadata.get("qa") or {}
+            blockers = [
+                name
+                for name in (
+                    "has_raw_json",
+                    "has_html_residue",
+                    "has_empty_required_section",
+                )
+                if qa.get(name) is True
+            ]
+            if blockers:
+                raise StoreError(
+                    "语义知识正文 QA 未通过，不能批准：" + "、".join(blockers)
+                )
 
         references = metadata.get("source_evidence_refs")
         if not isinstance(references, list) or not references:
@@ -1281,13 +1425,17 @@ class KnowledgeStore:
             raise StoreError("结构化知识的逐源记录证据数量不完整")
 
         role = str(lineage["unit_role"])
-        expected_field = {
-            "TASKS_CANONICAL": "procedure_steps",
-            "PRECHECK_STEPS": "procedure_steps",
-            "IMPLEMENTATION_STEPS": "procedure_steps",
-            "VALIDATION_STEPS": "validation_steps",
-            "ROLLBACK_STEPS": "rollback_steps",
-        }.get(role, "__evidence__")
+        expected_field = (
+            "__evidence__"
+            if quality_policy == "change_order_semantic_v1"
+            else {
+                "TASKS_CANONICAL": "procedure_steps",
+                "PRECHECK_STEPS": "procedure_steps",
+                "IMPLEMENTATION_STEPS": "procedure_steps",
+                "VALIDATION_STEPS": "validation_steps",
+                "ROLLBACK_STEPS": "rollback_steps",
+            }.get(role, "__evidence__")
+        )
         source_pointers = json.loads(str(lineage["source_pointers"] or "[]"))
         if source_pointers != [str(item.get("pointer")) for item in references]:
             raise StoreError("结构化知识的 lineage 与证据 Pointer 不一致")
@@ -1423,17 +1571,23 @@ class KnowledgeStore:
                         f"目标卡片当前状态为 {target['status']}"
                     )
                 connection.execute(
-                    "UPDATE cards SET status = ?, updated_at = ? WHERE id = ?",
-                    (CardStatus.SUPERSEDED.value, now, supersedes_id),
+                    "UPDATE cards SET status = ?, review_status = ?, updated_at = ? WHERE id = ?",
+                    (
+                        CardStatus.SUPERSEDED.value,
+                        CardStatus.SUPERSEDED.value,
+                        now,
+                        supersedes_id,
+                    ),
                 )
                 connection.execute(
                     """
                     UPDATE cards
-                    SET status = ?, supersedes_id = ?, reviewer = ?, review_comment = ?,
+                    SET status = ?, review_status = ?, supersedes_id = ?, reviewer = ?, review_comment = ?,
                         published_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
+                        CardStatus.APPROVED.value,
                         CardStatus.APPROVED.value,
                         supersedes_id,
                         reviewer,
@@ -1480,11 +1634,19 @@ class KnowledgeStore:
                 connection.execute(
                     """
                     UPDATE cards
-                    SET status = ?, reviewer = ?, review_comment = ?,
+                    SET status = ?, review_status = ?, reviewer = ?, review_comment = ?,
                         published_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (new_status, reviewer, comment, published_at, now, card_id),
+                    (
+                        new_status,
+                        new_status,
+                        reviewer,
+                        comment,
+                        published_at,
+                        now,
+                        card_id,
+                    ),
                 )
 
             connection.execute(
@@ -1581,11 +1743,19 @@ class KnowledgeStore:
                 connection.execute(
                     """
                     UPDATE cards
-                    SET status = ?, reviewer = ?, review_comment = ?,
+                    SET status = ?, review_status = ?, reviewer = ?, review_comment = ?,
                         published_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (new_status, reviewer, comment, published_at, now, card_id),
+                    (
+                        new_status,
+                        new_status,
+                        reviewer,
+                        comment,
+                        published_at,
+                        now,
+                        card_id,
+                    ),
                 )
                 connection.execute(
                     """

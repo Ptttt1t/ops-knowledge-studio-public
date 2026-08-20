@@ -158,6 +158,11 @@ class Settings:
     max_document_chunks: int = 20
     max_change_order_chunks: int = 40
     change_order_chunk_size: int = 12_000
+    change_order_card_timezone: str = "Asia/Shanghai"
+    change_order_procedure_split_chars: int = 6000
+    change_order_semantic_section_threshold: int = 5
+    change_order_semantic_reuse_threshold: float = 0.92
+    change_order_card_report_dir: Path | None = None
     max_model_calls_per_ingest: int = 60
     max_cards_per_document: int = 30
     max_concurrent_ingestions: int = 1
@@ -189,6 +194,10 @@ class Settings:
     trace_retention_days: int = 7
     trace_max_files: int = 50
     trace_hmac_key: str = ""
+    real_change_generation_enabled: bool = False
+    change_draft_database_path: Path | None = None
+    change_generation_max_case_bundles: int = 3
+    change_generation_max_context_cards: int = 24
 
     @property
     def api_configured(self) -> bool:
@@ -259,6 +268,10 @@ class Settings:
                 "document_chunks": self.max_document_chunks,
                 "change_order_chunks": self.max_change_order_chunks,
                 "change_order_chunk_size": self.change_order_chunk_size,
+                "change_order_card_timezone": self.change_order_card_timezone,
+                "change_order_procedure_split_chars": self.change_order_procedure_split_chars,
+                "change_order_semantic_section_threshold": self.change_order_semantic_section_threshold,
+                "change_order_semantic_reuse_threshold": self.change_order_semantic_reuse_threshold,
                 "model_calls_per_ingest": self.max_model_calls_per_ingest,
                 "concurrent_ingestions": self.max_concurrent_ingestions,
             },
@@ -267,6 +280,12 @@ class Settings:
                 "retained": self.change_max_retained_sessions,
                 "active_ttl_seconds": self.change_active_ttl_seconds,
                 "terminal_ttl_seconds": self.change_terminal_ttl_seconds,
+            },
+            "real_change_generation": {
+                "enabled": self.real_change_generation_enabled,
+                "max_case_bundles": self.change_generation_max_case_bundles,
+                "max_context_cards": self.change_generation_max_context_cards,
+                "unauthenticated_pilot": self.demo_mode,
             },
             "long_term_memory": {
                 "enabled": self.mindmemos_enabled,
@@ -509,6 +528,26 @@ class Settings:
             change_order_chunk_size=_read_int(
                 values, "KNOWLEDGE_CHANGE_ORDER_CHUNK_SIZE", 12_000
             ),
+            change_order_card_timezone=_get(
+                values, "CHANGE_ORDER_CARD_TIMEZONE", "Asia/Shanghai"
+            ),
+            change_order_procedure_split_chars=_read_int(
+                values, "CHANGE_ORDER_PROCEDURE_SPLIT_CHARS", 6000
+            ),
+            change_order_semantic_section_threshold=_read_int(
+                values, "CHANGE_ORDER_SEMANTIC_SECTION_THRESHOLD", 5
+            ),
+            change_order_semantic_reuse_threshold=_read_float(
+                values, "CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD", 0.92
+            ),
+            change_order_card_report_dir=_resolve_path(
+                project_root,
+                _get(
+                    values,
+                    "CHANGE_ORDER_CARD_REPORT_DIR",
+                    "artifacts/change_order_card_reports",
+                ),
+            ),
             max_model_calls_per_ingest=_read_int(
                 values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60
             ),
@@ -580,6 +619,19 @@ class Settings:
             trace_retention_days=_read_int(values, "TRACE_RETENTION_DAYS", 7),
             trace_max_files=_read_int(values, "TRACE_MAX_FILES", 50),
             trace_hmac_key=_get(values, "TRACE_HMAC_KEY", ""),
+            real_change_generation_enabled=_read_bool(
+                values, "REAL_CHANGE_GENERATION_ENABLED", False
+            ),
+            change_draft_database_path=_resolve_path(
+                project_root,
+                _get(values, "CHANGE_DRAFT_DB_PATH", "data/change_drafts.db"),
+            ),
+            change_generation_max_case_bundles=_read_int(
+                values, "CHANGE_GENERATION_MAX_CASE_BUNDLES", 3
+            ),
+            change_generation_max_context_cards=_read_int(
+                values, "CHANGE_GENERATION_MAX_CONTEXT_CARDS", 24
+            ),
         )
         if settings.change_max_active_sessions > settings.change_max_retained_sessions:
             raise ConfigurationError(
@@ -589,8 +641,20 @@ class Settings:
             raise ConfigurationError("MINDMEMOS_MIN_LOCAL_ANCHORS 必须大于 0")
         if settings.trace_retention_days <= 0 or settings.trace_max_files <= 0:
             raise ConfigurationError("TRACE_RETENTION_DAYS 和 TRACE_MAX_FILES 必须大于 0")
+        if not 1 <= settings.change_generation_max_case_bundles <= 3:
+            raise ConfigurationError("CHANGE_GENERATION_MAX_CASE_BUNDLES 必须在 1 到 3 之间")
+        if settings.change_generation_max_context_cards <= 0:
+            raise ConfigurationError("CHANGE_GENERATION_MAX_CONTEXT_CARDS 必须大于 0")
+        if not 0 <= settings.change_order_semantic_reuse_threshold <= 1:
+            raise ConfigurationError(
+                "CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD 必须在 0 到 1 之间"
+            )
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
         if settings.runtime_database_path is not None:
             settings.runtime_database_path.parent.mkdir(parents=True, exist_ok=True)
+        if settings.change_draft_database_path is not None:
+            settings.change_draft_database_path.parent.mkdir(parents=True, exist_ok=True)
+        if settings.change_order_card_report_dir is not None:
+            settings.change_order_card_report_dir.mkdir(parents=True, exist_ok=True)
         settings.source_dir.mkdir(parents=True, exist_ok=True)
         return settings

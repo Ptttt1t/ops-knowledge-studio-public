@@ -1,6 +1,7 @@
 const pageTitles = {
   dashboard: "知识能力概览",
   query: "可信变更方案生成",
+  "real-change": "真实 ChangeOrder 草案生成 BETA",
   results: "变更结果与审计",
   ingest: "知识采集与加工",
   review: "知识审核队列",
@@ -28,6 +29,11 @@ let changeExecutionSubmitting = false;
 let changeFailureMode = "";
 let changeCases = [];
 let selectedChangeCaseId = "dc-route-failover";
+let realChangeRecommendations = [];
+let activeRealChangeDraft = null;
+let realChangePollTimer = null;
+let activeRealChangeEvaluation = null;
+let realChangeEvaluationPollTimer = null;
 let knowledgeGraphData = { nodes: [], edges: [], meta: {} };
 let knowledgeGraphSelectedId = "";
 let knowledgeGraphFrame = null;
@@ -977,16 +983,18 @@ window.showDetail = async function showDetail(id) {
     const sourceEvidence = (card.source_items || []).map(item =>
       `${item.output_field}[${item.output_index}] ← ${item.source_pointer} · chars ${item.char_start}-${item.char_end} · sha256 ${String(item.source_hash || "").slice(0, 16)}…`
     );
-    const coverage = card.lineage?.content_coverage_status
-      ? `${card.lineage.content_coverage_status} (${sourceEvidence.length}/${card.lineage.expected_source_items})`
+    const structuralCoverage = card.lineage?.structural_source_coverage_status || card.lineage?.content_coverage_status;
+    const coverage = structuralCoverage
+      ? `${structuralCoverage} (${sourceEvidence.length}/${card.lineage.expected_source_items})`
       : "LEGACY_NOT_EVALUATED";
     document.getElementById("dialog-content").innerHTML = `
       <p class="eyebrow">KNOWLEDGE CARD K${card.id}</p><h2>${escapeHtml(card.title)}</h2>
-      <div class="card-meta"><span class="tag ${card.status}">${statusLabels[card.status]}</span><span class="tag">质量 ${card.quality_score}</span><span class="tag">${escapeHtml(card.comparison_label)}</span></div>
+      <div class="card-meta"><span class="tag ${card.status}">${statusLabels[card.status]}</span><span class="tag">${escapeHtml(card.card_type || "LEGACY")}</span><span class="tag">质量 ${card.content_quality ?? card.quality_score}</span><span class="tag">${escapeHtml(card.dedup_status || card.comparison_label)}</span><span class="tag">${escapeHtml(card.publish_status || "CANDIDATE")}</span></div>
       <dl class="detail-grid">
         ${field("摘要", card.summary)}${field("适用场景", card.scenario)}${field("对象", `${card.object_type} ${card.object_name}`)}
         ${field("适用版本", card.applicable_versions)}${field("前置条件", card.prerequisites)}${field("操作步骤", card.procedure_steps)}
         ${field("风险", card.risks)}${field("回退", card.rollback_steps)}${field("验证", card.validation_steps)}
+        ${field("通用化操作", card.generalized_operation || "")}${field("影响分析", card.impact_analysis || "")}${field("适用阶段", card.applicable_phases || [])}
         ${field("原文证据", card.evidence_quote)}${field("证据位置", card.evidence_locator)}${field("来源", card.source_ref)}
         ${field("逐源覆盖", coverage)}${field("结构证据矩阵", sourceEvidence)}
         ${field("比较判断", `${card.comparison_label} (${card.comparison_confidence})：${card.comparison_reason}`)}
@@ -1017,7 +1025,7 @@ window.reviewCard = async function reviewCard(id, action) {
 
 async function showCaseBundle(caseId) {
   const bundle = await api(`/api/knowledge-case-bundles/${encodeURIComponent(caseId)}`);
-  const coverage = bundle.extraction_report?.content_coverage || {};
+  const coverage = bundle.extraction_report?.structural_source_coverage || bundle.extraction_report?.content_coverage || {};
   const cards = bundle.cards || [];
   document.getElementById("dialog-content").innerHTML = `
     <p class="eyebrow">CHANGE CASE BUNDLE</p><h2>${escapeHtml(bundle.title)}</h2>
@@ -1027,7 +1035,8 @@ async function showCaseBundle(caseId) {
       <dt>来源</dt><dd>${escapeHtml(bundle.source_ref)}</dd>
       <dt>内容哈希</dt><dd>${escapeHtml(bundle.source_checksum)}</dd>
       <dt>原子卡状态</dt><dd>${escapeHtml(Object.entries(bundle.status_counts || {}).map(([key, value]) => `${statusLabels[key] || key} ${value}`).join(" · "))}</dd>
-      <dt>覆盖账本</dt><dd>${escapeHtml(`${coverage.mapped_source_items ?? "-"}/${coverage.expected_source_items ?? "-"} 条源记录`)}</dd>
+      <dt>结构来源覆盖</dt><dd>${escapeHtml(`${coverage.accounted_source_items ?? coverage.mapped_source_items ?? "-"}/${coverage.expected_source_items ?? "-"} 条源记录`)}</dd>
+      <dt>语义内容覆盖</dt><dd>${escapeHtml(bundle.extraction_report?.semantic_content_coverage?.status || "未评估")}</dd>
     </dl>
     <div class="bundle-card-list">${cards.map(card => cardHtml(card)).join("")}</div>`;
   document.getElementById("detail-dialog").showModal();
@@ -1066,6 +1075,222 @@ window.deleteCard = async function deleteCard(id) {
   } catch (error) { toast(error.message, true); }
 };
 
+const realChangeStatusLabels = {
+  GENERATING: "生成中", DRAFT: "草案", BLOCKED: "硬门禁阻断",
+  GENERATION_FAILED: "生成失败", READY_FOR_REVIEW: "待人工审核",
+  REVIEW_APPROVED: "审核通过", REJECTED: "已驳回",
+};
+
+function realChangeLines(id) {
+  return document.getElementById(id).value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+}
+
+function realChangeRequest() {
+  let parameters;
+  try {
+    parameters = JSON.parse(document.getElementById("real-change-parameters").value || "{}");
+  } catch (error) {
+    throw new Error(`已知参数不是合法 JSON：${error.message}`);
+  }
+  if (!parameters || Array.isArray(parameters) || typeof parameters !== "object") {
+    throw new Error("已知参数必须是 JSON 对象");
+  }
+  return {
+    goal: document.getElementById("real-change-goal").value.trim(),
+    scenario: document.getElementById("real-change-scenario").value.trim(),
+    region: document.getElementById("real-change-region").value.trim(),
+    services: realChangeLines("real-change-services"),
+    objects: realChangeLines("real-change-objects"),
+    current_state: document.getElementById("real-change-current-state").value.trim(),
+    target_state: document.getElementById("real-change-target-state").value.trim(),
+    window: {
+      start: document.getElementById("real-change-window-start").value.trim(),
+      end: document.getElementById("real-change-window-end").value.trim(),
+    },
+    impact_scope: document.getElementById("real-change-impact").value.trim(),
+    constraints: realChangeLines("real-change-constraints"),
+    parameters,
+    validation_requirements: realChangeLines("real-change-validations"),
+    requester: document.getElementById("real-change-requester").value.trim() || "shared-operator",
+  };
+}
+
+function renderRealChangeRecommendations(payload) {
+  realChangeRecommendations = payload.candidates || [];
+  const target = document.getElementById("real-change-recommendations");
+  const count = document.getElementById("real-change-recommend-count");
+  count.textContent = `${realChangeRecommendations.length} 个可用案例`;
+  count.className = `tag ${realChangeRecommendations.length ? "APPROVED" : "REJECTED"}`;
+  target.classList.toggle("empty", !realChangeRecommendations.length);
+  target.innerHTML = realChangeRecommendations.length ? realChangeRecommendations.map((item, index) => `
+    <label class="real-change-candidate">
+      <input type="checkbox" value="${escapeHtml(item.case_id)}" ${index === 0 ? "checked" : ""}>
+      <span><strong>${escapeHtml(item.title)}</strong>
+      <small><code>${escapeHtml(item.case_id)}</code> · ${item.card_count} 张卡 · 匹配 ${escapeHtml((item.matched_roles || []).join(" / ") || "案例上下文")}</small>
+      <small>${escapeHtml(item.reason)}</small></span>
+    </label>`).join("") : "没有通过 APPROVED、完整性和 Profile 一致性检查的推荐案例。";
+  document.getElementById("real-change-retrieval-diagnostic").textContent = JSON.stringify({
+    retrieval: payload.retrieval || {},
+    rejected: payload.rejected || [],
+  }, null, 2);
+  document.getElementById("real-change-generate").disabled = !realChangeRecommendations.length;
+}
+
+function selectedRealChangeCases() {
+  return [...document.querySelectorAll("#real-change-recommendations input:checked")].map(item => item.value);
+}
+
+function realChangeValidationRows(validation) {
+  const gates = validation?.gates || {
+    schema_profile_consistent: !validation?.hard_failures?.includes("SCHEMA_PROFILE_OR_ADAPTER_CONFLICT"),
+    required_parameters_complete: !validation?.hard_failures?.includes("REQUIRED_FIELDS_MISSING"),
+    task_views_reconciled: !validation?.hard_failures?.includes("TASK_GROUP_RECONCILIATION_FAILED"),
+    provenance_coverage_complete: !validation?.hard_failures?.includes("PROVENANCE_COVERAGE_INCOMPLETE"),
+  };
+  const labels = {
+    schema_profile_consistent: "Schema / Profile 一致",
+    required_parameters_complete: "必填参数齐全",
+    four_phase_complete: "四阶段安全内容完整",
+    task_views_reconciled: "任务双视图完全对账",
+    provenance_coverage_complete: "引用覆盖率 100%",
+    approved_sources_unchanged: "引用仍为 APPROVED 且未漂移",
+    execution_result_sanitized: "无历史执行结果泄漏",
+    no_unattributed_specific_values: "无无来源具体值",
+  };
+  return Object.entries(gates).map(([key, passed]) => `
+    <div class="validation-row"><span class="${passed ? "PASS" : "FAIL"}">${passed ? "PASS" : "FAIL"}</span>
+    <div><strong>${escapeHtml(labels[key] || key)}</strong><small>${passed ? "已通过确定性校验" : "当前 revision 未满足该硬条件"}</small></div></div>`).join("");
+}
+
+function renderRealChangeDraft(draft) {
+  activeRealChangeDraft = draft;
+  const panel = document.getElementById("real-change-draft-panel");
+  panel.hidden = !draft;
+  if (!draft) return;
+  const revision = draft.revision || {};
+  const validation = revision.validation || {};
+  const provenance = revision.provenance || {};
+  const status = String(draft.status || "");
+  document.getElementById("real-change-current").textContent = `${draft.draft_id} · ${realChangeStatusLabels[status] || status}`;
+  document.getElementById("real-change-draft-id").textContent = draft.draft_id;
+  const statusBadge = document.getElementById("real-change-draft-status");
+  statusBadge.textContent = realChangeStatusLabels[status] || status;
+  statusBadge.className = `tag ${status === "REVIEW_APPROVED" || status === "READY_FOR_REVIEW" ? "APPROVED" : status === "GENERATING" ? "PENDING_REVIEW" : "REJECTED"}`;
+  document.getElementById("real-change-revision").textContent = draft.current_revision ? `R${draft.current_revision}` : "等待模型";
+  document.getElementById("real-change-draft-profile").textContent = draft.profile_id || "—";
+  document.getElementById("real-change-selected-cases").textContent = (draft.selected_case_ids || []).join("、") || "—";
+  document.getElementById("real-change-content-hash").textContent = revision.content_hash ? `${revision.content_hash.slice(0, 16)}…` : "—";
+  const message = document.getElementById("real-change-generation-message");
+  message.classList.toggle("error", ["BLOCKED", "GENERATION_FAILED", "REJECTED"].includes(status));
+  message.textContent = status === "GENERATING"
+    ? "模型正在生成独立规范化草案；协议错误最多修复一次，不会输出规则兜底草案。"
+    : draft.model_error || (validation.passed ? "当前 revision 已通过生成阶段硬校验，等待人工复核。" : "当前 revision 被硬门禁阻断，请检查缺失项或引用。 ");
+  const editor = document.getElementById("real-change-normalized");
+  editor.value = revision.normalized ? JSON.stringify(revision.normalized, null, 2) : "";
+  editor.disabled = !revision.normalized;
+  document.getElementById("real-change-save").disabled = !revision.normalized;
+  const validationBadge = document.getElementById("real-change-validation-badge");
+  validationBadge.textContent = revision.validation ? (validation.passed ? "全部通过" : `${(validation.hard_failures || []).length} 项阻断`) : "等待生成";
+  validationBadge.className = `tag ${validation.passed ? "APPROVED" : revision.validation ? "REJECTED" : ""}`;
+  document.getElementById("real-change-validation").innerHTML = revision.validation
+    ? realChangeValidationRows(validation) : `<p class="muted-copy">等待模型输出和确定性装配。</p>`;
+  document.getElementById("real-change-provenance").innerHTML = revision.provenance ? `
+    <p><strong>${(provenance.items || []).length}</strong> 个输出引用 · <strong>${(provenance.card_snapshots || []).length}</strong> 张卡片快照</p>
+    <p>缺失项：${escapeHtml((validation.missing_fields || []).join("、") || "无")}</p>
+    <p>需求哈希：<code>${escapeHtml(provenance.request_hash || "—")}</code></p>` : "等待生成。";
+  document.getElementById("real-change-json").textContent = revision.change ? JSON.stringify(revision.change, null, 2) : "尚未生成";
+  document.getElementById("real-change-approve").disabled = status !== "READY_FOR_REVIEW";
+  document.getElementById("real-change-reject").disabled = !revision.normalized || ["REVIEW_APPROVED", "REJECTED"].includes(status);
+  document.getElementById("real-change-export").disabled = status !== "REVIEW_APPROVED";
+}
+
+async function loadRealChangeDraft(draftId) {
+  const draft = await api(`/api/change-drafts/${encodeURIComponent(draftId)}`);
+  renderRealChangeDraft(draft);
+  return draft;
+}
+
+function scheduleRealChangePoll(draftId) {
+  clearTimeout(realChangePollTimer);
+  realChangePollTimer = window.setTimeout(async () => {
+    try {
+      const draft = await loadRealChangeDraft(draftId);
+      if (draft.status === "GENERATING") scheduleRealChangePoll(draftId);
+      else toast(draft.status === "GENERATION_FAILED" ? "草案生成失败，已保留错误与检索诊断" : "真实变更草案生成完成", draft.status === "GENERATION_FAILED");
+    } catch (error) { toast(error.message, true); }
+  }, 1200);
+}
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
+function renderRealChangeEvaluation(evaluation) {
+  activeRealChangeEvaluation = evaluation;
+  const status = evaluation?.status || "未启动";
+  const badge = document.getElementById("real-change-evaluation-status");
+  badge.textContent = status;
+  badge.className = `tag ${status === "COMPLETED" ? "APPROVED" : status === "FAILED" ? "REJECTED" : "PENDING_REVIEW"}`;
+  document.getElementById("real-change-evaluation-report").textContent = evaluation
+    ? JSON.stringify(evaluation.report && Object.keys(evaluation.report).length ? evaluation.report : {
+      evaluation_id: evaluation.evaluation_id,
+      held_out_case_id: evaluation.held_out_case_id,
+      status: evaluation.status,
+      error: evaluation.error || undefined,
+    }, null, 2) : "等待启动留一案例评测。";
+  document.getElementById("real-change-evaluation-download").disabled = status !== "COMPLETED";
+}
+
+function scheduleRealChangeEvaluationPoll(evaluationId) {
+  clearTimeout(realChangeEvaluationPollTimer);
+  realChangeEvaluationPollTimer = window.setTimeout(async () => {
+    try {
+      const evaluation = await api(`/api/change-evaluations/${encodeURIComponent(evaluationId)}`);
+      renderRealChangeEvaluation(evaluation);
+      if (["QUEUED", "RUNNING"].includes(evaluation.status)) scheduleRealChangeEvaluationPoll(evaluationId);
+      else toast(evaluation.status === "COMPLETED" ? "留一案例盲测完成" : "留一案例盲测失败", evaluation.status !== "COMPLETED");
+    } catch (error) { toast(error.message, true); }
+  }, 1500);
+}
+
+async function loadRealChangeWorkbench() {
+  const [profileStatus, bundles, drafts, evaluations] = await Promise.all([
+    api("/api/change-schema-profile"),
+    api("/api/knowledge-case-bundles?status=APPROVED&limit=200"),
+    api("/api/change-drafts?limit=1"),
+    api("/api/change-evaluations?limit=1"),
+  ]);
+  const profile = profileStatus.active_profile;
+  const enabled = Boolean(profileStatus.feature_enabled);
+  document.getElementById("real-change-feature").textContent = enabled ? "已启用" : "默认关闭";
+  document.getElementById("real-change-profile").textContent = profile ? `${profile.profile_id} · v${profile.version}` : "未激活";
+  document.getElementById("real-change-profile-case").textContent = profile?.source_case_id || "—";
+  document.getElementById("real-change-warning-text").textContent = profileStatus.warning || "只生成草案；不注册、不调用任何真实执行工具。";
+  const featureBadge = document.getElementById("real-change-feature-badge");
+  featureBadge.textContent = enabled && profile ? "可开始试验" : !enabled ? "REAL_CHANGE_GENERATION_ENABLED=false" : "缺少 Profile";
+  featureBadge.className = `tag ${enabled && profile ? "APPROVED" : "REJECTED"}`;
+  document.getElementById("real-change-recommend").disabled = !(enabled && profile);
+  const eligibleBundles = (bundles.case_bundles || []).filter(item => item.status === "APPROVED" && Number(item.card_count || 0) > 0);
+  const select = document.getElementById("real-change-held-out");
+  select.innerHTML = eligibleBundles.length ? eligibleBundles.map(item =>
+    `<option value="${escapeHtml(item.case_id)}">${escapeHtml(item.title)} · ${escapeHtml(item.case_id)}</option>`
+  ).join("") : `<option value="">没有 APPROVED 案例包</option>`;
+  document.getElementById("real-change-evaluate").disabled = !(enabled && profile && eligibleBundles.length > 1);
+  const latestDraft = (drafts.drafts || [])[0];
+  if (latestDraft?.draft_id) await loadRealChangeDraft(latestDraft.draft_id);
+  const latestEvaluation = (evaluations.evaluations || [])[0];
+  if (latestEvaluation) {
+    renderRealChangeEvaluation(latestEvaluation);
+    if (["QUEUED", "RUNNING"].includes(latestEvaluation.status)) scheduleRealChangeEvaluationPoll(latestEvaluation.evaluation_id);
+  }
+}
+
 document.querySelectorAll(".nav-item").forEach(button => button.addEventListener("click", () => {
   document.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
   document.querySelectorAll(".page").forEach(page => page.classList.remove("active"));
@@ -1074,6 +1299,7 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   document.getElementById(`page-${page}`).classList.add("active");
   document.getElementById("page-title").textContent = pageTitles[page];
   if (["query", "results"].includes(page)) loadLatestChangeSession().catch(error => toast(error.message, true));
+  if (page === "real-change") loadRealChangeWorkbench().catch(error => toast(error.message, true));
   if (page === "graph") loadKnowledgeGraph().catch(error => toast(error.message, true));
 }));
 
@@ -1085,6 +1311,9 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
   }
   if (document.getElementById("page-graph").classList.contains("active")) {
     await loadKnowledgeGraph();
+  }
+  if (document.getElementById("page-real-change").classList.contains("active")) {
+    await loadRealChangeWorkbench();
   }
 });
 document.getElementById("library-search").addEventListener("click", () => loadLibrary().catch(error => toast(error.message, true)));
@@ -1170,6 +1399,134 @@ document.getElementById("change-publish-feedback").addEventListener("click", asy
     } else {
       setBusy(button, false);
     }
+  }
+});
+
+document.getElementById("real-change-request-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const button = document.getElementById("real-change-recommend");
+  setBusy(button, true, "正在检索完整案例包……");
+  try {
+    const result = await api("/api/change-drafts/recommend", {
+      method: "POST",
+      body: JSON.stringify({ request: realChangeRequest() }),
+    });
+    renderRealChangeRecommendations(result);
+    toast(result.candidates?.length ? "案例包推荐完成，请确认参考案例" : "没有满足硬条件的参考案例", !result.candidates?.length);
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+
+document.getElementById("real-change-recommendations").addEventListener("change", event => {
+  if (!event.target.matches('input[type="checkbox"]')) return;
+  const selected = selectedRealChangeCases();
+  if (selected.length > 3) {
+    event.target.checked = false;
+    toast("最多只能确认 3 个完整案例包", true);
+  }
+  document.getElementById("real-change-generate").disabled = selectedRealChangeCases().length < 1;
+});
+
+document.getElementById("real-change-generate").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  const selected = selectedRealChangeCases();
+  if (!selected.length) return toast("请至少确认 1 个推荐案例包", true);
+  setBusy(button, true, "正在创建生成任务……");
+  try {
+    const result = await api("/api/change-drafts", {
+      method: "POST",
+      body: JSON.stringify({
+        request: realChangeRequest(),
+        selected_case_ids: selected,
+        mode: "normal",
+      }),
+    });
+    renderRealChangeDraft(result.draft);
+    toast("真实 ChangeOrder 草案生成任务已启动");
+    scheduleRealChangePoll(result.draft.draft_id);
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+
+document.getElementById("real-change-save").addEventListener("click", async event => {
+  if (!activeRealChangeDraft) return;
+  const button = event.currentTarget;
+  let normalized;
+  try { normalized = JSON.parse(document.getElementById("real-change-normalized").value); }
+  catch (error) { return toast(`草案不是合法 JSON：${error.message}`, true); }
+  setBusy(button, true, "正在创建新 Revision……");
+  try {
+    const draft = await api(`/api/change-drafts/${encodeURIComponent(activeRealChangeDraft.draft_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ normalized }),
+    });
+    renderRealChangeDraft(draft);
+    toast(`已创建 R${draft.current_revision}，旧审批已失效`);
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+
+async function reviewRealChangeDraft(decision, button) {
+  if (!activeRealChangeDraft) return;
+  setBusy(button, true, decision === "APPROVED" ? "正在复核引用……" : "正在驳回……");
+  try {
+    const draft = await api(`/api/change-drafts/${encodeURIComponent(activeRealChangeDraft.draft_id)}/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision,
+        reviewer: document.getElementById("real-change-reviewer").value.trim() || "shared-operator",
+        comment: document.getElementById("real-change-review-comment").value.trim(),
+      }),
+    });
+    renderRealChangeDraft(draft);
+    toast(decision === "APPROVED" ? "当前 Revision 已通过人工审核，可以导出" : "当前 Revision 已驳回");
+  } catch (error) { toast(error.message, true); }
+  finally {
+    setBusy(button, false);
+    if (activeRealChangeDraft) renderRealChangeDraft(activeRealChangeDraft);
+  }
+}
+
+document.getElementById("real-change-approve").addEventListener("click", event => reviewRealChangeDraft("APPROVED", event.currentTarget));
+document.getElementById("real-change-reject").addEventListener("click", event => reviewRealChangeDraft("REJECTED", event.currentTarget));
+document.getElementById("real-change-export").addEventListener("click", async event => {
+  if (!activeRealChangeDraft) return;
+  const button = event.currentTarget;
+  setBusy(button, true, "正在复核并导出……");
+  try {
+    const exported = await api(`/api/change-drafts/${encodeURIComponent(activeRealChangeDraft.draft_id)}/export`);
+    downloadJson("change_order_draft.json", exported.change_order);
+    downloadJson("provenance_report.json", {
+      draft_id: exported.draft_id,
+      revision: exported.revision,
+      provenance: exported.provenance_report,
+      validation: exported.validation_report,
+    });
+    toast("已下载真实草案 JSON 和伴随溯源报告");
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+
+document.getElementById("real-change-evaluate").addEventListener("click", async event => {
+  const heldOutCaseId = document.getElementById("real-change-held-out").value;
+  if (!heldOutCaseId) return toast("请选择隐藏目标案例包", true);
+  const button = event.currentTarget;
+  setBusy(button, true, "正在启动盲测……");
+  try {
+    const result = await api("/api/change-evaluations", {
+      method: "POST",
+      body: JSON.stringify({ held_out_case_id: heldOutCaseId }),
+    });
+    renderRealChangeEvaluation(result.evaluation);
+    scheduleRealChangeEvaluationPoll(result.evaluation.evaluation_id);
+    toast("留一案例盲测已启动，目标内容已隔离");
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+
+document.getElementById("real-change-evaluation-download").addEventListener("click", () => {
+  if (activeRealChangeEvaluation?.status === "COMPLETED") {
+    downloadJson("evaluation_report.json", activeRealChangeEvaluation.report);
   }
 });
 

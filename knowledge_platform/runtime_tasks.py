@@ -73,11 +73,42 @@ def register_knowledge_tasks(runtime: HarnessRuntime, service: KnowledgeService)
         context.save_checkpoint(phase="regraded", processed=result.get("processed", 0))
         return result
 
+    def generate_real_change_draft(context: RunContext) -> dict[str, Any]:
+        draft_id = _text(context.input, "draft_id")
+        actor = _text(context.input, "actor", required=False) or "shared-operator"
+        with context.step("change", "generate_real_change_draft", payload={"draft_id": draft_id}):
+            result = service.change_drafts.generate(draft_id, actor=actor)
+        context.save_checkpoint(
+            phase="real_change_draft_generated",
+            draft_id=draft_id,
+            status=result.get("status"),
+            revision=result.get("current_revision"),
+        )
+        return result
+
+    def evaluate_real_change_draft(context: RunContext) -> dict[str, Any]:
+        evaluation_id = _text(context.input, "evaluation_id")
+        actor = _text(context.input, "actor", required=False) or "shared-operator"
+        with context.step(
+            "evaluation",
+            "leave_one_case_out",
+            payload={"evaluation_id": evaluation_id},
+        ):
+            result = service.change_drafts.run_evaluation(evaluation_id, actor=actor)
+        context.save_checkpoint(
+            phase="real_change_evaluation_completed",
+            evaluation_id=evaluation_id,
+            status=result.get("status"),
+        )
+        return result
+
     runtime.register_task("knowledge.ingest_text", ingest_text)
     runtime.register_task("knowledge.ingest_file", ingest_file)
     runtime.register_task("knowledge.query", query)
     runtime.register_task("knowledge.agent_query", agent_query)
     runtime.register_task("knowledge.regrade", regrade)
+    runtime.register_task("change.generate_real_draft", generate_real_change_draft)
+    runtime.register_task("change.evaluate_leave_one_out", evaluate_real_change_draft)
 
 
 def create_knowledge_runtime(

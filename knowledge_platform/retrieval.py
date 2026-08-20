@@ -148,6 +148,16 @@ class HybridRetriever:
                 ]
         if not cards:
             return []
+        # Review approval and publication eligibility are independent. Semantic
+        # duplicates may be approved as audit records while remaining excluded
+        # from every retrieval/vector-index path.
+        cards = [
+            card
+            for card in cards
+            if str(card.get("publish_status") or "CANDIDATE").upper() != "SKIPPED"
+        ]
+        if not cards:
+            return []
 
         query_tokens = tokenize(query)
         if not query_tokens:

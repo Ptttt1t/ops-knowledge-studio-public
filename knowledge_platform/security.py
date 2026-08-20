@@ -89,6 +89,9 @@ class WebSecurity:
         "/api/query",
         "/api/agent-query",
         "/api/memory/sync",
+        "/api/change-drafts/recommend",
+        "/api/change-drafts",
+        "/api/change-evaluations",
     }
 
     def __init__(self, settings: Settings):

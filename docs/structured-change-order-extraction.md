@@ -1,147 +1,94 @@
-# 结构化变更单知识抽取
+# ChangeOrder 语义知识卡构建
 
-平台对普通文档继续使用通用文本分片；对符合 ChangeOrder 结构的 JSON，则先由确定性 Adapter 完成结构识别、任务对账、步骤编排和覆盖账本，再调用模型抽取知识。模型不负责猜测 Schema，也不能决定跳过哪些源节点。
+平台将 ChangeOrder 的结构识别和知识建模明确分成两层。`change_order_shape_v2` Adapter 只负责确认结构、对账任务双视图，并保存 JSON Pointer、字符范围和 SHA-256；`change_order_semantic_builder_v1` 再从 normalized business objects 构建知识卡。Extraction Unit 是证据运输和处理分块，不再等同于 Knowledge Card。
 
-## 已确认的真实 Key 映射
-
-当前 Adapter 优先使用已经确认的业务路径，不依赖脱敏分析阶段生成的 `Pxxxx`：
-
-| JSON Pointer | 领域角色 | 处理方式 |
-| --- | --- | --- |
-| `/data/action_list` | `TASKS_CANONICAL` | TaskRecord 的唯一知识抽取主视图 |
-| `/data/change_tool_relate_action` | grouped projection | 仅保存分组与来源信息；对账成功后不重复生成知识卡 |
-| `/data/sop_change_step/check_before_change` | `PRECHECK_STEPS` | 变更前检查步骤 |
-| `/data/sop_change_step/change_implement` | `IMPLEMENTATION_STEPS` | 变更实施步骤 |
-| `/data/sop_change_step/change_verified` | `VALIDATION_STEPS` | 变更验证步骤 |
-| `/data/sop_change_step/change_rollback` | `ROLLBACK_STEPS` | 变更回退步骤 |
-| `/data/change_plan/0/result` | `EXECUTION_RESULT` | `post_execution` 执行结果 |
-| `/code`、`/provider_code`、`/msg` | `API_ENVELOPE` | API 包装字段，默认不进入 RAG |
-
-`change_tool_relate_action` 的 group name 和 group count 是动态业务数据。Adapter 要求它至少包含一个数组且至少一个数组非空，但不限制 group 数量上限；所有非空 group 中的记录必须使用一致的 13-field TaskRecord Schema，并与 `action_list` 通过稳定 JSON 序列化和 SHA-256 multiset reconciliation 完整对账。
-
-Procedure 四组元素统一使用 `ProcedureStep`，不为检查、实施、验证和回退各设计一套重复 Schema。若输入没有命中上述真实路径、只能通过结构指纹识别，Adapter 会将候选标记为 `HEURISTIC`，且不会再根据数组位置猜成回滚或验证步骤。
-
-## 领域结构
+## 流水线
 
 ```text
-ChangeOrder
-├── planning_context
-│   ├── identity
-│   ├── service_scope
-│   ├── change_context
-│   ├── risk_impact
-│   ├── execution_context
-│   └── governance_context
-├── tasks
-│   ├── canonical_tasks[]
-│   └── grouped_projection[]
-├── procedure
-│   ├── precheck_steps[]
-│   ├── implementation_steps[]
-│   ├── validation_steps[]
-│   └── rollback_steps[]
-└── post_execution
-    └── execution_result
+ChangeOrder JSON
+  -> ChangeOrder Adapter
+  -> normalized business objects
+  -> ProcedureStep normalization
+  -> semantic unit building
+  -> canonical semantic fingerprint / reuse
+  -> governed Knowledge Card
+  -> card_build_report.json
 ```
 
-上下文字段允许暂时合并成一张 `IDENTITY_METADATA_CONTEXT` 卡片，但 lineage 会保存已识别的分类，为后续拆分预留稳定接口：
+Adapter 继续执行以下硬约束：
 
-- `IDENTITY`：ticket_id、title、original_system、create_time；
-- `SERVICE_SCOPE`：cloud_service、service、micro_service、affected_service；
-- `CHANGE_CONTEXT`：change_scene、change_notes、special_change_type、change guide；
-- `RISK_IMPACT`：severity、change_level、customer_sensed、affected_customer、risk_level、impact_risk_level；
-- `EXECUTION_CONTEXT`：region、时间窗口、执行人、配合人和审核人；
-- `GOVERNANCE_CONTEXT`：审批、高风险检查、授权和通知。
+- `/data/action_list` 与 `/data/change_tool_relate_action` 使用一致的 13-field TaskRecord Schema，并通过 stable JSON + SHA-256 multiset reconciliation 完整对账；group name 和 group count 是动态数据，不限制上限。
+- `/data/sop_change_step` 包含四组 20-field ProcedureStep；每个源 ProcedureStep 都保持独立 Extraction Unit，不能因 chunk 大小与相邻步骤合并。
+- `/data/change_plan/0/result` 是 15-field ExecutionResult，生命周期为 `post_execution`。
+- API envelope 不进入知识正文或 RAG。
 
-## 抽取流程
+## Card Model
+
+### CASE_CONTEXT
+
+每个 ChangeOrder 最多一张。所有上下文 Extraction Unit 按业务字段合并到：`identity`、`service_scope`、`change_context`、`region`、`risk_impact`、`grayscale_policy`、`rollback_requirement`、`schedule`、`governance`、`tools` 和 `actions`。
+
+无法表达业务含义的结构元数据记录为 `STRUCTURAL_METADATA_ONLY`，不会生成“IDENTITY_METADATA_CONTEXT 结构化知识”一类卡片。`action_list` 只进入 `CASE_CONTEXT.actions`，默认不生成 Procedure Card。
+
+### PROCEDURE_STEP
+
+默认一条源 ProcedureStep 对应一个 canonical procedure unit。字段映射固定为：
+
+| Source field | Semantic field |
+| --- | --- |
+| `check_name` | `title` |
+| `operate_description` | `operation` |
+| `operate_verified` | `validation` |
+| `operate_rollback` | `rollback` |
+| `impact_analysis` | `impact_analysis` |
+| `action_risk_level` | `risk_level` |
+| `operate_commond` | `operate_command` |
+| `command_list` | `command_list` |
+
+`impact_analysis` 不会被自动改名为“风险”。模型区分 `risk_level`、`impact_analysis`、`risk_control` 和 `inferred_risk`；当前确定性 Builder 不制造推断，因此 `inferred_facts` 默认为空。历史实例参数保存在 `instance_parameters`，正文优先使用占位后的 `generalized_operation`。
+
+只有单个步骤清洗后超过 `CHANGE_ORDER_PROCEDURE_SPLIT_CHARS`，或识别到不少于 `CHANGE_ORDER_SEMANTIC_SECTION_THRESHOLD` 个一级章节时，才允许建立 Parent + semantic child sections。拆分依据标题结构，不按固定字符数切断业务步骤；所有 child 保持相同 `source_pointer` 和 parent source identity。
+
+### EXECUTION_OUTCOME
+
+ExecutionResult 单独生成 `EXECUTION_OUTCOME`，并固定 `planning_rag_enabled=false`。它可以用于历史结果检索、失败分析、质量评价和经验反馈，但不会进入新方案生成上下文。
+
+## Rich text 与确定性字段
+
+`normalize_rich_text()` 清理 `p/br/span/strong/a/img`、HTML entity、`&nbsp;` 和 JSON escape。链接 URL 不进入正文；图片转为 attachment/evidence metadata，正文只保留 `[图片证据]`。
+
+timestamp、duration、boolean、number 等值由 Python 规范化。时间戳输出同时保留 `raw`、`normalized`、`timezone` 和 `iso8601`；默认 `CHANGE_ORDER_CARD_TIMEZONE=Asia/Shanghai`。例如 `1785772800000` 明确转换为 `2026-08-04 00:00:00`（Asia/Shanghai），不交给 LLM 换算。
+
+## Semantic reuse
+
+`source_identity` 由来源 Pointer、阶段、步骤索引和源哈希组成；`semantic_fingerprint` 只使用规范化知识内容，不包含 phase 或历史实例身份。相同 fingerprint 或达到 `CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD` 的高度一致步骤只保留一份 canonical knowledge，并合并 `applicable_phases`、`source_identities`、`source_evidence_refs` 和 `REUSES` 诊断记录。
+
+跨文档完全重复的卡仍可作为审核记录持久化，但状态为 `dedup_status=DUPLICATE`、`publish_status=SKIPPED`，本地检索和 MindMemOS 同步都会排除它。
+
+## 独立治理状态与 QA
+
+新卡同时保存：
+
+- `review_status`：人工审核生命周期，与兼容字段 `status` 同步；
+- `dedup_status`：`NEW / REUSED / DUPLICATE`；
+- `content_quality`：确定性正文质量分；
+- `publish_status`：`CANDIDATE / SKIPPED`；
+- `planning_rag_enabled`：是否允许进入方案生成上下文。
+
+每张卡执行 `has_raw_json`、`has_html_residue`、`has_empty_required_section`、`title_content_consistent`、`source_step_count`、`semantic_unit_count`、`source_fact_count` 和 `inferred_fact_count` QA。正文出现 raw JSON 或 HTML residue 时 `content_quality` 不可能为 100，且审批门禁会拒绝。证据矩阵仍在审批时重新读取来源文档，复算 Pointer/span/SHA-256；语义建模没有削弱原有证据门禁。
+
+## Coverage 与诊断
+
+`structural_source_coverage` 只说明每条 Adapter 来源证据已分配到卡或有明确 `skip_reason`。`semantic_content_coverage` 单独说明源 ProcedureStep 是否已被有效表达或复用。结构归属不再被描述成知识表达完成。
+
+每次结构化 ChangeOrder 构建完成后，系统写入：
 
 ```text
-JSON 原文
-  -> 精确 Key 映射 / 结构指纹识别
-  -> TaskRecord 双视图逐项对账
-  -> 按完整对象边界生成抽取单元
-  -> Adapter 确定性生成任务/步骤列表与逐源证据
-  -> DeepSeek 生成标题、摘要、场景和风险叙述
-  -> 多卡响应稳定合并，不静默截断
-  -> Pointer/span/hash 证据矩阵与 lineage 保存
-  -> 结构、内容覆盖与语义映射状态检查
-  -> 人工审核
+<CHANGE_ORDER_CARD_REPORT_DIR>/<source-sha256>/card_build_report.json
 ```
 
-## ChangeCaseBundle 案例包
+默认目录为 `artifacts/change_order_card_reports`。报告包含卡数量、Procedure 来源步骤数、语义单元数、reuse 数、双 Coverage、逐卡 QA 和所有跳过原因。合成示例见 [`card_build_report.example.json`](card_build_report.example.json)。
 
-命中 `change_order_shape_v2` 后，平台不再只给每张卡写一个逻辑 `case_id`，而是持久化一级 `ChangeCaseBundle`：
+## 数据边界
 
-- 一个来源文档和内容校验和对应一个 `change-order:<sha256>` 案例包；
-- 包保存来源、抽取策略、更新时间和完整 extraction report；
-- 子卡继续保持原子化，通过 lineage 保存 `unit_role`、`source_order`、JSON Pointer 和证据矩阵；
-- 包状态由子卡实时聚合，可能为 `PENDING_REVIEW`、`PARTIAL`、`APPROVED`、`REJECTED` 或 `SUPERSEDED`；
-- 旧数据库若已有 `change_order_shape_v2` lineage，初始化时会自动回填案例包，不改变原卡 ID 和审核状态。
-
-Web 页面默认按案例包聚合显示结构化变更单。整包批准会先在同一 SQLite 事务中验证全部子卡，只有所有证据、覆盖、语义映射和来源哈希均通过后才统一更新状态；整包驳回同样统一提交。单卡审核接口继续保留，普通文档行为不变。对应只读接口为 `GET /api/knowledge-case-bundles` 和 `GET /api/knowledge-case-bundles/{case_id}`，整包审核为 `POST /api/knowledge-case-bundles/{case_id}/review`。
-
-- TaskRecord 对账完全一致时，`action_list` 是唯一抽取源；分组视图只计入已对账的 provenance。
-- 数量相等但内容未能逐项对齐时，两份视图都会保留，相关卡片停留在 `DRAFT`。
-- ProcedureStep 始终保持源数组顺序，不依赖自动猜测的 sequence 字段重排。
-- 单个 ProcedureStep 不会被从对象内部硬截断；超长组以完整 step 为最小单位分卡。
-- 每张 Procedure 卡保存 `procedure_group`、`step_start_index`、`step_end_index`、`total_steps_in_group`，便于 RAG 按源顺序恢复完整流程。
-- `TASKS_CANONICAL` 和四类 Procedure 的权威列表由 Adapter 逐条渲染，不允许模型删减、合并或重排；模型返回多张卡时只合并表达字段，同一结构单元最终仍保存一张卡。
-- 每个输出项保存 `source_pointer`、绝对字符范围和源片段 SHA-256。审批时会重新读取原文复算哈希，并校验输出序号与来源记录一一对应。
-- 质量规则按权威 `unit_role` 执行：前检卡不再因缺少回退字段而扣分，验证卡只强制验证内容，回退卡只强制回退内容。普通文档继续使用原有 `knowledge_type` 规则。
-- `EXECUTION_RESULT` 属于 `post_execution`：历史已完成工单可以参与经验检索和失败分析，但生成新方案时会被排除，避免结果泄漏。
-
-## 完整性与语义状态
-
-上传完成后的返回值包含类似报告：
-
-```json
-{
-  "extraction_strategy": "change_order_shape_v2",
-  "extraction_report": {
-    "case_id": "change-order:<source-sha256>",
-    "content_coverage": {
-      "status": "COMPLETE",
-      "expected_units": 7,
-      "generated_cards": 7,
-      "expected_source_items": 27,
-      "mapped_source_items": 27
-    },
-    "change_order": {
-      "semantic_mapping_status": "CONFIRMED",
-      "safe_for_internal_index": true,
-      "safe_for_external_publish": false,
-      "publish_scope": "INTERNAL_ONLY",
-      "task_record": {},
-      "procedure": {},
-      "post_execution": {},
-      "coverage": {
-        "structural_coverage_ratio": 1.0,
-        "structural_node_coverage_ratio": 1.0
-      }
-    }
-  }
-}
-```
-
-`structural_coverage_ratio=1` 只表示所有结构节点都已进入抽取单元、API envelope 或重复投影对账范围，不代表业务语义 100% 正确。语义映射另行标记：
-
-- `CONFIRMED`：真实 Key 与领域角色已经确认；
-- `HEURISTIC`：只通过结构指纹推断；
-- `UNKNOWN`：当前信息不足，不能赋予具体业务角色；
-- `CONFLICT`：结构、数量或映射相互冲突，阻断内部入库。
-
-覆盖账本还统计进入抽取单元、已对账重复投影、API envelope、未覆盖路径、`NULL/EMPTY/VALUE` 观测，以及 TaskRecord 匹配和四组 Procedure 步骤数量。
-
-`content_coverage.status=COMPLETE` 才表示每个抽取单元都已落卡、每个 canonical TaskRecord/ProcedureStep 都建立了逐源映射。它仍不等于业务判断自动正确，但可以证明没有在抽取链路中静默丢记录。新版结构化卡的审批同时要求：内容覆盖完整、证据模式为 `STRUCTURED_JSON_POINTERS`、Pointer/span/hash 可复算且结构 blocker 为空。旧卡保留原审核规则并标记为未执行新版覆盖评估，避免兼容迁移伪造完整状态。
-
-## 内部入库与外部发布是两道门
-
-`safe_for_internal_index` 决定候选卡是否能继续走内部“抽取—审核—入库—检索—生成”流程。TaskRecord 对账冲突、关键结构缺失或存在未覆盖业务节点时，该值为 `false`，候选卡保持 `DRAFT`。
-
-`safe_for_external_publish=false` 和 `publish_scope=INTERNAL_ONLY` 只是数据边界提示，不阻断内部 Demo。当前版本不会因为禁止外发而停止知识抽取、人工审核或本地可信检索。
-
-## 数据边界与生产化
-
-真实工单只能在公司批准的模型端点和部署环境内处理。JSON Pointer、字段名、步骤原文与 ExecutionResult 都可能含内部信息；若要将 extraction report 带出内网，必须先按公司规则脱敏。
-
-进入生产前仍建议补充版本化 Schema、稳定任务 ID、关键字段清单、跨样本 `MISSING/null/empty/value` 基线和 Schema 漂移策略。任何结构报告都不是知识正确性的自动证明，最终候选仍需人工审核。
+仓库测试只使用虚构 service、region、cluster、workload、工单号和人员。真实 ChangeOrder、模型 Prompt、生成卡和报告只能留在批准的内网环境。本实现不包含任何针对特定 ticket、卡片 ID、地区、业务名称或固定步骤数量的分支。

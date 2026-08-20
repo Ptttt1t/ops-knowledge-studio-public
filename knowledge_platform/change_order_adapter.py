@@ -614,6 +614,16 @@ class _UnitBuilder:
         }
         batch: list[tuple[int, JsonSpanNode]] = []
         for source_index, node in enumerate(nodes):
+            if preserve_node_boundaries:
+                if batch:
+                    self._flush(batch, role, pointer, semantic_hint, metadata)
+                    batch = []
+                # ProcedureStep identity is a business boundary. Chunk size may
+                # never merge adjacent source steps into one extraction unit.
+                self._flush(
+                    [(source_index, node)], role, pointer, semantic_hint, metadata
+                )
+                continue
             if batch and node.end - batch[0][1].member_start > self.chunk_size:
                 self._flush(batch, role, pointer, semantic_hint, metadata)
                 batch = []
@@ -621,14 +631,9 @@ class _UnitBuilder:
                 if batch:
                     self._flush(batch, role, pointer, semantic_hint, metadata)
                     batch = []
-                if preserve_node_boundaries:
-                    self._flush(
-                        [(source_index, node)], role, pointer, semantic_hint, metadata
-                    )
-                else:
-                    self._add_large_node(
-                        source_index, node, role, pointer, semantic_hint, metadata
-                    )
+                self._add_large_node(
+                    source_index, node, role, pointer, semantic_hint, metadata
+                )
             else:
                 batch.append((source_index, node))
         if batch:

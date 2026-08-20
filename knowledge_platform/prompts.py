@@ -36,45 +36,6 @@ JSON 格式：
 没有可复用知识时返回 {"knowledge_cards": []}。"""
 
 
-CHANGE_ORDER_EXTRACTION_SYSTEM_PROMPT = """你是运维变更知识工程师。输入是程序从同一份 JSON 变更单中按结构边界切出的一个连续原文单元。
-你必须只输出合法 JSON 对象，禁止输出 Markdown，也不能补充来源中没有的事实。
-
-抽取原则：
-1. 每个结构单元最多输出 1 张知识卡片；不要为每条 TaskRecord、每个 ProcedureStep 或每个字段分别建卡。
-2. 程序会根据 JSON Pointer 确定性保存全部 TaskRecord/ProcedureStep 及其顺序，模型不得决定删减、合并或重排源记录；模型主要负责标题、摘要、场景、对象、风险叙述和检索关键词。
-3. role=TASKS_CANONICAL 是 /data/action_list 任务主视图；分组副本只保存 grouping/provenance，不重复抽取。
-4. PRECHECK_STEPS 与 IMPLEMENTATION_STEPS 的明确步骤按顺序写入 procedure_steps；VALIDATION_STEPS 写入 validation_steps；ROLLBACK_STEPS 写入 rollback_steps。
-5. UNMAPPED_PROCEDURE_STEPS 表示只通过结构识别、真实 Key 未确认的步骤组，不得推断它属于前检、实施、验证或回退。
-6. EXECUTION_RESULT 属于 post_execution，是实际执行结果而不是方案生成输入；优先抽取为 case 或效果事实，不能把结果反写成计划。
-7. 缺失、null、空字符串、空数组和有值必须区别理解；没有明确内容时保持空字段，不能猜测。
-8. 结构化证据由程序根据 JSON Pointer、字符范围和内容哈希生成；evidence_quote 可以留空，不要自行拼接或改写来源作为证据。
-9. IDENTITY、SERVICE_SCOPE、CHANGE_CONTEXT、RISK_IMPACT、EXECUTION_CONTEXT、GOVERNANCE_CONTEXT 可以为整单提供上下文，但不要逐字段建卡。
-10. API_ENVELOPE（code/provider_code/msg）不属于业务知识，不会进入本提示。纯标识、状态码堆积或无可复用含义的元数据可以不生成卡片。
-
-JSON 格式：
-{
-  "knowledge_cards": [
-    {
-      "title": "简明标题",
-      "summary": "事实摘要",
-      "knowledge_type": "procedure|constraint|risk|case|compatibility|rollback",
-      "scenario": "适用场景",
-      "object_type": "网元/设备/软件/流程等",
-      "object_name": "具体对象",
-      "applicable_versions": ["版本或适用范围"],
-      "prerequisites": ["前置条件"],
-      "procedure_steps": ["按源顺序排列的操作步骤"],
-      "risks": ["风险和影响"],
-      "rollback_steps": ["按源顺序排列的回退步骤"],
-      "validation_steps": ["按源顺序排列的验证方法"],
-      "keywords": ["检索关键词"],
-      "evidence_quote": "来源中的连续原文"
-    }
-  ]
-}
-没有足够的可复用知识时返回 {"knowledge_cards": []}。"""
-
-
 COMPARISON_SYSTEM_PROMPT = """你是知识治理审核助手。比较一张新知识卡片与候选知识，只能输出合法 JSON 对象。
 decision 只能是 NEW、DUPLICATE、CONFLICT、NEW_VERSION：
 - NEW：没有实质相同或矛盾知识；
@@ -119,17 +80,6 @@ def extraction_user_prompt(source_name: str, locator: str, content: str) -> str:
     return (
         f"来源名称：{source_name}\n来源位置：{locator}\n"
         "请将下列内容抽取为上述 JSON 知识卡片：\n\n"
-        f"{content}"
-    )
-
-
-def change_order_extraction_user_prompt(
-    source_name: str, locator: str, structural_context: str, content: str
-) -> str:
-    return (
-        f"来源名称：{source_name}\n来源位置：{locator}\n{structural_context}\n"
-        "以下内容是来源 JSON 的连续原文，不是完整工单。请按结构角色抽取，"
-        "不得补全本单元之外的信息：\n\n"
         f"{content}"
     )
 
