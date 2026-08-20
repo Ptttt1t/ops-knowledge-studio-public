@@ -59,6 +59,18 @@ def base_step(**overrides: object) -> dict[str, object]:
     return step
 
 
+def empty_step() -> dict[str, object]:
+    return base_step(
+        check_name="",
+        operate_description="",
+        operate_verified="",
+        operate_rollback="",
+        impact_analysis="",
+        operate_commond="",
+        command_list=[],
+    )
+
+
 def make_payload(
     *,
     context: dict[str, object] | None = None,
@@ -105,11 +117,16 @@ def make_payload(
     }
 
 
-def build(payload: dict[str, object]):
+def build(
+    payload: dict[str, object],
+    config: ChangeOrderCardBuilderConfig | None = None,
+):
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     plan, report = build_change_order_extraction_plan(text, chunk_size=12_000)
     assert plan is not None, report
-    return ChangeOrderCardBuilder().build(text, plan, source_name="synthetic.json")
+    return ChangeOrderCardBuilder(config).build(
+        text, plan, source_name="synthetic.json"
+    )
 
 
 class ChangeOrderCardBuilderTests(unittest.TestCase):
@@ -129,7 +146,7 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
         )
         payload = card.semantic_payload
         body = card.body_text()
-        self.assertEqual(payload["title"], "单步骤容量检查")
+        self.assertEqual(payload["title"], "前检：单步骤容量检查")
         self.assertIn("不涉及业务中断", payload["operation"])
         self.assertEqual(payload["validation"], "确认配置读取成功，无影响。")
         self.assertEqual(payload["rollback"], "不涉及")
@@ -159,7 +176,7 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
         self.assertEqual(len(prechecks), 2)
         self.assertEqual([card.procedure_step_index for card in prechecks], [0, 1])
 
-    def test_case_c_long_step_splits_by_semantic_sections_not_chars(self):
+    def test_case_c_sections_are_parsed_but_retained_in_parent(self):
         groups = {
             "check_before_change": [base_step(**FIXTURE["case_c"])],
             "change_implement": [base_step(check_name="实施虚构变更")],
@@ -174,22 +191,17 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
             if card.card_type is CardType.PROCEDURE_STEP
             and card.source_identities[0]["source_pointer"] == source_pointer
         ]
-        self.assertEqual(len(related), 9)
+        self.assertEqual(len(related), 1)
         children = [
             card
             for card in related
             if "semantic_section" in card.semantic_payload
         ]
-        self.assertEqual(len(children), 8)
-        backup = next(card for card in children if "备份检查" in card.title)
-        self.assertIn("方式一", backup.semantic_payload["operation"])
-        self.assertIn("方式二", backup.semantic_payload["operation"])
-        self.assertTrue(
-            all(
-                card.source_identities[0]["source_pointer"] == source_pointer
-                for card in children
-            )
-        )
+        self.assertEqual(len(children), 0)
+        sections = related[0].semantic_payload["operation_sections"]
+        self.assertEqual(len(sections), 8)
+        self.assertIn("方式一", sections[-1]["section_body"])
+        self.assertIn("方式二", sections[-1]["section_body"])
 
     def test_case_d_cross_phase_semantic_reuse(self):
         groups = {
@@ -264,6 +276,159 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
         self.assertEqual(normalized["normalized"], FIXTURE["case_h"]["expected"])
         self.assertEqual(normalized["timezone"], "Asia/Shanghai")
 
+    def test_case_i_five_item_checklist_stays_one_indexed_parent(self):
+        groups = {
+            "check_before_change": [base_step(**FIXTURE["case_i"])],
+            "change_implement": [empty_step()],
+            "change_verified": [empty_step()],
+            "change_rollback": [empty_step()],
+        }
+        result = build(make_payload(groups=groups))
+        procedures = [
+            card for card in result.cards if card.card_type is CardType.PROCEDURE_STEP
+        ]
+        self.assertEqual(len(procedures), 1)
+        self.assertEqual(len(procedures[0].semantic_payload["operation_sections"]), 5)
+        self.assertTrue(procedures[0].retrieval_enabled)
+        self.assertEqual(procedures[0].publish_status, "INDEXED")
+        self.assertEqual(result.report["procedure_parent_count"], 1)
+        self.assertEqual(result.report["procedure_child_count"], 0)
+        self.assertEqual(result.report["indexed_procedure_count"], 1)
+        self.assertEqual(result.report["noop_section_count"], 3)
+
+    def test_case_j_analysis_template_with_noops_does_not_split(self):
+        groups = {
+            "check_before_change": [base_step(**FIXTURE["case_j"])],
+            "change_implement": [empty_step()],
+            "change_verified": [empty_step()],
+            "change_rollback": [empty_step()],
+        }
+        result = build(make_payload(groups=groups))
+        procedure = next(
+            card for card in result.cards if card.card_type is CardType.PROCEDURE_STEP
+        )
+        self.assertEqual(len(procedure.semantic_payload["operation_sections"]), 9)
+        self.assertFalse(procedure.parent_unit_id)
+        self.assertEqual(result.report["procedure_child_count"], 0)
+        self.assertGreaterEqual(result.report["noop_section_count"], 7)
+
+    def test_case_k_nested_numbering_is_retained_as_subitems(self):
+        groups = {
+            "check_before_change": [base_step(**FIXTURE["case_k"])],
+            "change_implement": [empty_step()],
+            "change_verified": [empty_step()],
+            "change_rollback": [empty_step()],
+        }
+        result = build(make_payload(groups=groups))
+        procedure = next(
+            card for card in result.cards if card.card_type is CardType.PROCEDURE_STEP
+        )
+        sections = procedure.semantic_payload["operation_sections"]
+        self.assertEqual(len(sections), 2)
+        backup = next(section for section in sections if section["section_title"] == "Backup")
+        self.assertEqual([item["title"] for item in backup["subitems"]], ["Backup rule A", "Backup rule B"])
+        self.assertEqual(result.report["procedure_child_count"], 0)
+        self.assertEqual(
+            sum(
+                item["skip_reason"] == "NESTED_SECTION_RETAINED_AS_SUBITEM"
+                for item in result.report["skipped_sections"]
+            ),
+            2,
+        )
+
+    def test_case_l_genuinely_long_step_indexes_children_only(self):
+        source = FIXTURE["case_l"]
+        operation = "\n".join(
+            f"{index}. {title}\n{source['body_seed'] * 8}"
+            for index, title in enumerate(source["section_titles"], start=1)
+        )
+        groups = {
+            "check_before_change": [
+                base_step(
+                    check_name=source["check_name"],
+                    operate_description=operation,
+                )
+            ],
+            "change_implement": [empty_step()],
+            "change_verified": [empty_step()],
+            "change_rollback": [empty_step()],
+        }
+        result = build(
+            make_payload(groups=groups),
+            ChangeOrderCardBuilderConfig(
+                long_step_chars=1000,
+                semantic_section_threshold=3,
+                child_min_content_chars=200,
+            ),
+        )
+        procedures = [
+            card for card in result.cards if card.card_type is CardType.PROCEDURE_STEP
+        ]
+        parent = next(card for card in procedures if not card.parent_unit_id)
+        children = [card for card in procedures if card.parent_unit_id]
+        self.assertEqual(parent.publish_status, "CONTAINER")
+        self.assertFalse(parent.retrieval_enabled)
+        self.assertEqual(len(children), 3)
+        self.assertTrue(all(card.publish_status == "INDEXED" for card in children))
+        self.assertTrue(all(card.retrieval_enabled for card in children))
+        self.assertEqual(
+            {
+                card.semantic_payload["source_procedure_pointer"]
+                for card in [parent, *children]
+            },
+            {"/data/sop_change_step/check_before_change/0"},
+        )
+        self.assertEqual(result.report["container_procedure_count"], 1)
+        self.assertEqual(result.report["indexed_procedure_count"], 3)
+        self.assertEqual(result.report["parent_child_retrieval_collision_count"], 0)
+
+    def test_case_m_phase_aware_titles_distinguish_restore(self):
+        groups = {
+            "check_before_change": [empty_step()],
+            "change_implement": [base_step(**FIXTURE["case_m"]["implementation"])],
+            "change_verified": [empty_step()],
+            "change_rollback": [base_step(**FIXTURE["case_m"]["rollback"])],
+        }
+        result = build(make_payload(groups=groups))
+        titles = {
+            card.procedure_group: card.title
+            for card in result.cards
+            if card.card_type is CardType.PROCEDURE_STEP
+        }
+        self.assertEqual(titles["IMPLEMENTATION"], "实施：修改系统参数")
+        self.assertEqual(titles["ROLLBACK"], "回退：恢复系统参数原值")
+        self.assertEqual(result.report["title_collision_count"], 0)
+
+    def test_case_n_high_confidence_relationships_are_deterministic(self):
+        groups = {
+            "check_before_change": [empty_step()],
+            "change_implement": [
+                base_step(
+                    check_name="Set synthetic parameter",
+                    operate_description=FIXTURE["case_n"]["implementation"],
+                )
+            ],
+            "change_verified": [
+                base_step(
+                    check_name="Verify synthetic parameter",
+                    operate_description=FIXTURE["case_n"]["validation"],
+                )
+            ],
+            "change_rollback": [
+                base_step(
+                    check_name="Restore synthetic parameter",
+                    operate_description=FIXTURE["case_n"]["rollback"],
+                )
+            ],
+        }
+        result = build(make_payload(groups=groups))
+        self.assertEqual(result.report["relationship_count"]["validates"], 1)
+        self.assertEqual(result.report["relationship_count"]["rollback_of"], 1)
+        self.assertEqual(
+            {item["relation_type"] for item in result.relationships},
+            {"VALIDATES", "ROLLBACK_OF"},
+        )
+
     def test_service_persists_semantic_model_and_card_build_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -290,7 +455,7 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
             self.assertEqual(report["semantic_content_coverage"]["status"], "COMPLETE")
             self.assertTrue(all(item["card_id"] for item in report["cards"]))
             cards = [service.card_detail(card_id) for card_id in result["card_ids"]]
-            self.assertTrue(all(card["card_model_version"] == "change_order_card_model_v1" for card in cards))
+            self.assertTrue(all(card["card_model_version"] == "change_order_card_model_v2" for card in cards))
             self.assertTrue(all(card["review_status"] == card["status"] for card in cards))
             self.assertTrue(all("{" not in card["evidence_quote"] for card in cards))
             self.assertTrue(all("/data/" not in card["evidence_quote"] for card in cards))
@@ -337,6 +502,10 @@ class ChangeOrderCardBuilderTests(unittest.TestCase):
             )
             self.assertTrue(
                 all(card["publish_status"] == "SKIPPED" for card in duplicates)
+            )
+            self.assertEqual(
+                second["card_build_report"]["indexed_procedure_count"],
+                0,
             )
             hits = service.retriever.search(
                 "demo-api 虚构容量参数",

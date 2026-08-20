@@ -155,6 +155,7 @@ class HybridRetriever:
             card
             for card in cards
             if str(card.get("publish_status") or "CANDIDATE").upper() != "SKIPPED"
+            and card.get("retrieval_enabled") is not False
         ]
         if not cards:
             return []

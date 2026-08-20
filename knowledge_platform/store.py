@@ -82,6 +82,7 @@ class KnowledgeStore:
             dedup_status TEXT NOT NULL DEFAULT 'NEW',
             content_quality REAL NOT NULL DEFAULT 0,
             publish_status TEXT NOT NULL DEFAULT 'CANDIDATE',
+            retrieval_enabled INTEGER NOT NULL DEFAULT 1,
             planning_rag_enabled INTEGER NOT NULL DEFAULT 1,
             semantic_fingerprint TEXT NOT NULL DEFAULT '',
             semantic_payload TEXT NOT NULL DEFAULT '{}',
@@ -155,6 +156,9 @@ class KnowledgeStore:
             document_id INTEGER NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
             title TEXT NOT NULL,
             extraction_strategy TEXT NOT NULL,
+            build_generation INTEGER NOT NULL DEFAULT 1,
+            builder_version TEXT NOT NULL DEFAULT '',
+            card_model_version TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -224,6 +228,7 @@ class KnowledgeStore:
             backend TEXT NOT NULL,
             memory_id TEXT NOT NULL,
             card_id INTEGER NOT NULL,
+            case_id TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL,
             attempts INTEGER NOT NULL DEFAULT 0,
             last_error TEXT NOT NULL DEFAULT '',
@@ -253,6 +258,17 @@ class KnowledgeStore:
                     connection.execute(
                         f"ALTER TABLE memory_sync_state ADD COLUMN {column} {declaration}"
                     )
+            retirement_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(memory_retirements)"
+                ).fetchall()
+            }
+            if "case_id" not in retirement_columns:
+                connection.execute(
+                    "ALTER TABLE memory_retirements "
+                    "ADD COLUMN case_id TEXT NOT NULL DEFAULT ''"
+                )
             lineage_columns = {
                 str(row["name"])
                 for row in connection.execute(
@@ -275,6 +291,7 @@ class KnowledgeStore:
                 ("dedup_status", "TEXT NOT NULL DEFAULT 'NEW'"),
                 ("content_quality", "REAL NOT NULL DEFAULT 0"),
                 ("publish_status", "TEXT NOT NULL DEFAULT 'CANDIDATE'"),
+                ("retrieval_enabled", "INTEGER NOT NULL DEFAULT 1"),
                 ("planning_rag_enabled", "INTEGER NOT NULL DEFAULT 1"),
                 ("semantic_fingerprint", "TEXT NOT NULL DEFAULT ''"),
                 ("semantic_payload", "TEXT NOT NULL DEFAULT '{}'"),
@@ -292,13 +309,33 @@ class KnowledgeStore:
                 "WHERE card_model_version = 'legacy_v1'"
             )
             connection.execute(
+                "UPDATE cards SET retrieval_enabled = 0 "
+                "WHERE publish_status IN ('SKIPPED', 'CONTAINER')"
+            )
+            connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cards_semantic_fingerprint "
                 "ON cards(semantic_fingerprint)"
             )
+            connection.execute("DROP INDEX IF EXISTS idx_cards_publish_status")
             connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_cards_publish_status "
-                "ON cards(publish_status, planning_rag_enabled)"
+                "CREATE INDEX idx_cards_publish_status "
+                "ON cards(publish_status, retrieval_enabled, planning_rag_enabled)"
             )
+            bundle_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(change_case_bundles)"
+                ).fetchall()
+            }
+            for column, declaration in (
+                ("build_generation", "INTEGER NOT NULL DEFAULT 1"),
+                ("builder_version", "TEXT NOT NULL DEFAULT ''"),
+                ("card_model_version", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in bundle_columns:
+                    connection.execute(
+                        f"ALTER TABLE change_case_bundles ADD COLUMN {column} {declaration}"
+                    )
             # Databases created before case bundles existed already carry the
             # authoritative case_id in card_lineage. Promote those structured
             # change orders to first-class bundles without changing card IDs.
@@ -393,6 +430,8 @@ class KnowledgeStore:
         document_id: int,
         title: str,
         extraction_strategy: str,
+        builder_version: str = "",
+        card_model_version: str = "",
     ) -> None:
         now = utc_now()
         with self.connect() as connection:
@@ -400,12 +439,14 @@ class KnowledgeStore:
                 """
                 INSERT INTO change_case_bundles
                     (case_id, document_id, title, extraction_strategy,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                     builder_version, card_model_version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(case_id) DO UPDATE SET
                     document_id = excluded.document_id,
                     title = excluded.title,
                     extraction_strategy = excluded.extraction_strategy,
+                    builder_version = excluded.builder_version,
+                    card_model_version = excluded.card_model_version,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -413,6 +454,8 @@ class KnowledgeStore:
                     document_id,
                     title.strip() or case_id,
                     extraction_strategy,
+                    builder_version,
+                    card_model_version,
                     now,
                     now,
                 ),
@@ -577,6 +620,162 @@ class KnowledgeStore:
         end = start + min(max(limit, 1), 2000)
         return bundles[start:end]
 
+    def get_case_source(self, case_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT bundles.case_id, bundles.build_generation,
+                       bundles.builder_version, bundles.card_model_version,
+                       documents.id AS document_id, documents.source_name,
+                       documents.source_type, documents.source_ref,
+                       documents.checksum AS source_checksum, documents.content
+                FROM change_case_bundles AS bundles
+                JOIN documents ON documents.id = bundles.document_id
+                WHERE bundles.case_id = ?
+                """,
+                (case_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def purge_case_for_rebuild(
+        self,
+        case_id: str,
+        *,
+        expected_checksum: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Delete only derived state for one ChangeOrder while retaining source."""
+
+        normalized_actor = actor.strip()
+        if not normalized_actor:
+            raise StoreError("重建操作者不能为空")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source = connection.execute(
+                """
+                SELECT bundles.case_id, bundles.document_id,
+                       bundles.build_generation, bundles.builder_version,
+                       bundles.card_model_version, documents.source_name,
+                       documents.source_type, documents.source_ref,
+                       documents.checksum AS source_checksum, documents.content
+                FROM change_case_bundles AS bundles
+                JOIN documents ON documents.id = bundles.document_id
+                WHERE bundles.case_id = ?
+                """,
+                (case_id,),
+            ).fetchone()
+            if source is None:
+                raise StoreError(f"变更案例包不存在: {case_id}")
+            checksum = str(source["source_checksum"])
+            if checksum != expected_checksum:
+                raise StoreError("案例包 source_sha256 已变化，拒绝越界清理")
+            card_rows = connection.execute(
+                """
+                SELECT cards.id, cards.status, cards.reviewer,
+                       cards.semantic_fingerprint, cards.retrieval_enabled
+                FROM card_lineage AS lineage
+                JOIN cards ON cards.id = lineage.card_id
+                WHERE lineage.case_id = ?
+                ORDER BY cards.id
+                """,
+                (case_id,),
+            ).fetchall()
+            card_ids = [int(row["id"]) for row in card_rows]
+            fingerprints = {
+                str(row["semantic_fingerprint"])
+                for row in card_rows
+                if str(row["semantic_fingerprint"] or "")
+            }
+            review_count = sum(
+                bool(str(row["reviewer"] or ""))
+                or str(row["status"])
+                in {
+                    CardStatus.APPROVED.value,
+                    CardStatus.REJECTED.value,
+                    CardStatus.SUPERSEDED.value,
+                }
+                for row in card_rows
+            )
+            retrieval_count = sum(bool(row["retrieval_enabled"]) for row in card_rows)
+            memory_rows: list[sqlite3.Row] = []
+            if card_ids:
+                placeholders = ",".join("?" for _ in card_ids)
+                memory_rows = connection.execute(
+                    f"SELECT backend, memory_id, card_id FROM memory_links "
+                    f"WHERE card_id IN ({placeholders})",
+                    card_ids,
+                ).fetchall()
+                for row in memory_rows:
+                    connection.execute(
+                        """
+                        INSERT INTO memory_retirements
+                            (backend, memory_id, card_id, case_id, status,
+                             attempts, last_error, updated_at)
+                        VALUES (?, ?, ?, ?, 'PENDING', 0, '', ?)
+                        ON CONFLICT(backend, memory_id) DO UPDATE SET
+                            card_id = excluded.card_id,
+                            case_id = excluded.case_id,
+                            status = 'PENDING', attempts = 0,
+                            last_error = '', updated_at = excluded.updated_at
+                        """,
+                        (
+                            str(row["backend"]),
+                            str(row["memory_id"]),
+                            int(row["card_id"]),
+                            case_id,
+                            now,
+                        ),
+                    )
+                connection.execute(
+                    f"UPDATE cards SET supersedes_id = NULL, updated_at = ? "
+                    f"WHERE supersedes_id IN ({placeholders})",
+                    [now, *card_ids],
+                )
+                connection.execute(
+                    f"DELETE FROM audit_log WHERE card_id IN ({placeholders})",
+                    card_ids,
+                )
+                connection.execute(
+                    f"DELETE FROM cards WHERE id IN ({placeholders})",
+                    card_ids,
+                )
+            connection.execute(
+                "DELETE FROM extraction_reports WHERE document_id = ?",
+                (int(source["document_id"]),),
+            )
+            previous_generation = max(int(source["build_generation"] or 1), 1)
+            current_generation = previous_generation + 1
+            connection.execute(
+                """
+                UPDATE change_case_bundles
+                SET build_generation = ?, updated_at = ?
+                WHERE case_id = ?
+                """,
+                (current_generation, now, case_id),
+            )
+            detail = {
+                "case_id": case_id,
+                "source_checksum": checksum,
+                "previous_generation": previous_generation,
+                "current_generation": current_generation,
+                "purged_card_count": len(card_ids),
+                "purged_review_count": review_count,
+                "purged_fingerprint_count": len(fingerprints),
+                "purged_index_count": retrieval_count,
+                "queued_memory_retirements": len(memory_rows),
+                "old_card_ids": card_ids,
+            }
+            connection.execute(
+                """
+                INSERT INTO audit_log
+                    (card_id, action, actor, detail, created_at)
+                VALUES (NULL, 'CASE_REBUILD_PURGED', ?, ?, ?)
+                """,
+                (normalized_actor, json.dumps(detail, ensure_ascii=False), now),
+            )
+        return {**dict(source), **detail}
+
     def save_card_lineage(
         self,
         card_id: int,
@@ -680,6 +879,7 @@ class KnowledgeStore:
         owner_token: str,
         *,
         lease_seconds: int,
+        force: bool = False,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat(timespec="seconds")
@@ -705,7 +905,11 @@ class KnowledgeStore:
 
             payload = dict(row)
             status = str(payload["status"])
-            if status == "COMPLETED" and payload.get("document_id") is not None:
+            if (
+                not force
+                and status == "COMPLETED"
+                and payload.get("document_id") is not None
+            ):
                 return {
                     "state": "COMPLETED",
                     "document_id": int(payload["document_id"]),
@@ -825,6 +1029,7 @@ class KnowledgeStore:
             semantic.get("dedup_status") or comparison.decision.value
         )
         publish_status = str(semantic.get("publish_status") or "CANDIDATE")
+        retrieval_enabled = bool(semantic.get("retrieval_enabled", True))
         content_quality = float(semantic.get("content_quality", quality_score))
         planning_rag_enabled = bool(
             semantic.get("planning_rag_enabled", True)
@@ -840,14 +1045,14 @@ class KnowledgeStore:
                     rollback_steps, validation_steps, keywords,
                     card_type, card_model_version, review_status, dedup_status,
                     content_quality, publish_status, planning_rag_enabled,
-                    semantic_fingerprint, semantic_payload,
+                    retrieval_enabled, semantic_fingerprint, semantic_payload,
                     source_document_id, source_chunk_id, evidence_quote, evidence_locator,
                     status, quality_score, quality_issues,
                     comparison_label, comparison_confidence, comparison_reason,
                     created_at, updated_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -871,6 +1076,7 @@ class KnowledgeStore:
                     content_quality,
                     publish_status,
                     1 if planning_rag_enabled else 0,
+                    1 if retrieval_enabled else 0,
                     semantic_fingerprint,
                     json.dumps(semantic_payload, ensure_ascii=False, sort_keys=True),
                     document_id,
@@ -942,6 +1148,7 @@ class KnowledgeStore:
         result["planning_rag_enabled"] = bool(
             result.get("planning_rag_enabled", 1)
         )
+        result["retrieval_enabled"] = bool(result.get("retrieval_enabled", 1))
         for field in (
             "operation",
             "generalized_operation",
@@ -952,6 +1159,9 @@ class KnowledgeStore:
             "risk_control",
             "inferred_risk",
             "instance_parameters",
+            "operation_sections",
+            "subitems",
+            "split_decision",
             "applicable_phases",
             "actions",
             "context",
@@ -959,6 +1169,12 @@ class KnowledgeStore:
             "attachments",
             "source_facts",
             "inferred_facts",
+            "unit_id",
+            "parent_unit_id",
+            "section_path",
+            "source_procedure_pointer",
+            "validates",
+            "rollback_of",
         ):
             if field in result["semantic_payload"]:
                 result[field] = result["semantic_payload"][field]
@@ -973,6 +1189,7 @@ class KnowledgeStore:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM cards WHERE semantic_fingerprint = ? "
+                "AND retrieval_enabled = 1 AND publish_status = 'INDEXED' "
                 "ORDER BY CASE WHEN status = 'APPROVED' THEN 0 ELSE 1 END, id LIMIT 1",
                 (fingerprint,),
             ).fetchone()
@@ -1018,16 +1235,23 @@ class KnowledgeStore:
                 connection.execute(
                     """
                     INSERT INTO memory_retirements
-                        (backend, memory_id, card_id, status, attempts, last_error,
-                         updated_at)
-                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                        (backend, memory_id, card_id, case_id, status, attempts,
+                         last_error, updated_at)
+                    VALUES (?, ?, ?, ?, 'PENDING', 0, '', ?)
                     ON CONFLICT(backend, memory_id) DO UPDATE SET
                         card_id = excluded.card_id,
+                        case_id = excluded.case_id,
                         status = 'PENDING',
                         last_error = '',
                         updated_at = excluded.updated_at
                     """,
-                    (str(row["backend"]), str(row["memory_id"]), card_id, now),
+                    (
+                        str(row["backend"]),
+                        str(row["memory_id"]),
+                        card_id,
+                        str(lineage["case_id"]) if lineage is not None else "",
+                        now,
+                    ),
                 )
 
             # A deleted historical card must not remain as another card's
@@ -1158,6 +1382,34 @@ class KnowledgeStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def add_relation(
+        self,
+        card_id: int,
+        related_card_id: int,
+        *,
+        relation_type: str,
+        confidence: float,
+        reason: str,
+    ) -> None:
+        if card_id == related_card_id:
+            return
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO relations
+                    (card_id, related_card_id, relation_type, confidence, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    card_id,
+                    related_card_id,
+                    relation_type.strip().upper(),
+                    max(0.0, min(float(confidence), 1.0)),
+                    reason.strip(),
+                    utc_now(),
+                ),
+            )
+
     def knowledge_graph(
         self,
         status: CardStatus | str | None = None,
@@ -1180,6 +1432,7 @@ class KnowledgeStore:
                 f"""
                 SELECT cards.id, cards.title, cards.summary, cards.knowledge_type,
                        cards.card_type, cards.dedup_status, cards.publish_status,
+                       cards.retrieval_enabled,
                        cards.object_type, cards.object_name, cards.status,
                        cards.quality_score, cards.comparison_label,
                        cards.source_document_id, cards.updated_at,
@@ -1266,6 +1519,7 @@ class KnowledgeStore:
                     "card_type": str(row["card_type"]),
                     "dedup_status": str(row["dedup_status"]),
                     "publish_status": str(row["publish_status"]),
+                    "retrieval_enabled": bool(row["retrieval_enabled"]),
                     "object_type": str(row["object_type"]),
                     "object_name": str(row["object_name"]),
                     "quality_score": round(float(row["quality_score"]), 1),
@@ -1397,6 +1651,7 @@ class KnowledgeStore:
                     "has_raw_json",
                     "has_html_residue",
                     "has_empty_required_section",
+                    "parent_child_retrieval_collision",
                 )
                 if qa.get(name) is True
             ]
@@ -1944,6 +2199,13 @@ class KnowledgeStore:
                 or str(claim["content_hash"]) != content_hash
             ):
                 return {"applied": False, "retired_memory_ids": []}
+            lineage = connection.execute(
+                "SELECT case_id FROM card_lineage WHERE card_id = ?",
+                (card_id,),
+            ).fetchone()
+            retirement_case_id = (
+                str(lineage["case_id"]) if lineage is not None else ""
+            )
             previous_ids = {
                 str(row["memory_id"])
                 for row in connection.execute(
@@ -1956,15 +2218,17 @@ class KnowledgeStore:
                 connection.execute(
                     """
                     INSERT INTO memory_retirements
-                        (backend, memory_id, card_id, status, attempts, last_error, updated_at)
-                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                        (backend, memory_id, card_id, case_id, status, attempts,
+                         last_error, updated_at)
+                    VALUES (?, ?, ?, ?, 'PENDING', 0, '', ?)
                     ON CONFLICT(backend, memory_id) DO UPDATE SET
                         card_id = excluded.card_id,
+                        case_id = excluded.case_id,
                         status = 'PENDING',
                         last_error = '',
                         updated_at = excluded.updated_at
                     """,
-                    (backend, memory_id, card_id, now),
+                    (backend, memory_id, card_id, retirement_case_id, now),
                 )
             for memory_id in unique_ids:
                 connection.execute(
@@ -2053,9 +2317,11 @@ class KnowledgeStore:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
                 """
-                SELECT links.memory_id, links.card_id
+                SELECT links.memory_id, links.card_id,
+                       COALESCE(lineage.case_id, '') AS case_id
                 FROM memory_links AS links
                 JOIN cards ON cards.id = links.card_id
+                LEFT JOIN card_lineage AS lineage ON lineage.card_id = links.card_id
                 WHERE links.backend = ? AND cards.status != ?
                 """,
                 (backend, CardStatus.APPROVED.value),
@@ -2064,12 +2330,21 @@ class KnowledgeStore:
                 connection.execute(
                     """
                     INSERT INTO memory_retirements
-                        (backend, memory_id, card_id, status, attempts, last_error, updated_at)
-                    VALUES (?, ?, ?, 'PENDING', 0, '', ?)
+                        (backend, memory_id, card_id, case_id, status, attempts,
+                         last_error, updated_at)
+                    VALUES (?, ?, ?, ?, 'PENDING', 0, '', ?)
                     ON CONFLICT(backend, memory_id) DO UPDATE SET
+                        card_id = excluded.card_id,
+                        case_id = excluded.case_id,
                         status = 'PENDING', updated_at = excluded.updated_at
                     """,
-                    (backend, str(row["memory_id"]), int(row["card_id"]), now),
+                    (
+                        backend,
+                        str(row["memory_id"]),
+                        int(row["card_id"]),
+                        str(row["case_id"]),
+                        now,
+                    ),
                 )
             if rows:
                 connection.executemany(
@@ -2087,18 +2362,48 @@ class KnowledgeStore:
         return len(rows)
 
     def list_memory_retirements(
-        self, *, backend: str, limit: int = 100
+        self,
+        *,
+        backend: str,
+        limit: int = 100,
+        case_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        parameters: list[Any] = [backend]
+        case_filter = ""
+        if case_id is not None:
+            case_filter = " AND case_id = ?"
+            parameters.append(case_id)
+        parameters.append(max(1, min(limit, 10_000)))
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT * FROM memory_retirements
                 WHERE backend = ? AND status IN ('PENDING', 'FAILED')
+                {case_filter}
                 ORDER BY updated_at ASC, memory_id ASC LIMIT ?
                 """,
-                (backend, max(1, min(limit, 1000))),
+                parameters,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_memory_retirements(
+        self, *, backend: str, case_id: str | None = None
+    ) -> int:
+        parameters: list[Any] = [backend]
+        case_filter = ""
+        if case_id is not None:
+            case_filter = " AND case_id = ?"
+            parameters.append(case_id)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM memory_retirements
+                WHERE backend = ? AND status IN ('PENDING', 'FAILED')
+                {case_filter}
+                """,
+                parameters,
+            ).fetchone()
+        return int(row["count"] if row is not None else 0)
 
     def record_memory_retirement(
         self, *, backend: str, memory_id: str, error: str = ""

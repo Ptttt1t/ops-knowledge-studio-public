@@ -161,8 +161,11 @@ class Settings:
     change_order_card_timezone: str = "Asia/Shanghai"
     change_order_procedure_split_chars: int = 6000
     change_order_semantic_section_threshold: int = 5
+    change_order_child_min_content_chars: int = 160
     change_order_semantic_reuse_threshold: float = 0.92
     change_order_card_report_dir: Path | None = None
+    demo_rebuild_enabled: bool = True
+    demo_full_reset_enabled: bool = False
     max_model_calls_per_ingest: int = 60
     max_cards_per_document: int = 30
     max_concurrent_ingestions: int = 1
@@ -271,6 +274,7 @@ class Settings:
                 "change_order_card_timezone": self.change_order_card_timezone,
                 "change_order_procedure_split_chars": self.change_order_procedure_split_chars,
                 "change_order_semantic_section_threshold": self.change_order_semantic_section_threshold,
+                "change_order_child_min_content_chars": self.change_order_child_min_content_chars,
                 "change_order_semantic_reuse_threshold": self.change_order_semantic_reuse_threshold,
                 "model_calls_per_ingest": self.max_model_calls_per_ingest,
                 "concurrent_ingestions": self.max_concurrent_ingestions,
@@ -286,6 +290,10 @@ class Settings:
                 "max_case_bundles": self.change_generation_max_case_bundles,
                 "max_context_cards": self.change_generation_max_context_cards,
                 "unauthenticated_pilot": self.demo_mode,
+            },
+            "demo_management": {
+                "rebuild_enabled": self.demo_mode and self.demo_rebuild_enabled,
+                "full_reset_enabled": self.demo_mode and self.demo_full_reset_enabled,
             },
             "long_term_memory": {
                 "enabled": self.mindmemos_enabled,
@@ -537,6 +545,9 @@ class Settings:
             change_order_semantic_section_threshold=_read_int(
                 values, "CHANGE_ORDER_SEMANTIC_SECTION_THRESHOLD", 5
             ),
+            change_order_child_min_content_chars=_read_int(
+                values, "CHANGE_ORDER_CHILD_MIN_CONTENT_CHARS", 160
+            ),
             change_order_semantic_reuse_threshold=_read_float(
                 values, "CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD", 0.92
             ),
@@ -547,6 +558,12 @@ class Settings:
                     "CHANGE_ORDER_CARD_REPORT_DIR",
                     "artifacts/change_order_card_reports",
                 ),
+            ),
+            demo_rebuild_enabled=_read_bool(
+                values, "DEMO_REBUILD_ENABLED", True
+            ),
+            demo_full_reset_enabled=_read_bool(
+                values, "DEMO_FULL_RESET_ENABLED", False
             ),
             max_model_calls_per_ingest=_read_int(
                 values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60
@@ -648,6 +665,10 @@ class Settings:
         if not 0 <= settings.change_order_semantic_reuse_threshold <= 1:
             raise ConfigurationError(
                 "CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD 必须在 0 到 1 之间"
+            )
+        if settings.change_order_child_min_content_chars <= 0:
+            raise ConfigurationError(
+                "CHANGE_ORDER_CHILD_MIN_CONTENT_CHARS 必须大于 0"
             )
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
         if settings.runtime_database_path is not None:

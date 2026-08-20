@@ -513,6 +513,52 @@ class ChangeDraftStore:
             ).fetchall()
         return [self._decode(row, ("request_json", "selected_case_ids")) or {} for row in rows]
 
+    def invalidate_case_references(self, case_id: str) -> int:
+        """Invalidate temporary drafts/evaluations derived from a rebuilt case."""
+
+        now = utc_now()
+        affected: list[str] = []
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT draft_id, selected_case_ids, held_out_case_id "
+                "FROM change_drafts"
+            ).fetchall()
+            for row in rows:
+                try:
+                    selected = json.loads(str(row["selected_case_ids"] or "[]"))
+                except json.JSONDecodeError:
+                    selected = []
+                if case_id in selected or str(row["held_out_case_id"] or "") == case_id:
+                    affected.append(str(row["draft_id"]))
+            if affected:
+                connection.executemany(
+                    """
+                    UPDATE change_drafts
+                    SET status = 'BLOCKED',
+                        model_error = 'SOURCE_CASE_REBUILT', updated_at = ?
+                    WHERE draft_id = ?
+                    """,
+                    [(now, draft_id) for draft_id in affected],
+                )
+                connection.executemany(
+                    """
+                    UPDATE change_draft_revisions
+                    SET reviewer = '', review_comment = 'SOURCE_CASE_REBUILT',
+                        reviewed_at = ''
+                    WHERE draft_id = ?
+                    """,
+                    [(draft_id,) for draft_id in affected],
+                )
+            connection.execute(
+                """
+                UPDATE change_evaluations
+                SET status = 'FAILED', error = 'SOURCE_CASE_REBUILT', updated_at = ?
+                WHERE held_out_case_id = ?
+                """,
+                (now, case_id),
+            )
+        return len(affected)
+
     def review(self, draft_id: str, *, decision: str, reviewer: str, comment: str) -> dict[str, Any]:
         normalized = decision.strip().upper()
         if normalized not in {"APPROVED", "REJECTED"}:
@@ -927,8 +973,9 @@ class RealChangeDraftService:
             return False
         observed_cards = self._bundle_field_sets(bundle)
         semantic_model = any(
-            str(card.get("card_model_version") or "")
-            == "change_order_card_model_v1"
+            str(card.get("card_model_version") or "").startswith(
+                "change_order_card_model_v"
+            )
             for card in bundle.get("cards") or []
         )
         if not semantic_model and not (

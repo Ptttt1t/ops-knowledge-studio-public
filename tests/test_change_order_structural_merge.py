@@ -108,7 +108,7 @@ class ChangeOrderStructuralMergeTests(unittest.TestCase):
                 and service.card_detail(card_id)["lineage"]["procedure_group"]
                 == "ROLLBACK"
             )
-            self.assertEqual(card["title"], "回退虚构变更")
+            self.assertEqual(card["title"], "回退：回退虚构变更")
             self.assertFalse(card["lineage"]["qa"]["has_raw_json"])
             self.assertFalse(card["lineage"]["qa"]["has_html_residue"])
             self.assertFalse(

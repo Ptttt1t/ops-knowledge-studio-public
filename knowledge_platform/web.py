@@ -39,6 +39,9 @@ CASE_BUNDLE_DETAIL_PATTERN = re.compile(r"^/api/knowledge-case-bundles/(.+)$")
 CASE_BUNDLE_REVIEW_PATTERN = re.compile(
     r"^/api/knowledge-case-bundles/(.+)/review$"
 )
+CASE_BUNDLE_REBUILD_PATTERN = re.compile(
+    r"^/api/knowledge-case-bundles/(.+)/rebuild$"
+)
 RUN_DETAIL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})$")
 RUN_EVENTS_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/events$")
 RUN_CANCEL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/cancel$")
@@ -739,6 +742,15 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/agent-query":
                 result = self.server.service.agent_query(
                     str(payload.get("question", ""))
+                )
+                self._send_json(result)
+                return
+            bundle_rebuild_match = CASE_BUNDLE_REBUILD_PATTERN.match(path)
+            if bundle_rebuild_match:
+                result = self.server.service.rebuild_case_bundle(
+                    unquote(bundle_rebuild_match.group(1)),
+                    actor=principal,
+                    confirmation=str(payload.get("confirmation") or ""),
                 )
                 self._send_json(result)
                 return

@@ -411,9 +411,11 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 使用 `python run.py <命令> --help` 查看完整参数。
 
-对于已确认结构的 JSON ChangeOrder，平台自动启用 `change_order_shape_v2` Adapter 和 `change_order_semantic_builder_v1` Card Builder：先创建一个 `ChangeCaseBundle`，再按业务语义生成最多一张 `CASE_CONTEXT`、逐源 `PROCEDURE_STEP` 和独立 `EXECUTION_OUTCOME`。Extraction Unit 只承担证据分块，不再直接决定卡片边界。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过证据、双 Coverage、正文 QA 或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
+对于已确认结构的 JSON ChangeOrder，平台自动启用 `change_order_shape_v2` Adapter 和 `change_order_semantic_builder_v2` Card Builder：先创建一个 `ChangeCaseBundle`，再按业务语义生成最多一张 `CASE_CONTEXT`、逐源 `PROCEDURE_STEP` 和独立 `EXECUTION_OUTCOME`。Extraction Unit 只承担证据分块，不再直接决定卡片边界。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过证据、双 Coverage、正文 QA 或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
 
-结构适配中，`action_list` 是 canonical action metadata；它进入 `CASE_CONTEXT.actions`，不再伪装成有序 Procedure。`change_tool_relate_action` 的 group name 和 group count 是动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的来源；四组 Procedure Key 分别映射为前检、实施、验证和回退。正文只消费已确认的 Procedure 业务字段，HTML/图片/转义由 `normalize_rich_text()` 清理，timestamp 等确定性字段由 Python 按显式时区转换。跨阶段相同知识按 semantic fingerprint 复用；`EXECUTION_OUTCOME` 固定 `planning_rag_enabled=false`。报告明确区分 `structural_source_coverage` 和 `semantic_content_coverage`，并输出逐卡 QA 与 `skip_reason`。详见 [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)。
+结构适配中，`action_list` 是 canonical action metadata；它进入 `CASE_CONTEXT.actions`，不再伪装成有序 Procedure。`change_tool_relate_action` 的 group name 和 group count 是动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的来源；四组 Procedure Key 分别映射为前检、实施、验证和回退。正文只消费已确认的 Procedure 业务字段，HTML/图片/转义由 `normalize_rich_text()` 清理，timestamp 等确定性字段由 Python 按显式时区转换。semantic section 默认保存在 Parent 的 `operation_sections[]`；只有“步骤确实超长”且存在足够多有独立价值的 section 时才发布 children，并保证 Parent/Child 不会同时进入检索。标题包含 phase 语义，高置信 target/value 匹配可建立 `VALIDATES` 和 `ROLLBACK_OF`。跨阶段相同知识按 semantic fingerprint 复用；`EXECUTION_OUTCOME` 固定 `planning_rag_enabled=false`。报告明确区分 `structural_source_coverage` 和 `semantic_content_coverage`，并输出逐卡 QA 与 `skip_reason`。详见 [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)。
+
+Demo 模式下可在 Change Case Bundle 详情点击“重建当前案例”。它按 `case_id/source_sha256` 精确清除派生知识、审核、关系、fingerprint、检索/外部长记忆映射和缓存，再以当前 Builder 强制重跑；原始上传 JSON 不删除，普通重复采集仍保持幂等，重建后的 K ID 不复用。该按钮仅在 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时显示，生产模式返回 404。全库重置配置默认关闭且当前未开放入口。
 
 Web 工作台的“知识关系图”把现有 SQLite 治理数据投影为可交互网络：案例包、知识卡、业务对象和来源文档作为节点，案例归属、对象描述、来源追溯以及 `DUPLICATE_OF`、`CONFLICTS_WITH`、`CANDIDATE_VERSION_OF`、`SUPERSEDES` 等已落库关系作为边。该页面不推断新的概念关系，也不改变审批、检索或存储语义；只读接口为 `GET /api/knowledge-graph`。
 

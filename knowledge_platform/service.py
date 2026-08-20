@@ -5,6 +5,7 @@ import hashlib
 from http import HTTPStatus
 import json
 from pathlib import Path
+import shutil
 import threading
 from typing import Any
 import unicodedata
@@ -27,6 +28,7 @@ from .change_order_adapter import (
     build_change_order_extraction_plan,
 )
 from .change_order_cards import (
+    BUILDER_VERSION,
     CARD_MODEL_VERSION,
     CardType,
     ChangeOrderCardBuilder,
@@ -426,6 +428,8 @@ class KnowledgeService:
         *,
         checksum: str,
         owner_token: str,
+        force_rebuild: bool = False,
+        rebuild_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
 
         change_order_plan: ChangeOrderExtractionPlan | None = None
@@ -468,8 +472,14 @@ class KnowledgeService:
                 plan=change_order_plan,
                 adapter_diagnostics=adapter_diagnostics or {},
                 extraction_strategy=extraction_strategy,
+                force_rebuild=force_rebuild,
+                rebuild_context=rebuild_context,
             )
         else:
+            if force_rebuild:
+                raise KnowledgeServiceError(
+                    "Demo 当前案例重建仅支持结构指纹已确认的 ChangeOrder"
+                )
             chunks = chunk_text(
                 document.content,
                 self.settings.chunk_size,
@@ -744,6 +754,8 @@ class KnowledgeService:
         plan: ChangeOrderExtractionPlan,
         adapter_diagnostics: dict[str, Any],
         extraction_strategy: str,
+        force_rebuild: bool = False,
+        rebuild_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist Card Builder output while preserving Adapter evidence.
 
@@ -759,6 +771,9 @@ class KnowledgeService:
                 semantic_section_threshold=(
                     self.settings.change_order_semantic_section_threshold
                 ),
+                child_min_content_chars=(
+                    self.settings.change_order_child_min_content_chars
+                ),
                 semantic_reuse_threshold=(
                     self.settings.change_order_semantic_reuse_threshold
                 ),
@@ -769,6 +784,12 @@ class KnowledgeService:
             plan,
             source_name=document.name,
         )
+        if rebuild_context is not None:
+            built.report["rebuild"] = {
+                **rebuild_context,
+                "is_rebuild": True,
+                "new_card_count": len(built.cards),
+            }
         self.trace.log(
             "change_order_semantic_units_built",
             source_name=document.name,
@@ -793,7 +814,7 @@ class KnowledgeService:
             checksum,
             document.content,
         )
-        if not created:
+        if not created and not force_rebuild:
             self.store.complete_ingestion(checksum, owner_token, document_id)
             extraction_report = self.store.get_extraction_report(document_id)
             return {
@@ -824,6 +845,7 @@ class KnowledgeService:
         case_id = f"change-order:{checksum}"
         card_ids: list[int] = []
         cards_by_role: dict[str, int] = {}
+        unit_card_ids: dict[str, int] = {}
 
         for report_row, semantic_card in zip(
             built.report["cards"], built.cards
@@ -835,6 +857,7 @@ class KnowledgeService:
             if existing is not None:
                 semantic_card.dedup_status = DedupStatus.DUPLICATE.value
                 semantic_card.publish_status = PublishStatus.SKIPPED.value
+                semantic_card.retrieval_enabled = False
                 semantic_card.finalize()
                 comparison = ComparisonResult(
                     decision=ComparisonDecision.DUPLICATE,
@@ -889,6 +912,7 @@ class KnowledgeService:
                     "dedup_status": semantic_card.dedup_status,
                     "content_quality": quality_score,
                     "publish_status": semantic_card.publish_status,
+                    "retrieval_enabled": semantic_card.retrieval_enabled,
                     "planning_rag_enabled": semantic_card.planning_rag_enabled,
                     "semantic_fingerprint": semantic_card.semantic_fingerprint,
                     "semantic_payload": semantic_card.semantic_payload,
@@ -898,9 +922,12 @@ class KnowledgeService:
             lineage_metadata = {
                 "semantic_mapping_status": "CONFIRMED",
                 "include_in_rag": semantic_card.publish_status
-                != PublishStatus.SKIPPED.value,
+                == PublishStatus.INDEXED.value
+                and semantic_card.retrieval_enabled,
                 "include_in_generation": semantic_card.planning_rag_enabled
-                and semantic_card.publish_status != PublishStatus.SKIPPED.value,
+                and semantic_card.publish_status == PublishStatus.INDEXED.value
+                and semantic_card.retrieval_enabled,
+                "retrieval_enabled": semantic_card.retrieval_enabled,
                 "planning_rag_enabled": semantic_card.planning_rag_enabled,
                 "lifecycle_stage": (
                     "post_execution"
@@ -922,6 +949,12 @@ class KnowledgeService:
                 "qa": semantic_card.qa,
                 "dedup_status": semantic_card.dedup_status,
                 "publish_status": semantic_card.publish_status,
+                "unit_id": semantic_card.unit_id,
+                "parent_unit_id": semantic_card.parent_unit_id or None,
+                "section_path": semantic_card.section_path,
+                "source_procedure_pointer": semantic_card.semantic_payload.get(
+                    "source_procedure_pointer"
+                ),
             }
             self.store.save_card_lineage(
                 card_id,
@@ -959,10 +992,42 @@ class KnowledgeService:
             report_row["card_id"] = card_id
             report_row["dedup_status"] = semantic_card.dedup_status
             report_row["publish_status"] = semantic_card.publish_status
+            report_row["retrieval_enabled"] = semantic_card.retrieval_enabled
             report_row["semantic_fingerprint"] = semantic_card.semantic_fingerprint
             card_ids.append(card_id)
+            if semantic_card.unit_id:
+                unit_card_ids[semantic_card.unit_id] = card_id
             cards_by_role[semantic_card.card_type.value] = (
                 cards_by_role.get(semantic_card.card_type.value, 0) + 1
+            )
+
+        # Cross-document exact de-duplication is applied after the Builder
+        # report is created. Refresh publication aggregates so the persisted
+        # report describes the actual retrieval/index state, not the
+        # pre-persistence candidates.
+        built.report["indexed_procedure_count"] = sum(
+            card.card_type is CardType.PROCEDURE_STEP
+            and card.publish_status == PublishStatus.INDEXED.value
+            and card.retrieval_enabled
+            for card in built.cards
+        )
+        built.report["container_procedure_count"] = sum(
+            card.card_type is CardType.PROCEDURE_STEP
+            and card.publish_status == PublishStatus.CONTAINER.value
+            for card in built.cards
+        )
+
+        for relationship in built.relationships:
+            source_id = unit_card_ids.get(str(relationship["source_unit_id"]))
+            target_id = unit_card_ids.get(str(relationship["target_unit_id"]))
+            if source_id is None or target_id is None:
+                continue
+            self.store.add_relation(
+                source_id,
+                target_id,
+                relation_type=str(relationship["relation_type"]),
+                confidence=float(relationship["confidence"]),
+                reason=str(relationship["reason"]),
             )
 
         case_title = next(
@@ -978,6 +1043,12 @@ class KnowledgeService:
             document_id=document_id,
             title=case_title,
             extraction_strategy=extraction_strategy,
+            builder_version=BUILDER_VERSION,
+            card_model_version=CARD_MODEL_VERSION,
+        )
+        bundle_metadata = self.store.get_case_source(case_id) or {}
+        built.report["build_generation"] = int(
+            bundle_metadata.get("build_generation") or 1
         )
 
         report_directory = self.settings.change_order_card_report_dir
@@ -1004,6 +1075,7 @@ class KnowledgeService:
             ],
             "card_build_report": built.report,
             "card_build_report_path": str(report_path) if report_path else None,
+            "rebuild": built.report.get("rebuild"),
         }
         self.store.save_extraction_report(
             document_id, extraction_strategy, extraction_report
@@ -1020,6 +1092,7 @@ class KnowledgeService:
             "card_build_report": built.report,
             "card_build_report_path": str(report_path) if report_path else None,
             "extracted_cards": len(card_ids),
+            "rebuild": built.report.get("rebuild"),
             "cards_by_role": cards_by_role,
             "batch_duplicates_skipped": built.report["semantic_reuse_count"],
             "card_ids": card_ids,
@@ -1717,6 +1790,189 @@ class KnowledgeService:
 
     def case_bundle_detail(self, case_id: str) -> dict[str, Any] | None:
         return self.store.get_case_bundle(case_id, include_cards=True)
+
+    def _demo_rebuild_log(
+        self, case_id: str, message: str, **detail: Any
+    ) -> None:
+        rendered = f"[DEMO REBUILD] case={case_id} {message}"
+        print(rendered, flush=True)
+        self.trace.log(
+            "demo_case_rebuild",
+            case_id=case_id,
+            message=message,
+            **detail,
+        )
+
+    def rebuild_case_bundle(
+        self,
+        case_id: str,
+        *,
+        actor: str,
+        confirmation: str,
+    ) -> dict[str, Any]:
+        if not self.settings.demo_mode or not self.settings.demo_rebuild_enabled:
+            raise KnowledgeRequestError(
+                "当前案例重建仅在启用 DEMO_REBUILD_ENABLED 的 Demo 模式可用",
+                status=HTTPStatus.NOT_FOUND,
+                code="demo_rebuild_disabled",
+            )
+        if confirmation.strip().upper() != "REBUILD_CURRENT_CASE":
+            raise KnowledgeRequestError(
+                "重建确认文本无效",
+                status=HTTPStatus.BAD_REQUEST,
+                code="rebuild_confirmation_required",
+            )
+        normalized_case_id = case_id.strip()
+        source = self.store.get_case_source(normalized_case_id)
+        if source is None:
+            raise KnowledgeRequestError(
+                "变更案例包不存在",
+                status=HTTPStatus.NOT_FOUND,
+                code="case_bundle_not_found",
+            )
+        checksum = str(source["source_checksum"])
+        if normalized_case_id != f"change-order:{checksum}":
+            raise KnowledgeRequestError(
+                "案例包 identity 与 source_sha256 不一致，拒绝重建",
+                status=HTTPStatus.CONFLICT,
+                code="case_rebuild_scope_mismatch",
+            )
+        self.settings.require_api()
+        acquired = self._ingestion_slots.acquire(blocking=False)
+        if not acquired:
+            raise KnowledgeRequestError(
+                "知识导入并发额度已满，请稍后重试",
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+                code="ingestion_concurrency_exceeded",
+            )
+        owner_token = uuid4().hex
+        claimed = False
+        try:
+            claim = self.store.claim_ingestion(
+                checksum,
+                owner_token,
+                lease_seconds=max(7200, self.settings.timeout_seconds * 10),
+                force=True,
+            )
+            if claim["state"] == "PROCESSING":
+                raise KnowledgeRequestError(
+                    "当前案例正在采集或重建，请等待完成",
+                    status=HTTPStatus.CONFLICT,
+                    code="ingestion_in_progress",
+                )
+            claimed = True
+            previous_generation = max(
+                int(source.get("build_generation") or 1), 1
+            )
+            report_path: Path | None = None
+            archived_report_path: Path | None = None
+            if self.settings.change_order_card_report_dir is not None:
+                report_path = (
+                    self.settings.change_order_card_report_dir
+                    / checksum
+                    / "card_build_report.json"
+                )
+                if report_path.is_file():
+                    archived_report_path = report_path.with_name(
+                        f"card_build_report.generation-{previous_generation}.json"
+                    )
+                    shutil.copy2(report_path, archived_report_path)
+                    report_path.unlink()
+
+            self._demo_rebuild_log(normalized_case_id, "purge started")
+            purge = self.store.purge_case_for_rebuild(
+                normalized_case_id,
+                expected_checksum=checksum,
+                actor=actor,
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
+                f"purge cards={purge['purged_card_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
+                f"purge review records={purge['purged_review_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
+                f"purge fingerprints={purge['purged_fingerprint_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
+                f"purge retrieval entries={purge['purged_index_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id, "invalidate ingestion cache"
+            )
+            invalidated_drafts = self.change_drafts.store.invalidate_case_references(
+                normalized_case_id
+            )
+            retirement_cleanup = {
+                "processed": 0,
+                "removed": 0,
+                "failed": 0,
+            }
+            queued_memories = self.store.count_memory_retirements(
+                backend=self.memory.BACKEND,
+                case_id=normalized_case_id,
+            )
+            if queued_memories:
+                if not self.memory.configured:
+                    raise KnowledgeServiceError(
+                        "当前案例仍有外部长记忆待清理，但 MindMemOS 未配置；"
+                        "为避免旧知识残留，已停止生成新卡"
+                    )
+                retirement_cleanup = self.memory.cleanup_retired_memories(
+                    limit=queued_memories,
+                    case_id=normalized_case_id,
+                )
+                if retirement_cleanup.get("failed"):
+                    raise KnowledgeServiceError(
+                        "当前案例外部长记忆清理失败；已停止生成新卡，请重试"
+                    )
+
+            rebuild_context = {
+                "previous_generation": int(purge["previous_generation"]),
+                "current_generation": int(purge["current_generation"]),
+                "previous_card_count": int(purge["purged_card_count"]),
+                "purged_card_count": int(purge["purged_card_count"]),
+                "purged_review_count": int(purge["purged_review_count"]),
+                "purged_index_count": int(purge["purged_index_count"]),
+                "purged_fingerprint_count": int(
+                    purge["purged_fingerprint_count"]
+                ),
+                "purged_long_term_memory_count": queued_memories,
+                "invalidated_change_draft_count": int(invalidated_drafts),
+                "archived_report_path": (
+                    str(archived_report_path) if archived_report_path else None
+                ),
+            }
+            document = SourceDocument(
+                name=str(source["source_name"]),
+                source_type=str(source["source_type"]),
+                source_ref=str(source["source_ref"]),
+                content=str(source["content"]),
+            )
+            self._demo_rebuild_log(normalized_case_id, "rebuild started")
+            result = self._ingest_claimed_document(
+                document,
+                checksum=checksum,
+                owner_token=owner_token,
+                force_rebuild=True,
+                rebuild_context=rebuild_context,
+            )
+            result["memory_retirement_cleanup"] = retirement_cleanup
+            self._demo_rebuild_log(
+                normalized_case_id,
+                f"rebuild completed cards={result['extracted_cards']}",
+            )
+            return result
+        except Exception as exc:
+            if claimed:
+                self.store.fail_ingestion(checksum, owner_token, str(exc))
+            raise
+        finally:
+            self._ingestion_slots.release()
 
     def review_case_bundle(
         self,

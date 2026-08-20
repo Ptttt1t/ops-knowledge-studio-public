@@ -20,8 +20,8 @@ from .change_order_adapter import (
 from .schema import KnowledgeCardDraft
 
 
-CARD_MODEL_VERSION = "change_order_card_model_v1"
-BUILDER_VERSION = "change_order_semantic_builder_v1"
+CARD_MODEL_VERSION = "change_order_card_model_v2"
+BUILDER_VERSION = "change_order_semantic_builder_v2"
 
 
 class CardType(str, Enum):
@@ -37,7 +37,8 @@ class DedupStatus(str, Enum):
 
 
 class PublishStatus(str, Enum):
-    CANDIDATE = "CANDIDATE"
+    INDEXED = "INDEXED"
+    CONTAINER = "CONTAINER"
     SKIPPED = "SKIPPED"
 
 
@@ -70,8 +71,37 @@ _RAW_JSON = re.compile(
     re.M,
 )
 _URL = re.compile(r"https?://\S+", re.I)
-_TOP_SECTION = re.compile(
-    r"(?m)^\s*(?P<label>(?:\d{1,2}|[一二三四五六七八九十百]+)[、.．])\s*(?P<title>[^\n]+)"
+_NUMBERED_SECTION = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)(?P<label>(?:\d{1,2}|[一二三四五六七八九十百]+)[、.．])"
+    r"\s*(?P<title>[^\n]*)"
+)
+_NOOP_PHRASES = (
+    "不涉及",
+    "无影响",
+    "无需操作",
+    "无需处理",
+    "无业务影响",
+    "not applicable",
+    "no impact",
+    "no action required",
+)
+_ACTIONABLE = re.compile(
+    r"(?:检查|确认|核对|设置|修改|调整|删除|添加|恢复|还原|执行|备份|导出|"
+    r"验证|观察|保存|替换|更新|部署|重启|切换|check|verify|set|modify|update|"
+    r"delete|add|restore|execute|backup|export|deploy|restart|switch)",
+    re.I,
+)
+_RELATION_TARGET = re.compile(
+    r"(?:parameter|param|setting|config|参数|配置项|系统参数)\s*[A-Za-z0-9_.-]*",
+    re.I,
+)
+_TRANSITION = re.compile(
+    r"(?P<old>[A-Za-z0-9_.-]+)\s*(?:->|→|到)\s*(?P<new>[A-Za-z0-9_.-]+)",
+    re.I,
+)
+_EXPECTED_VALUE = re.compile(
+    r"(?:==|equals?|应为|等于)\s*(?P<value>[A-Za-z0-9_.-]+)",
+    re.I,
 )
 _INSTANCE_KEY = re.compile(
     r"(?:region|cluster|node[_ -]?pool|nodepool|workload|container|cpu|memory|"
@@ -261,7 +291,9 @@ def normalize_rich_text(value: Any) -> RichText:
     text = _URL.sub("", text)
     text = text.replace('\"', '"')
     text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r" *\n *", "\n", text)
+    # Preserve one leading space after a newline so nested numbered items keep
+    # their level. Trailing whitespace remains normalized deterministically.
+    text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return RichText(text.strip(), tuple(parser.attachments))
 
@@ -304,6 +336,7 @@ def _source_identity(
     unit: ChangeOrderExtractionUnit,
     *,
     section_index: int | None = None,
+    section_path: list[str] | None = None,
 ) -> dict[str, Any]:
     pointer = unit.source_pointers[0] if unit.source_pointers else unit.pointer
     identity = {
@@ -314,6 +347,8 @@ def _source_identity(
     }
     if section_index is not None:
         identity["semantic_section_index"] = section_index
+    if section_path:
+        identity["section_path"] = list(section_path)
     identity["identity"] = content_sha256(identity)
     return identity
 
@@ -321,7 +356,7 @@ def _source_identity(
 def _semantic_fingerprint(card_type: CardType, payload: dict[str, Any]) -> str:
     if card_type is CardType.PROCEDURE_STEP:
         content = {
-            "title": _normalized_identity(payload.get("title", "")),
+            "check_name": _normalized_identity(payload.get("check_name", "")),
             "generalized_operation": _normalized_identity(
                 payload.get("generalized_operation", "")
             ),
@@ -369,7 +404,21 @@ def _qa(card_type: CardType, payload: dict[str, Any], body: str) -> dict[str, An
                 "command_list",
             )
         )
-        title_consistent = payload.get("title") == payload.get("check_name")
+        source_title = _normalized_identity(payload.get("check_name", ""))
+        card_title = _normalized_identity(payload.get("title", ""))
+        semantic_anchor = re.sub(
+            r"^(?:修改|设置|删除|检查|验证|恢复|实施|回退|前检)",
+            "",
+            source_title,
+        )
+        title_consistent = bool(
+            card_title
+            and (
+                not source_title
+                or source_title in card_title
+                or (semantic_anchor and semantic_anchor in card_title)
+            )
+        )
     elif card_type is CardType.CASE_CONTEXT:
         empty_required = not payload.get("title") or not payload.get("context")
         title_consistent = bool(payload.get("title"))
@@ -415,13 +464,21 @@ class SemanticKnowledgeCard:
     applicable_phases: list[str] = field(default_factory=list)
     semantic_fingerprint: str = ""
     dedup_status: str = DedupStatus.NEW.value
-    publish_status: str = PublishStatus.CANDIDATE.value
+    publish_status: str = PublishStatus.INDEXED.value
+    retrieval_enabled: bool = True
     planning_rag_enabled: bool = True
+    unit_id: str = ""
+    parent_unit_id: str = ""
+    section_path: list[str] = field(default_factory=list)
     qa: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self) -> None:
         self.semantic_payload["applicable_phases"] = list(self.applicable_phases)
         self.semantic_payload["source_identities"] = list(self.source_identities)
+        self.semantic_payload["unit_id"] = self.unit_id
+        self.semantic_payload["parent_unit_id"] = self.parent_unit_id or None
+        self.semantic_payload["section_path"] = list(self.section_path)
+        self.semantic_payload["retrieval_enabled"] = self.retrieval_enabled
         self.semantic_fingerprint = _semantic_fingerprint(
             self.card_type, self.semantic_payload
         )
@@ -437,6 +494,7 @@ class SemanticKnowledgeCard:
         self.qa["semantic_fingerprint"] = self.semantic_fingerprint
         self.qa["dedup_status"] = self.dedup_status
         self.qa["publish_status"] = self.publish_status
+        self.qa["parent_child_retrieval_collision"] = False
 
     def body_text(self) -> str:
         payload = self.semantic_payload
@@ -571,7 +629,14 @@ class SemanticKnowledgeCard:
                 if self.source_identities
                 else None
             ),
+            "source_procedure_pointer": self.semantic_payload.get(
+                "source_procedure_pointer"
+            ),
             "source_hash": first.content_sha256 if first else None,
+            "retrieval_enabled": self.retrieval_enabled,
+            "unit_id": self.unit_id,
+            "parent_unit_id": self.parent_unit_id or None,
+            "section_path": list(self.section_path),
             **self.qa,
         }
 
@@ -599,6 +664,7 @@ def _context_keywords(context: dict[str, Any]) -> list[str]:
 class CardBuildResult:
     cards: list[SemanticKnowledgeCard]
     report: dict[str, Any]
+    relationships: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -606,6 +672,7 @@ class ChangeOrderCardBuilderConfig:
     timezone_name: str = "Asia/Shanghai"
     long_step_chars: int = 6000
     semantic_section_threshold: int = 5
+    child_min_content_chars: int = 160
     semantic_reuse_threshold: float = 0.92
 
 
@@ -658,6 +725,8 @@ class ChangeOrderCardBuilder:
             raise ValueError("long_step_chars 必须大于 0")
         if self.config.semantic_section_threshold <= 0:
             raise ValueError("semantic_section_threshold 必须大于 0")
+        if self.config.child_min_content_chars <= 0:
+            raise ValueError("child_min_content_chars 必须大于 0")
         if not 0.0 <= self.config.semantic_reuse_threshold <= 1.0:
             raise ValueError("semantic_reuse_threshold 必须在 0 到 1 之间")
 
@@ -672,6 +741,7 @@ class ChangeOrderCardBuilder:
         units = list(plan.units)
         cards: list[SemanticKnowledgeCard] = []
         skipped: list[dict[str, Any]] = []
+        skipped_sections: list[dict[str, Any]] = []
 
         context_card = self._context_card(source, units, skipped, source_name)
         if context_card is not None:
@@ -683,14 +753,24 @@ class ChangeOrderCardBuilder:
             if unit.role not in PROCEDURE_ROLES:
                 continue
             procedure_source_count += 1
-            built = self._procedure_cards(source, unit, source_name)
+            built = self._procedure_cards(
+                source,
+                unit,
+                source_name,
+                skipped_sections=skipped_sections,
+            )
             if not built:
                 skipped.append(self._skip(unit, "EMPTY_AFTER_NORMALIZATION"))
                 continue
             procedure_units.extend(built)
 
+        self._disambiguate_titles(procedure_units)
         canonical_procedures, reuse_count, reused_skips = self._reuse(procedure_units)
         skipped.extend(reused_skips)
+        relationships = self._build_relationships(canonical_procedures)
+        parent_child_collisions = self._mark_parent_child_collisions(
+            canonical_procedures
+        )
         cards.extend(canonical_procedures)
 
         outcome = self._outcome_card(source, units, source_name)
@@ -728,6 +808,43 @@ class ChangeOrderCardBuilder:
             if procedure_source_count
             else 1.0
         )
+        procedure_parents = [
+            card for card in canonical_procedures if not card.parent_unit_id
+        ]
+        procedure_children = [
+            card for card in canonical_procedures if card.parent_unit_id
+        ]
+        indexed_procedures = [
+            card
+            for card in canonical_procedures
+            if card.retrieval_enabled
+            and card.publish_status == PublishStatus.INDEXED.value
+        ]
+        container_procedures = [
+            card
+            for card in canonical_procedures
+            if card.publish_status == PublishStatus.CONTAINER.value
+        ]
+        title_groups: dict[str, set[str]] = {}
+        for card in canonical_procedures:
+            title_groups.setdefault(card.title, set()).add(card.semantic_fingerprint)
+        title_collision_count = sum(
+            1 for fingerprints in title_groups.values() if len(fingerprints) > 1
+        )
+        noop_section_count = sum(
+            1
+            for card in procedure_parents
+            for section in card.semantic_payload.get("operation_sections") or []
+            if section.get("is_noop") is True
+        )
+        relationship_counts = {
+            "validates": sum(
+                item["relation_type"] == "VALIDATES" for item in relationships
+            ),
+            "rollback_of": sum(
+                item["relation_type"] == "ROLLBACK_OF" for item in relationships
+            ),
+        }
         report = {
             "builder": BUILDER_VERSION,
             "card_model_version": CARD_MODEL_VERSION,
@@ -736,12 +853,22 @@ class ChangeOrderCardBuilder:
                 card.card_type is CardType.CASE_CONTEXT for card in cards
             ),
             "procedure_source_step_count": procedure_source_count,
+            "source_procedure_step_count": procedure_source_count,
+            "procedure_parent_count": len(procedure_parents),
+            "procedure_child_count": len(procedure_children),
             "procedure_unit_count": len(canonical_procedures),
+            "indexed_procedure_count": len(indexed_procedures),
+            "container_procedure_count": len(container_procedures),
             "semantic_reuse_count": reuse_count,
             "execution_outcome_count": sum(
                 card.card_type is CardType.EXECUTION_OUTCOME for card in cards
             ),
             "skipped_unit_count": len(skipped),
+            "noop_section_count": noop_section_count,
+            "skipped_child_section_count": len(skipped_sections),
+            "parent_child_retrieval_collision_count": parent_child_collisions,
+            "title_collision_count": title_collision_count,
+            "relationship_count": relationship_counts,
             "structural_source_coverage": {
                 "status": "COMPLETE" if all_refs <= accounted else "INCOMPLETE",
                 "expected_source_items": len(all_refs),
@@ -756,8 +883,10 @@ class ChangeOrderCardBuilder:
             },
             "cards": [card.report_row() for card in cards],
             "skipped_units": skipped,
+            "skipped_sections": skipped_sections,
+            "relationships": relationships,
         }
-        return CardBuildResult(cards, report)
+        return CardBuildResult(cards, report, relationships)
 
     def _context_card(
         self,
@@ -860,6 +989,14 @@ class ChangeOrderCardBuilder:
             source_evidence_refs=_unique_refs(refs),
             source_order=first_unit.chunk.index,
             source_chunk_index=first_unit.chunk.index,
+            publish_status=PublishStatus.INDEXED.value,
+            retrieval_enabled=True,
+            unit_id=content_sha256(
+                {
+                    "card_type": CardType.CASE_CONTEXT.value,
+                    "source_identities": _unique(identities),
+                }
+            ),
         )
         card.finalize()
         return card
@@ -888,6 +1025,8 @@ class ChangeOrderCardBuilder:
         source: dict[str, Any],
         unit: ChangeOrderExtractionUnit,
         source_name: str,
+        *,
+        skipped_sections: list[dict[str, Any]],
     ) -> list[SemanticKnowledgeCard]:
         pointer = unit.source_pointers[0] if unit.source_pointers else unit.pointer
         try:
@@ -921,17 +1060,21 @@ class ChangeOrderCardBuilder:
 
         operation = fields["operate_description"].text
         instance_parameters = self._instance_parameters(record, operation)
-        generalized = operation
-        for key, value in sorted(
-            instance_parameters.items(), key=lambda item: len(str(item[1])), reverse=True
-        ):
-            text = str(value)
-            if len(text) >= 2:
-                generalized = re.sub(
-                    re.escape(text), f"{{{{{key}}}}}", generalized, flags=re.I
-                )
-        title = fields["check_name"].text or f"{unit.procedure_group or 'PROCEDURE'} 步骤 {(unit.step_start_index or 0) + 1}"
         phase = unit.procedure_group or ROLE_TO_PHASE.get(unit.role, "UNMAPPED")
+        source_title = fields["check_name"].text or (
+            f"步骤 {(unit.step_start_index or 0) + 1}"
+        )
+        title = self._phase_aware_title(phase, source_title, operation)
+        generalized = self._generalize_operation(operation, instance_parameters)
+        sections = self._semantic_sections(operation)
+        meaningful_sections = [
+            section for section in sections if self._is_meaningful_child(section)
+        ]
+        should_split = (
+            len(operation) >= self.config.long_step_chars
+            and len(meaningful_sections)
+            >= self.config.semantic_section_threshold
+        )
         attachments = _unique(
             attachment
             for rich in fields.values()
@@ -961,7 +1104,7 @@ class ChangeOrderCardBuilder:
             )
         payload = {
             "title": title,
-            "check_name": title,
+            "check_name": source_title,
             "case_identity": normalize_rich_text(
                 (source.get("data") or {}).get("ticket_id")
                 if isinstance(source.get("data"), dict)
@@ -978,6 +1121,18 @@ class ChangeOrderCardBuilder:
             "operate_command": fields["operate_commond"].text,
             "command_list": command_list,
             "instance_parameters": instance_parameters,
+            "operation_sections": sections,
+            "split_decision": {
+                "clean_content_length": len(operation),
+                "section_count": len(sections),
+                "meaningful_section_count": len(meaningful_sections),
+                "length_gate_passed": len(operation) >= self.config.long_step_chars,
+                "meaningful_gate_passed": (
+                    len(meaningful_sections)
+                    >= self.config.semantic_section_threshold
+                ),
+                "split_published": should_split,
+            },
             "actions": self._procedure_actions(record),
             "attachments": attachments,
             "source_facts": source_facts,
@@ -999,21 +1154,68 @@ class ChangeOrderCardBuilder:
                 }
             },
         }
-        parent = self._make_procedure_card(unit, payload)
-        sections = self._semantic_sections(operation)
-        should_split = len(operation) > self.config.long_step_chars or len(sections) >= self.config.semantic_section_threshold
+        parent = self._make_procedure_card(
+            unit,
+            payload,
+            retrieval_enabled=not should_split,
+            publish_status=(
+                PublishStatus.CONTAINER.value
+                if should_split
+                else PublishStatus.INDEXED.value
+            ),
+        )
+        for section in sections:
+            for subitem in section["subitems"]:
+                skipped_sections.append(
+                    self._section_skip(
+                        unit,
+                        section,
+                        "NESTED_SECTION_RETAINED_AS_SUBITEM",
+                        section_path=subitem["section_path"],
+                    )
+                )
         if not should_split or not sections:
+            for section in sections:
+                skipped_sections.append(
+                    self._section_skip(
+                        unit,
+                        section,
+                        (
+                            "NOOP_SECTION"
+                            if section["is_noop"]
+                            else "SECTION_RETAINED_IN_PARENT"
+                        ),
+                    )
+                )
             return [parent]
         children: list[SemanticKnowledgeCard] = []
         for index, section in enumerate(sections):
+            if not self._is_meaningful_child(section):
+                skipped_sections.append(
+                    self._section_skip(
+                        unit,
+                        section,
+                        (
+                            "NOOP_SECTION"
+                            if section["is_noop"]
+                            else "INSUFFICIENT_INDEPENDENT_VALUE"
+                        ),
+                    )
+                )
+                continue
+            child_operation = self._section_operation(section)
             child_payload = dict(payload)
             child_payload.update(
                 {
                     "title": f"{title} · {section['title']}",
-                    "check_name": f"{title} · {section['title']}",
-                    "operation": section["content"],
-                    "generalized_operation": section["content"],
-                    "parent_source_identity": parent.source_identities[0]["identity"],
+                    "check_name": source_title,
+                    "operation": child_operation,
+                    "generalized_operation": self._generalize_operation(
+                        child_operation, instance_parameters
+                    ),
+                    "operation_sections": [section],
+                    "subitems": section["subitems"],
+                    "parent_source_identity": parent.unit_id,
                     "semantic_section": {
                         "index": index,
                         "label": section["label"],
@@ -1021,7 +1223,15 @@ class ChangeOrderCardBuilder:
                     },
                 }
             )
-            child = self._make_procedure_card(unit, child_payload, section_index=index)
+            child = self._make_procedure_card(
+                unit,
+                child_payload,
+                section_index=index,
+                section_path=section["section_path"],
+                parent_unit_id=parent.unit_id,
+                retrieval_enabled=True,
+                publish_status=PublishStatus.INDEXED.value,
+            )
             children.append(child)
         parent.semantic_payload["child_semantic_fingerprints"] = [
             child.semantic_fingerprint for child in children
@@ -1035,18 +1245,43 @@ class ChangeOrderCardBuilder:
         payload: dict[str, Any],
         *,
         section_index: int | None = None,
+        section_path: list[str] | None = None,
+        parent_unit_id: str = "",
+        retrieval_enabled: bool = True,
+        publish_status: str = PublishStatus.INDEXED.value,
     ) -> SemanticKnowledgeCard:
+        source_identity = _source_identity(
+            unit,
+            section_index=section_index,
+            section_path=section_path,
+        )
+        unit_id = (
+            content_sha256(
+                {
+                    "parent_unit_id": parent_unit_id,
+                    "section_path": section_path or [],
+                }
+            )
+            if parent_unit_id
+            else str(source_identity["identity"])
+        )
+        payload["source_procedure_pointer"] = source_identity["source_pointer"]
         card = SemanticKnowledgeCard(
             card_type=CardType.PROCEDURE_STEP,
             title=str(payload["title"]),
             semantic_payload=payload,
-            source_identities=[_source_identity(unit, section_index=section_index)],
+            source_identities=[source_identity],
             source_evidence_refs=list(unit.source_evidence_refs),
             source_order=unit.chunk.index,
             source_chunk_index=unit.chunk.index,
             procedure_group=unit.procedure_group,
             procedure_step_index=unit.step_start_index,
             applicable_phases=[unit.procedure_group or ROLE_TO_PHASE.get(unit.role, "UNMAPPED")],
+            publish_status=publish_status,
+            retrieval_enabled=retrieval_enabled,
+            unit_id=unit_id,
+            parent_unit_id=parent_unit_id,
+            section_path=list(section_path or []),
         )
         card.finalize()
         return card
@@ -1073,23 +1308,363 @@ class ChangeOrderCardBuilder:
             result.setdefault(key, matched.group("value"))
         return result
 
-    @staticmethod
-    def _semantic_sections(operation: str) -> list[dict[str, str]]:
-        matches = list(_TOP_SECTION.finditer(operation))
+    def _semantic_sections(self, operation: str) -> list[dict[str, Any]]:
+        matches = list(_NUMBERED_SECTION.finditer(operation))
         if not matches:
             return []
-        sections: list[dict[str, str]] = []
-        for index, matched in enumerate(matches):
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(operation)
-            content = operation[matched.start() : end].strip()
+        indentation = [
+            len(matched.group("indent").expandtabs(4)) for matched in matches
+        ]
+        top_indent = min(indentation)
+        top_matches = [
+            matched
+            for matched, indent in zip(matches, indentation)
+            if indent == top_indent
+        ]
+        sections: list[dict[str, Any]] = []
+        for index, matched in enumerate(top_matches):
+            end = (
+                top_matches[index + 1].start()
+                if index + 1 < len(top_matches)
+                else len(operation)
+            )
+            raw_body = operation[matched.end() : end].strip("\n")
+            nested_matches = [
+                item
+                for item in _NUMBERED_SECTION.finditer(raw_body)
+                if len(item.group("indent").expandtabs(4)) > top_indent
+            ]
+            section_body = (
+                raw_body[: nested_matches[0].start()].strip()
+                if nested_matches
+                else raw_body.strip()
+            )
+            subitems: list[dict[str, Any]] = []
+            for subindex, nested in enumerate(nested_matches):
+                subend = (
+                    nested_matches[subindex + 1].start()
+                    if subindex + 1 < len(nested_matches)
+                    else len(raw_body)
+                )
+                subitems.append(
+                    {
+                        "label": nested.group("label"),
+                        "title": nested.group("title").strip(),
+                        "body": raw_body[nested.end() : subend].strip(),
+                        "section_path": [
+                            matched.group("label").rstrip("、.．"),
+                            nested.group("label").rstrip("、.．"),
+                        ],
+                    }
+                )
+            combined = "\n".join(
+                [
+                    section_body,
+                    *[
+                        f"{item['title']}\n{item['body']}".strip()
+                        for item in subitems
+                    ],
+                ]
+            ).strip()
+            case_response = self._noop_response(section_body)
+            actionable = bool(_ACTIONABLE.search(combined)) and not bool(
+                case_response
+            )
+            content_length = len(combined)
             sections.append(
                 {
                     "label": matched.group("label"),
                     "title": matched.group("title").strip(),
-                    "content": content,
+                    "section_title": matched.group("title").strip(),
+                    "section_body": section_body,
+                    "subitems": subitems,
+                    "case_response": case_response,
+                    "is_noop": bool(case_response),
+                    "is_actionable": actionable,
+                    "is_self_contained": (
+                        bool(section_body)
+                        and actionable
+                        and content_length >= self.config.child_min_content_chars
+                    ),
+                    "content_length": content_length,
+                    "section_path": [
+                        matched.group("label").rstrip("、.．")
+                    ],
                 }
             )
         return sections
+
+    @staticmethod
+    def _noop_response(value: str) -> str:
+        compact = unicodedata.normalize("NFKC", value or "").casefold()
+        matched = next((item for item in _NOOP_PHRASES if item in compact), "")
+        if not matched:
+            return ""
+        residual = compact
+        for phrase in _NOOP_PHRASES:
+            residual = residual.replace(phrase, "")
+        residual = re.sub(
+            r"[\s,，。.;；:：!！?？()（）\[\]【】_-]|本项|该项|当前|本次|确认|结果|为",
+            "",
+            residual,
+        )
+        return matched if len(residual) <= 6 else ""
+
+    def _is_meaningful_child(self, section: dict[str, Any]) -> bool:
+        return bool(
+            not section.get("is_noop")
+            and section.get("is_actionable")
+            and section.get("is_self_contained")
+            and int(section.get("content_length") or 0)
+            >= self.config.child_min_content_chars
+            and str(section.get("section_body") or "").strip()
+        )
+
+    @staticmethod
+    def _section_operation(section: dict[str, Any]) -> str:
+        values = [str(section.get("section_body") or "").strip()]
+        for subitem in section.get("subitems") or []:
+            values.append(
+                f"{subitem.get('label', '')} {subitem.get('title', '')}\n"
+                f"{subitem.get('body', '')}".strip()
+            )
+        return "\n".join(value for value in values if value).strip()
+
+    @staticmethod
+    def _generalize_operation(
+        operation: str, instance_parameters: dict[str, Any]
+    ) -> str:
+        generalized = operation
+        for key, value in sorted(
+            instance_parameters.items(),
+            key=lambda item: len(str(item[1])),
+            reverse=True,
+        ):
+            text = str(value)
+            if len(text) >= 2:
+                generalized = re.sub(
+                    re.escape(text), f"{{{{{key}}}}}", generalized, flags=re.I
+                )
+        return generalized
+
+    @staticmethod
+    def _phase_aware_title(phase: str, check_name: str, operation: str) -> str:
+        labels = {
+            "PRECHECK": "前检",
+            "IMPLEMENTATION": "实施",
+            "VALIDATION": "验证",
+            "ROLLBACK": "回退",
+            "UNMAPPED": "步骤",
+        }
+        title = check_name.strip() or "未命名步骤"
+        if phase == "ROLLBACK" and re.search(
+            r"(?:恢复|还原|回退|原值|旧值|\bold\b|new\s*(?:->|→)\s*old)",
+            operation,
+            re.I,
+        ):
+            if title.startswith("修改"):
+                title = f"恢复{title.removeprefix('修改')}原值"
+            elif title.startswith("设置"):
+                title = f"恢复{title.removeprefix('设置')}原值"
+            elif title.startswith("删除"):
+                title = f"恢复已删除的{title.removeprefix('删除')}"
+        return f"{labels.get(phase, phase or '步骤')}：{title}"
+
+    @staticmethod
+    def _section_skip(
+        unit: ChangeOrderExtractionUnit,
+        section: dict[str, Any],
+        reason: str,
+        *,
+        section_path: list[str] | None = None,
+    ) -> dict[str, Any]:
+        first = unit.source_evidence_refs[0]
+        return {
+            "source_pointer": first.pointer,
+            "source_hash": first.content_sha256,
+            "section_path": list(section_path or section.get("section_path") or []),
+            "section_title": section.get("section_title") or section.get("title"),
+            "is_noop": bool(section.get("is_noop")),
+            "content_length": int(section.get("content_length") or 0),
+            "skip_reason": reason,
+        }
+
+    def _disambiguate_titles(self, cards: list[SemanticKnowledgeCard]) -> None:
+        groups: dict[str, list[SemanticKnowledgeCard]] = {}
+        for card in cards:
+            groups.setdefault(card.title, []).append(card)
+        for same_title in groups.values():
+            fingerprints = {card.semantic_fingerprint for card in same_title}
+            if len(same_title) < 2 or len(fingerprints) < 2:
+                continue
+            used: set[str] = set()
+            for card in same_title:
+                qualifier = self._title_qualifier(card.semantic_payload)
+                candidate = f"{card.title} · {qualifier}"
+                if candidate in used:
+                    operation_hash = content_sha256(
+                        card.semantic_payload.get("operation") or ""
+                    )[:8]
+                    candidate = f"{candidate} · {operation_hash}"
+                used.add(candidate)
+                card.title = candidate
+                card.semantic_payload["title"] = candidate
+                card.finalize()
+
+    @staticmethod
+    def _title_qualifier(payload: dict[str, Any]) -> str:
+        signature = ChangeOrderCardBuilder._relationship_signature(payload)
+        targets = signature["targets"]
+        if targets:
+            return str(targets[0])[:28]
+        operation = str(payload.get("operation") or "")
+        first_line = next(
+            (line.strip() for line in operation.splitlines() if line.strip()),
+            "不同目标",
+        )
+        return first_line[:28]
+
+    @staticmethod
+    def _relationship_signature(payload: dict[str, Any]) -> dict[str, Any]:
+        operation = "\n".join(
+            str(value)
+            for value in (
+                payload.get("operation"),
+                payload.get("validation"),
+                payload.get("rollback"),
+            )
+            if value
+        )
+        targets = {
+            _normalized_identity(matched.group(0))
+            for matched in _RELATION_TARGET.finditer(operation)
+            if _normalized_identity(matched.group(0))
+        }
+        targets.update(
+            _normalized_identity(key)
+            for key in (payload.get("instance_parameters") or {})
+            if _normalized_identity(key)
+        )
+        targets.update(
+            _normalized_identity(str(action))
+            for action in (payload.get("actions") or [])
+            if _normalized_identity(str(action))
+        )
+        transition_match = _TRANSITION.search(operation)
+        transition = (
+            {
+                "from": _normalized_identity(transition_match.group("old")),
+                "to": _normalized_identity(transition_match.group("new")),
+            }
+            if transition_match
+            else None
+        )
+        expected = {
+            _normalized_identity(matched.group("value"))
+            for matched in _EXPECTED_VALUE.finditer(operation)
+            if _normalized_identity(matched.group("value"))
+        }
+        return {
+            "targets": sorted(targets),
+            "transition": transition,
+            "expected_values": sorted(expected),
+        }
+
+    def _build_relationships(
+        self, cards: list[SemanticKnowledgeCard]
+    ) -> list[dict[str, Any]]:
+        relationships: list[dict[str, Any]] = []
+        implementations = [
+            card
+            for card in cards
+            if "IMPLEMENTATION" in card.applicable_phases
+            and card.retrieval_enabled
+        ]
+        for card in cards:
+            signature = self._relationship_signature(card.semantic_payload)
+            card.semantic_payload["relationship_signature"] = signature
+            card.semantic_payload.setdefault("validates", [])
+            card.semantic_payload.setdefault("rollback_of", [])
+            if not card.retrieval_enabled:
+                card.finalize()
+                continue
+            for implementation in implementations:
+                if implementation.unit_id == card.unit_id:
+                    continue
+                target_signature = self._relationship_signature(
+                    implementation.semantic_payload
+                )
+                common_targets = set(signature["targets"]) & set(
+                    target_signature["targets"]
+                )
+                if not common_targets:
+                    continue
+                target_transition = target_signature.get("transition")
+                if (
+                    "VALIDATION" in card.applicable_phases
+                    and target_transition
+                    and target_transition["to"]
+                    in set(signature["expected_values"])
+                ):
+                    card.semantic_payload["validates"].append(
+                        implementation.unit_id
+                    )
+                    relationships.append(
+                        {
+                            "source_unit_id": card.unit_id,
+                            "target_unit_id": implementation.unit_id,
+                            "relation_type": "VALIDATES",
+                            "confidence": 1.0,
+                            "reason": "operation target 一致且验证期望值等于实施目标值",
+                        }
+                    )
+                transition = signature.get("transition")
+                if (
+                    "ROLLBACK" in card.applicable_phases
+                    and transition
+                    and target_transition
+                    and transition["from"] == target_transition["to"]
+                    and transition["to"] == target_transition["from"]
+                ):
+                    card.semantic_payload["rollback_of"].append(
+                        implementation.unit_id
+                    )
+                    relationships.append(
+                        {
+                            "source_unit_id": card.unit_id,
+                            "target_unit_id": implementation.unit_id,
+                            "relation_type": "ROLLBACK_OF",
+                            "confidence": 1.0,
+                            "reason": "operation target 一致且参数变更方向完全相反",
+                        }
+                    )
+            card.semantic_payload["validates"] = _unique(
+                card.semantic_payload["validates"]
+            )
+            card.semantic_payload["rollback_of"] = _unique(
+                card.semantic_payload["rollback_of"]
+            )
+            card.finalize()
+        return relationships
+
+    @staticmethod
+    def _mark_parent_child_collisions(
+        cards: list[SemanticKnowledgeCard],
+    ) -> int:
+        parents = {card.unit_id: card for card in cards if not card.parent_unit_id}
+        collisions = 0
+        for child in (card for card in cards if card.parent_unit_id):
+            parent = parents.get(child.parent_unit_id)
+            collision = bool(
+                parent
+                and parent.retrieval_enabled
+                and child.retrieval_enabled
+            )
+            child.qa["parent_child_retrieval_collision"] = collision
+            if parent is not None and collision:
+                parent.qa["parent_child_retrieval_collision"] = True
+                collisions += 1
+        return collisions
 
     def _reuse(
         self, cards: list[SemanticKnowledgeCard]
@@ -1098,12 +1673,27 @@ class ChangeOrderCardBuilder:
         skipped: list[dict[str, Any]] = []
         reuse_count = 0
         for candidate in cards:
+            if not candidate.retrieval_enabled:
+                canonical.append(candidate)
+                continue
             matched: SemanticKnowledgeCard | None = None
             matched_similarity = 0.0
             candidate_text = _normalized_identity(
                 _comparison_text(candidate.semantic_payload)
             )
             for existing in canonical:
+                if not existing.retrieval_enabled:
+                    continue
+                candidate_pointer = candidate.semantic_payload.get(
+                    "source_procedure_pointer"
+                )
+                existing_pointer = existing.semantic_payload.get(
+                    "source_procedure_pointer"
+                )
+                if candidate_pointer and candidate_pointer == existing_pointer:
+                    # Siblings and their parent are deterministic lineage, not
+                    # independent candidates for fuzzy semantic de-duplication.
+                    continue
                 if candidate.semantic_fingerprint == existing.semantic_fingerprint:
                     matched, matched_similarity = existing, 1.0
                     break
@@ -1224,7 +1814,17 @@ class ChangeOrderCardBuilder:
             source_evidence_refs=refs,
             source_order=min(unit.chunk.index for unit in outcome_units),
             source_chunk_index=min(unit.chunk.index for unit in outcome_units),
+            publish_status=PublishStatus.INDEXED.value,
+            retrieval_enabled=True,
             planning_rag_enabled=False,
+            unit_id=content_sha256(
+                {
+                    "card_type": CardType.EXECUTION_OUTCOME.value,
+                    "source_identities": [
+                        _source_identity(unit) for unit in outcome_units
+                    ],
+                }
+            ),
         )
         card.finalize()
         return card

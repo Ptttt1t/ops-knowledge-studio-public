@@ -113,5 +113,41 @@
     "timestamp": 1785772800000,
     "timezone": "Asia/Shanghai",
     "expected": "2026-08-04 00:00:00"
+  },
+  "case_i": {
+    "check_name": "Synthetic readiness checklist",
+    "operate_description": "1. Alarm check\nCheck active synthetic alarms and record the result.\n2. Probe check\nExecute the synthetic probe and verify the response.\n3. Capacity check\n不涉及\n4. Performance check\n不涉及\n5. Component check\n不涉及"
+  },
+  "case_j": {
+    "check_name": "Synthetic analysis template",
+    "operate_description": "1. Capacity analysis\n不涉及\n2. Version analysis\n不涉及\n3. API analysis\n不涉及\n4. Monitoring analysis\nCheck the synthetic monitoring panel.\n5. High-risk analysis\n不涉及\n6. Customer impact analysis\n无业务影响\n7. Configuration analysis\nVerify the synthetic configuration snapshot.\n8. Backup analysis\n无需操作\n9. Dependency analysis\n不涉及"
+  },
+  "case_k": {
+    "check_name": "Synthetic nested backup checklist",
+    "operate_description": "8. Configuration check\nCheck the synthetic configuration.\n9. Backup\nConfirm the backup policy.\n   1. Backup rule A\n   Export a synthetic configuration snapshot.\n   2. Backup rule B\n   Verify the synthetic recovery parameters."
+  },
+  "case_l": {
+    "check_name": "Synthetic long independent procedure",
+    "section_titles": [
+      "Prepare synthetic capacity",
+      "Update synthetic configuration",
+      "Verify synthetic component"
+    ],
+    "body_seed": "Execute the independent synthetic operation, verify its explicit target, record the result, and preserve a dedicated rollback checkpoint. "
+  },
+  "case_m": {
+    "implementation": {
+      "check_name": "修改系统参数",
+      "operate_description": "Set parameter X from old -> new and save the synthetic configuration."
+    },
+    "rollback": {
+      "check_name": "修改系统参数",
+      "operate_description": "Restore parameter X from new -> old and verify the synthetic configuration."
+    }
+  },
+  "case_n": {
+    "implementation": "Set parameter X from old -> new and save the synthetic configuration.",
+    "validation": "Verify parameter X == new in the synthetic configuration.",
+    "rollback": "Restore parameter X from new -> old and verify the synthetic configuration."
   }
 }

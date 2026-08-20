@@ -38,6 +38,7 @@ let knowledgeGraphData = { nodes: [], edges: [], meta: {} };
 let knowledgeGraphSelectedId = "";
 let knowledgeGraphFrame = null;
 let knowledgeGraphTransform = { x: 0, y: 0, scale: 1 };
+let platformConfig = {};
 const accessTokenKey = "ops-knowledge-studio-access-token";
 let accessToken = sessionStorage.getItem(accessTokenKey) || "";
 
@@ -461,6 +462,8 @@ function caseBundleHtml(bundle, reviewMode = false) {
   const actions = `${canApprove ? `
     <button class="button primary small" data-bundle-action="approve" data-case-id="${escapeHtml(bundle.case_id)}">整包批准</button>` : ""}${canReject ? `
     <button class="button danger small" data-bundle-action="reject" data-case-id="${escapeHtml(bundle.case_id)}">整包驳回</button>` : ""}`;
+  const rebuildAction = platformConfig.demo_management?.rebuild_enabled ? `
+    <button class="button warning small" data-bundle-action="rebuild" data-case-id="${escapeHtml(bundle.case_id)}">重建当前案例</button>` : "";
   return `<article class="case-bundle">
     <div class="bundle-heading">
       <div><p class="eyebrow">CHANGE CASE BUNDLE</p><h3>${escapeHtml(bundle.title || bundle.source_name)}</h3></div>
@@ -475,7 +478,7 @@ function caseBundleHtml(bundle, reviewMode = false) {
       <p class="bundle-identity">${escapeHtml(bundle.case_id)}<br>${escapeHtml(bundle.source_ref)}</p>
     </details>
     <div class="card-actions">
-      <button class="button secondary small" data-bundle-action="detail" data-case-id="${escapeHtml(bundle.case_id)}">展开整包</button>${actions}
+      <button class="button secondary small" data-bundle-action="detail" data-case-id="${escapeHtml(bundle.case_id)}">展开整包</button>${actions}${rebuildAction}
     </div>
   </article>`;
 }
@@ -501,6 +504,7 @@ async function refreshHealth() {
     api("/api/memory/status?probe=true"),
   ]);
   const configured = data.config.api_configured;
+  platformConfig = data.config || {};
   document.getElementById("api-dot").classList.toggle("ok", configured);
   document.getElementById("api-status").textContent = configured ? "API 已配置" : "等待填写 API";
   document.getElementById("model-name").textContent = data.config.model;
@@ -580,6 +584,9 @@ const graphRelationLabels = {
   CANDIDATE_VERSION_OF: "候选新版本",
   SUPERSEDES: "替代",
   RELATED_TO: "相关于",
+  VALIDATES: "验证",
+  ROLLBACK_OF: "回退对应",
+  CHILD_OF: "章节属于",
 };
 
 function graphSvgElement(name, attributes = {}) {
@@ -970,7 +977,8 @@ async function loadKnowledgeGraph() {
 
 async function refreshAll() {
   try {
-    await Promise.all([refreshHealth(), refreshStats(), loadRecent(), loadReviewQueue(), loadLibrary()]);
+    await refreshHealth();
+    await Promise.all([refreshStats(), loadRecent(), loadReviewQueue(), loadLibrary()]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -995,6 +1003,7 @@ window.showDetail = async function showDetail(id) {
         ${field("适用版本", card.applicable_versions)}${field("前置条件", card.prerequisites)}${field("操作步骤", card.procedure_steps)}
         ${field("风险", card.risks)}${field("回退", card.rollback_steps)}${field("验证", card.validation_steps)}
         ${field("通用化操作", card.generalized_operation || "")}${field("影响分析", card.impact_analysis || "")}${field("适用阶段", card.applicable_phases || [])}
+        ${field("Operation Sections", JSON.stringify(card.operation_sections || [], null, 2))}${field("检索启用", card.retrieval_enabled !== false ? "是" : "否")}
         ${field("原文证据", card.evidence_quote)}${field("证据位置", card.evidence_locator)}${field("来源", card.source_ref)}
         ${field("逐源覆盖", coverage)}${field("结构证据矩阵", sourceEvidence)}
         ${field("比较判断", `${card.comparison_label} (${card.comparison_confidence})：${card.comparison_reason}`)}
@@ -1027,9 +1036,17 @@ async function showCaseBundle(caseId) {
   const bundle = await api(`/api/knowledge-case-bundles/${encodeURIComponent(caseId)}`);
   const coverage = bundle.extraction_report?.structural_source_coverage || bundle.extraction_report?.content_coverage || {};
   const cards = bundle.cards || [];
+  const report = bundle.extraction_report?.card_build_report || {};
+  const rebuild = report.rebuild || {};
+  const rebuildSummary = rebuild.is_rebuild ? `
+      <dt>最近重建</dt><dd>Generation ${escapeHtml(rebuild.previous_generation)} → ${escapeHtml(rebuild.current_generation)} · ${escapeHtml(rebuild.previous_card_count)} → ${escapeHtml(rebuild.new_card_count)} 张卡</dd>
+      <dt>重建后类型</dt><dd>CASE_CONTEXT ${escapeHtml(report.case_context_count ?? 0)} · PROCEDURE_STEP ${escapeHtml(report.procedure_unit_count ?? 0)} · EXECUTION_OUTCOME ${escapeHtml(report.execution_outcome_count ?? 0)}</dd>
+      <dt>重建诊断</dt><dd>Semantic Reuse ${escapeHtml(report.semantic_reuse_count ?? 0)} · Skipped Sections ${escapeHtml(report.skipped_child_section_count ?? 0)}</dd>` : "";
+  const rebuildAction = platformConfig.demo_management?.rebuild_enabled ? `
+      <button class="button warning" data-bundle-action="rebuild" data-case-id="${escapeHtml(bundle.case_id)}">重建当前案例</button>` : "";
   document.getElementById("dialog-content").innerHTML = `
     <p class="eyebrow">CHANGE CASE BUNDLE</p><h2>${escapeHtml(bundle.title)}</h2>
-    <div class="card-meta"><span class="tag ${escapeHtml(bundle.status)}">${statusLabels[bundle.status] || escapeHtml(bundle.status)}</span><span class="tag">${cards.length} 张原子卡</span><span class="tag">覆盖 ${escapeHtml(coverage.status || "未评估")}</span></div>
+    <div class="card-meta"><span class="tag ${escapeHtml(bundle.status)}">${statusLabels[bundle.status] || escapeHtml(bundle.status)}</span><span class="tag">${cards.length} 张原子卡</span><span class="tag">Generation ${escapeHtml(bundle.build_generation || 1)}</span><span class="tag">覆盖 ${escapeHtml(coverage.status || "未评估")}</span></div>
     <dl class="detail-grid">
       <dt>案例包 ID</dt><dd>${escapeHtml(bundle.case_id)}</dd>
       <dt>来源</dt><dd>${escapeHtml(bundle.source_ref)}</dd>
@@ -1037,7 +1054,12 @@ async function showCaseBundle(caseId) {
       <dt>原子卡状态</dt><dd>${escapeHtml(Object.entries(bundle.status_counts || {}).map(([key, value]) => `${statusLabels[key] || key} ${value}`).join(" · "))}</dd>
       <dt>结构来源覆盖</dt><dd>${escapeHtml(`${coverage.accounted_source_items ?? coverage.mapped_source_items ?? "-"}/${coverage.expected_source_items ?? "-"} 条源记录`)}</dd>
       <dt>语义内容覆盖</dt><dd>${escapeHtml(bundle.extraction_report?.semantic_content_coverage?.status || "未评估")}</dd>
+      <dt>Builder Version</dt><dd>${escapeHtml(bundle.builder_version || report.builder || "-")}</dd>
+      <dt>Card Model Version</dt><dd>${escapeHtml(bundle.card_model_version || report.card_model_version || "-")}</dd>
+      ${rebuildSummary}
     </dl>
+    <div class="card-actions">${rebuildAction}</div>
+    <details><summary>查看 card_build_report</summary><pre>${escapeHtml(JSON.stringify(report, null, 2))}</pre></details>
     <div class="bundle-card-list">${cards.map(card => cardHtml(card)).join("")}</div>`;
   document.getElementById("detail-dialog").showModal();
 }
@@ -1054,6 +1076,19 @@ async function reviewCaseBundle(caseId, action) {
   await refreshAll();
 }
 
+async function rebuildCaseBundle(caseId) {
+  if (!window.confirm("将删除当前案例已生成的知识卡、审核状态、索引和缓存，并使用当前版本逻辑重新生成。原始上传 JSON 不会删除。\n\n确认重建当前案例？")) return;
+  const result = await api(`/api/knowledge-case-bundles/${encodeURIComponent(caseId)}/rebuild`, {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "REBUILD_CURRENT_CASE" }),
+  });
+  const report = result.card_build_report || {};
+  const rebuild = report.rebuild || {};
+  toast(`重建完成：${rebuild.previous_card_count ?? "-"} → ${rebuild.new_card_count ?? result.extracted_cards} 张卡`);
+  await refreshAll();
+  await showCaseBundle(caseId);
+}
+
 document.addEventListener("click", event => {
   const button = event.target.closest("[data-bundle-action]");
   if (!button) return;
@@ -1061,6 +1096,8 @@ document.addEventListener("click", event => {
   const action = button.dataset.bundleAction;
   const task = action === "detail"
     ? showCaseBundle(caseId)
+    : action === "rebuild"
+    ? rebuildCaseBundle(caseId)
     : reviewCaseBundle(caseId, action);
   task.catch(error => toast(error.message, true));
 });

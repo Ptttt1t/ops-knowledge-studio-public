@@ -223,6 +223,12 @@ class MindMemOSBridge:
                 "card_id": card_id,
                 "memory_count": 0,
             }
+        if card.get("retrieval_enabled") is False:
+            return {
+                "status": "SKIPPED_RETRIEVAL_DISABLED",
+                "card_id": card_id,
+                "memory_count": 0,
+            }
         if not self.enabled:
             return {"status": "DISABLED", "card_id": card_id, "memory_count": 0}
         if not self.configured:
@@ -391,11 +397,13 @@ class MindMemOSBridge:
             "stats": self.store.memory_sync_stats(self.BACKEND),
         }
 
-    def cleanup_retired_memories(self, *, limit: int = 100) -> dict[str, Any]:
+    def cleanup_retired_memories(
+        self, *, limit: int = 100, case_id: str | None = None
+    ) -> dict[str, Any]:
         removed = 0
         failed = 0
         for item in self.store.list_memory_retirements(
-            backend=self.BACKEND, limit=limit
+            backend=self.BACKEND, limit=limit, case_id=case_id
         ):
             memory_id = str(item["memory_id"])
             try:

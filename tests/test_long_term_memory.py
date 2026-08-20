@@ -166,6 +166,20 @@ class LongTermMemoryTests(unittest.TestCase):
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE memory_retirements (
+                        backend TEXT NOT NULL,
+                        memory_id TEXT NOT NULL,
+                        card_id INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(backend, memory_id)
+                    )
+                    """
+                )
                 connection.commit()
             finally:
                 connection.close()
@@ -178,9 +192,16 @@ class LongTermMemoryTests(unittest.TestCase):
                         "PRAGMA table_info(memory_sync_state)"
                     ).fetchall()
                 }
+                retirement_columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(memory_retirements)"
+                    ).fetchall()
+                }
             self.assertTrue(
                 {"owner_token", "lease_expires_at", "attempt"}.issubset(columns)
             )
+            self.assertIn("case_id", retirement_columns)
 
     def test_approved_card_sync_is_idempotent_and_semantic_recall_is_governed(self):
         with tempfile.TemporaryDirectory() as directory:

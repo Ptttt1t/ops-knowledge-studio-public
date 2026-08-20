@@ -58,6 +58,7 @@ h2 { margin-bottom: 0; font-size: 19px; font-weight: 600; }
 .button.primary:hover { background: #15563e; }
 .button.secondary { border-color: var(--line); color: var(--ink); background: var(--panel); }
 .button.danger { color: var(--red); border-color: #e7c9c5; background: #fff7f5; }
+.button.warning { color: #7a4b00; border-color: #e5c37b; background: #fff8e8; }
 .button.small { padding: 7px 10px; font-size: 12px; }
 .page { display: none; }
 .page.active { display: block; animation: enter .2s ease-out; }

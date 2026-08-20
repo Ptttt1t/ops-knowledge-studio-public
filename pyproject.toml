@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ops-knowledge-studio"
-version = "1.4.0"
+version = "1.5.0"
 description = "DeepSeek-powered operations knowledge engineering and governance platform"
 requires-python = ">=3.10,<3.14"
 dependencies = [
