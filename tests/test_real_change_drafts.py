@@ -10,6 +10,7 @@ import time
 import unittest
 from urllib.request import Request, urlopen
 
+from harness.api_client import JSONOutputError
 from knowledge_platform.change_drafts import ChangeDraftError, GENERATION_SYSTEM_PROMPT
 from knowledge_platform.retrieval import SearchHit
 from knowledge_platform.service import KnowledgeService
@@ -33,11 +34,19 @@ ROLE_FIELD = {
 
 
 class RealDraftClient(StructuralFakeClient):
-    def __init__(self, *, invalid_first: bool = False, always_invalid: bool = False):
+    def __init__(
+        self,
+        *,
+        invalid_first: bool = False,
+        always_invalid: bool = False,
+        malformed_first: bool = False,
+    ):
         super().__init__()
         self.invalid_first = invalid_first
         self.always_invalid = always_invalid
+        self.malformed_first = malformed_first
         self.generation_calls: list[tuple[str, str]] = []
+        self.generation_kwargs: list[dict] = []
 
     @staticmethod
     def _value(type_name: str, label: str):
@@ -55,6 +64,13 @@ class RealDraftClient(StructuralFakeClient):
         if system_prompt != GENERATION_SYSTEM_PROMPT:
             return super().chat_json(system_prompt, user_prompt, **kwargs)
         self.generation_calls.append((system_prompt, user_prompt))
+        self.generation_kwargs.append(dict(kwargs))
+        if self.malformed_first and len(self.generation_calls) == 1:
+            invalid_output = '{"title":"broken"'
+            try:
+                json.loads(invalid_output)
+            except json.JSONDecodeError as exc:
+                raise JSONOutputError(exc, raw_output=invalid_output) from exc
         if self.always_invalid or (self.invalid_first and len(self.generation_calls) == 1):
             return {"invalid": True}, {"total_tokens": 5}
         prompt = json.loads(user_prompt.split("\n\n", 1)[0])
@@ -298,6 +314,39 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertEqual(len(client.generation_calls), 2)
             self.assertEqual(failed["status"], "GENERATION_FAILED")
             self.assertIsNone(failed["revision"])
+
+    def test_malformed_json_gets_one_explicit_protocol_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient(malformed_first=True)
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            self.assertEqual(generated["status"], "READY_FOR_REVIEW")
+            self.assertEqual(len(client.generation_calls), 2)
+            self.assertTrue(
+                all(call.get("retries") == 0 for call in client.generation_kwargs)
+            )
+            self.assertTrue(
+                all(
+                    call.get("max_tokens")
+                    == service.settings.change_generation_max_output_tokens
+                    for call in client.generation_kwargs
+                )
+            )
+            self.assertIn(
+                '"previous_output":"{\\"title\\":\\"broken\\""',
+                client.generation_calls[1][1],
+            )
 
     def test_profile_conflict_and_unbound_specific_parameters_are_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

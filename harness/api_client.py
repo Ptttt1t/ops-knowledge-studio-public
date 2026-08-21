@@ -13,6 +13,36 @@ class APIError(RuntimeError):
     """Raised when a DeepSeek API request fails or is malformed."""
 
 
+class JSONOutputError(APIError):
+    """Raised when a model response contains text that is not valid JSON.
+
+    ``raw_output`` is kept in memory so a caller can make one explicit protocol
+    repair request. The response body is deliberately excluded from the error
+    message because it can contain private business data.
+    """
+
+    def __init__(self, error: Exception, *, raw_output: str = ""):
+        self.raw_output = raw_output
+        self.output_chars = len(raw_output)
+        position = getattr(error, "pos", None)
+        self.error_position = position if isinstance(position, int) else None
+        self.near_output_end = (
+            self.error_position is not None
+            and self.error_position >= max(0, self.output_chars - 8)
+        )
+        diagnostics = [f"output_chars={self.output_chars}"]
+        if self.error_position is not None:
+            diagnostics.extend(
+                (
+                    f"error_pos={self.error_position}",
+                    f"near_output_end={str(self.near_output_end).lower()}",
+                )
+            )
+        super().__init__(
+            f"DeepSeek JSON Output 解析失败: {error}; " + ", ".join(diagnostics)
+        )
+
+
 def _read_limited(stream: Any, maximum: int, *, label: str) -> bytes:
     headers = getattr(stream, "headers", None)
     if headers is not None:
@@ -183,6 +213,7 @@ class DeepSeekClient:
             {"role": "user", "content": user_prompt},
         ]
         last_error: Exception | None = None
+        last_content = ""
 
         for attempt in range(retries + 1):
             message, usage = self.chat(
@@ -193,12 +224,14 @@ class DeepSeekClient:
             )
             content = message.get("content")
             if isinstance(content, str) and content.strip():
+                last_content = content.strip()
                 try:
-                    return _extract_json(content), usage
+                    return _extract_json(last_content), usage
                 except json.JSONDecodeError as exc:
                     last_error = exc
             else:
                 last_error = APIError("JSON Output 返回了空内容")
+                last_content = ""
 
             if attempt < retries:
                 messages.append({"role": "assistant", "content": content or ""})
@@ -210,7 +243,10 @@ class DeepSeekClient:
                 )
                 time.sleep(0.1)
 
-        raise APIError(f"DeepSeek JSON Output 解析失败: {last_error}")
+        raise JSONOutputError(
+            last_error or APIError("未知 JSON 解析错误"),
+            raw_output=last_content,
+        )
 
 
 # Backward-compatible name for code that imported the original harness client.

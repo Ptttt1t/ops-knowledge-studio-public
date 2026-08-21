@@ -201,6 +201,7 @@ class Settings:
     change_draft_database_path: Path | None = None
     change_generation_max_case_bundles: int = 3
     change_generation_max_context_cards: int = 24
+    change_generation_max_output_tokens: int = 8192
 
     @property
     def api_configured(self) -> bool:
@@ -289,6 +290,7 @@ class Settings:
                 "enabled": self.real_change_generation_enabled,
                 "max_case_bundles": self.change_generation_max_case_bundles,
                 "max_context_cards": self.change_generation_max_context_cards,
+                "max_output_tokens": self.change_generation_max_output_tokens,
                 "unauthenticated_pilot": self.demo_mode,
             },
             "demo_management": {
@@ -648,6 +650,9 @@ class Settings:
             ),
             change_generation_max_context_cards=_read_int(
                 values, "CHANGE_GENERATION_MAX_CONTEXT_CARDS", 24
+            ),
+            change_generation_max_output_tokens=_read_int(
+                values, "CHANGE_GENERATION_MAX_OUTPUT_TOKENS", 8192
             ),
         )
         if settings.change_max_active_sessions > settings.change_max_retained_sessions:

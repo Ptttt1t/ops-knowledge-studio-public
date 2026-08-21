@@ -168,6 +168,7 @@ REAL_CHANGE_GENERATION_ENABLED=true
 CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
+CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
 ```
 
 页面先推荐最多三个完整且为 `APPROVED` 的案例包，操作者确认后才异步生成。模型只输出规范化草案，真实 `action_list`、分组任务视图和 `ExecutionResult` 由程序装配并硬校验；只有 `REVIEW_APPROVED` revision 可以下载 `change_order_draft.json` 和 `provenance_report.json`。留一案例盲测会隔离目标及近重复案例，生成后才读取隐藏答案并输出 `evaluation_report.json`。

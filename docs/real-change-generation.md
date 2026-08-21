@@ -54,6 +54,7 @@ REAL_CHANGE_GENERATION_ENABLED=true
 CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
+CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
 ```
 
 重启 `python run.py serve` 后打开左侧 **真实变更生成 BETA**。页面会同时显示功能开关、活动 Profile 和来源案例；任一条件缺失都会禁止推荐和生成。

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen as http_urlopen
 from urllib.error import HTTPError
 
-from harness.api_client import APIError, DeepSeekClient
+from harness.api_client import APIError, DeepSeekClient, JSONOutputError
 from harness.config import ConfigurationError, Settings
 from harness.run_store import RunStore
 from harness.runtime import HarnessRuntime
@@ -234,6 +234,40 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(captured["payload"]["response_format"], {"type": "json_object"})
             self.assertEqual(captured["payload"]["thinking"], {"type": "disabled"})
             self.assertEqual(captured["authorization"], "Bearer test-key")
+
+    def test_deepseek_json_error_keeps_raw_output_out_of_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = make_settings(Path(directory))
+            invalid_output = '{"private_case":"synthetic-value"'
+
+            def fake_urlopen(_request, timeout):
+                self.assertGreater(timeout, 0)
+                return FakeHTTPResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": invalid_output,
+                                }
+                            }
+                        ],
+                        "usage": {"total_tokens": 8},
+                    }
+                )
+
+            with patch("harness.api_client.urlopen", fake_urlopen):
+                with self.assertRaises(JSONOutputError) as raised:
+                    DeepSeekClient(settings).chat_json(
+                        "请输出 json 对象", "json 输入", retries=0
+                    )
+
+            error = raised.exception
+            self.assertEqual(error.raw_output, invalid_output)
+            self.assertTrue(error.near_output_end)
+            self.assertIn("output_chars=", str(error))
+            self.assertIn("near_output_end=true", str(error))
+            self.assertNotIn("synthetic-value", str(error))
 
     def test_deepseek_retries_transient_http_error(self):
         with tempfile.TemporaryDirectory() as directory:

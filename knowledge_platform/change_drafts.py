@@ -24,6 +24,7 @@ GENERATION_SYSTEM_PROMPT = """你是公司内网的真实 ChangeOrder 草案生�
 你只生成规范化草案 JSON，不得生成 Markdown，也不得直接生成 action_list 的分组副本或 ExecutionResult。
 每个任务、步骤和风险必须带 source_refs 或 input_refs。source_refs 只能使用提示中列出的 card_id、字段和索引；input_refs 只能指向结构化需求字段。
 任务 record 必须包含 SchemaProfile 声明的全部 TaskRecord 字段；四类 Procedure record 必须包含全部 ProcedureStep 字段。缺失值写入 missing_fields，禁止猜测。
+输出必须是一个完整、合法、紧凑的 JSON 对象；不要输出代码围栏、注释或 JSON 前后的解释文字。
 
 输出格式：
 {
@@ -1763,6 +1764,7 @@ class RealChangeDraftService:
                 }
             )
             validation_error = ""
+            previous_protocol_output: Any = None
             usage: dict[str, Any] | None = None
             normalized: dict[str, Any] | None = None
             change_json: dict[str, Any] | None = None
@@ -1770,13 +1772,27 @@ class RealChangeDraftService:
             for attempt in range(2):
                 user_prompt = prompt
                 if attempt:
-                    user_prompt += f"\n\n上一次输出未通过协议：{validation_error}。只修复协议错误，不增加无来源内容。"
+                    repair_context = stable_json(
+                        {
+                            "protocol_error": validation_error,
+                            "previous_output": previous_protocol_output,
+                        }
+                    )
+                    user_prompt += (
+                        "\n\n上一次输出未通过协议。下面内容只用于修复，不能作为新事实。"
+                        "请返回修复后的完整 JSON 对象，不要只返回差异，不增加无来源内容：\n"
+                        + repair_context
+                    )
                 try:
                     payload, usage = self.knowledge.client.chat_json(
-                        GENERATION_SYSTEM_PROMPT, user_prompt
+                        GENERATION_SYSTEM_PROMPT,
+                        user_prompt,
+                        retries=0,
+                        max_tokens=self.knowledge.settings.change_generation_max_output_tokens,
                     )
                 except Exception as exc:
                     validation_error = f"模型请求失败：{exc}"
+                    previous_protocol_output = getattr(exc, "raw_output", None)
                     if attempt:
                         raise
                     continue
@@ -1790,6 +1806,7 @@ class RealChangeDraftService:
                     break
                 except ChangeDraftError as exc:
                     validation_error = str(exc)
+                    previous_protocol_output = payload
                     if attempt:
                         raise
             assert normalized is not None and change_json is not None and provenance is not None
