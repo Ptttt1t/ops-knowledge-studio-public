@@ -45,6 +45,9 @@
     "purged_index_count": 28,
     "purged_fingerprint_count": 25,
     "purged_long_term_memory_count": 0,
+    "invalidated_semantic_proposal_count": 2,
+    "invalidated_canonical_count": 1,
+    "reactivated_semantic_source_count": 1,
     "invalidated_change_draft_count": 0,
     "archived_report_path": "artifacts/change_order_card_reports/<synthetic-sha256>/card_build_report.generation-2.json"
   },

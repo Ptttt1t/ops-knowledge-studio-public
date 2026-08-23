@@ -119,6 +119,42 @@ class KnowledgeStore:
             UNIQUE(card_id, related_card_id, relation_type)
         );
 
+        CREATE TABLE IF NOT EXISTS semantic_merge_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            pair_key TEXT NOT NULL UNIQUE,
+            -- Source IDs are immutable audit references. They deliberately do not
+            -- cascade when a Demo rebuild replaces the source cards.
+            left_card_id INTEGER NOT NULL,
+            right_card_id INTEGER NOT NULL,
+            left_fingerprint TEXT NOT NULL,
+            right_fingerprint TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            similarity_score REAL NOT NULL,
+            signals TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            proposed_merge TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL DEFAULT '',
+            review_comment TEXT NOT NULL DEFAULT '',
+            canonical_card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            CHECK(left_card_id < right_card_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_semantic_merge_proposals_status
+            ON semantic_merge_proposals(status, similarity_score DESC, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_semantic_merge_proposals_pair
+            ON semantic_merge_proposals(left_card_id, right_card_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS semantic_governance_state (
+            state_key TEXT PRIMARY KEY,
+            state_value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
@@ -241,6 +277,55 @@ class KnowledgeStore:
         """
         with self.connect() as connection:
             connection.executescript(schema)
+            proposal_source_foreign_keys = {
+                str(row["from"])
+                for row in connection.execute(
+                    "PRAGMA foreign_key_list(semantic_merge_proposals)"
+                ).fetchall()
+                if str(row["from"]) in {"left_card_id", "right_card_id"}
+            }
+            if proposal_source_foreign_keys:
+                # An unreleased development schema used ON DELETE CASCADE for
+                # proposal sources. Preserve immutable decision history across
+                # case rebuilds by migrating those IDs to audit references.
+                connection.executescript(
+                    """
+                    CREATE TABLE semantic_merge_proposals_v2 (
+                        proposal_id TEXT PRIMARY KEY,
+                        pair_key TEXT NOT NULL UNIQUE,
+                        left_card_id INTEGER NOT NULL,
+                        right_card_id INTEGER NOT NULL,
+                        left_fingerprint TEXT NOT NULL,
+                        right_fingerprint TEXT NOT NULL,
+                        algorithm_version TEXT NOT NULL,
+                        similarity_score REAL NOT NULL,
+                        signals TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        proposed_merge TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        reviewed_by TEXT NOT NULL DEFAULT '',
+                        review_comment TEXT NOT NULL DEFAULT '',
+                        canonical_card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        reviewed_at TEXT,
+                        CHECK(left_card_id < right_card_id)
+                    );
+                    INSERT INTO semantic_merge_proposals_v2
+                    SELECT * FROM semantic_merge_proposals;
+                    DROP TABLE semantic_merge_proposals;
+                    ALTER TABLE semantic_merge_proposals_v2
+                        RENAME TO semantic_merge_proposals;
+                    CREATE INDEX idx_semantic_merge_proposals_status
+                        ON semantic_merge_proposals(
+                            status, similarity_score DESC, updated_at DESC
+                        );
+                    CREATE INDEX idx_semantic_merge_proposals_pair
+                        ON semantic_merge_proposals(
+                            left_card_id, right_card_id, updated_at DESC
+                        );
+                    """
+                )
             # Compatibility migration for databases created before sync leases
             # were introduced. Column names and declarations are constants.
             existing_columns = {
@@ -698,13 +783,145 @@ class KnowledgeStore:
                 for row in card_rows
             )
             retrieval_count = sum(bool(row["retrieval_enabled"]) for row in card_rows)
+            proposal_rows = connection.execute(
+                "SELECT * FROM semantic_merge_proposals ORDER BY created_at, proposal_id"
+            ).fetchall()
+            affected_semantic_ids = set(card_ids)
+            invalidated_accepted: list[sqlite3.Row] = []
+            invalidated_accepted_ids: set[str] = set()
+            invalidated_canonical_ids: set[int] = set()
+            # A canonical card can itself participate in a later merge. Walk the
+            # accepted proposal graph so rebuilding a leaf invalidates every
+            # derived canonical descendant instead of leaving stale knowledge
+            # retrievable.
+            changed = True
+            while changed:
+                changed = False
+                for proposal in proposal_rows:
+                    proposal_id = str(proposal["proposal_id"])
+                    if (
+                        str(proposal["status"]) != "ACCEPTED"
+                        or proposal_id in invalidated_accepted_ids
+                    ):
+                        continue
+                    if not {
+                        int(proposal["left_card_id"]),
+                        int(proposal["right_card_id"]),
+                    } & affected_semantic_ids:
+                        continue
+                    invalidated_accepted.append(proposal)
+                    invalidated_accepted_ids.add(proposal_id)
+                    canonical_id = proposal["canonical_card_id"]
+                    if canonical_id is not None:
+                        normalized_canonical_id = int(canonical_id)
+                        invalidated_canonical_ids.add(normalized_canonical_id)
+                        if normalized_canonical_id not in affected_semantic_ids:
+                            affected_semantic_ids.add(normalized_canonical_id)
+                            changed = True
+
+            stale_proposals: list[sqlite3.Row] = list(invalidated_accepted)
+            stale_ids = set(invalidated_accepted_ids)
+            for proposal in proposal_rows:
+                if str(proposal["status"]) not in {"PENDING_REVIEW", "DEFERRED"}:
+                    continue
+                if {
+                    int(proposal["left_card_id"]),
+                    int(proposal["right_card_id"]),
+                } & affected_semantic_ids:
+                    proposal_id = str(proposal["proposal_id"])
+                    if proposal_id not in stale_ids:
+                        stale_proposals.append(proposal)
+                        stale_ids.add(proposal_id)
+
+            if stale_proposals:
+                connection.executemany(
+                    "UPDATE semantic_merge_proposals "
+                    "SET status = 'STALE', updated_at = ? WHERE proposal_id = ?",
+                    [(now, str(row["proposal_id"])) for row in stale_proposals],
+                )
+                connection.executemany(
+                    "DELETE FROM relations WHERE card_id = ? AND related_card_id = ? "
+                    "AND relation_type = 'SIMILAR_TO'",
+                    [
+                        (int(row["left_card_id"]), int(row["right_card_id"]))
+                        for row in stale_proposals
+                    ],
+                )
+                connection.execute(
+                    "DELETE FROM semantic_governance_state WHERE state_key = 'last_scan'"
+                )
+
+            reactivation_candidates: set[int] = set()
+            for proposal in invalidated_accepted:
+                left_id = int(proposal["left_card_id"])
+                right_id = int(proposal["right_card_id"])
+                canonical_id = proposal["canonical_card_id"]
+                if canonical_id is not None:
+                    connection.execute(
+                        "DELETE FROM relations WHERE related_card_id = ? "
+                        "AND relation_type = 'MERGED_INTO'",
+                        (int(canonical_id),),
+                    )
+                reactivation_candidates.update((left_id, right_id))
+
+            invalidated_canonical_ids.difference_update(card_ids)
+            canonical_retrieval_count = 0
+            if invalidated_canonical_ids:
+                canonical_placeholders = ",".join(
+                    "?" for _ in invalidated_canonical_ids
+                )
+                canonical_retrieval_count = int(
+                    connection.execute(
+                        f"SELECT COUNT(*) AS count FROM cards "
+                        f"WHERE id IN ({canonical_placeholders}) "
+                        "AND retrieval_enabled = 1",
+                        sorted(invalidated_canonical_ids),
+                    ).fetchone()["count"]
+                )
+                connection.execute(
+                    f"UPDATE cards SET dedup_status = 'STALE', "
+                    f"publish_status = 'SKIPPED', retrieval_enabled = 0, "
+                    f"planning_rag_enabled = 0, updated_at = ? "
+                    f"WHERE id IN ({canonical_placeholders})",
+                    [now, *sorted(invalidated_canonical_ids)],
+                )
+
+            reactivation_candidates.difference_update(card_ids)
+            reactivation_candidates.difference_update(invalidated_canonical_ids)
+            reactivated_card_ids: list[int] = []
+            for candidate_id in sorted(reactivation_candidates):
+                still_merged = connection.execute(
+                    "SELECT 1 FROM semantic_merge_proposals "
+                    "WHERE status = 'ACCEPTED' "
+                    "AND (left_card_id = ? OR right_card_id = ?) LIMIT 1",
+                    (candidate_id, candidate_id),
+                ).fetchone()
+                candidate = connection.execute(
+                    "SELECT status, card_type FROM cards WHERE id = ?",
+                    (candidate_id,),
+                ).fetchone()
+                if (
+                    still_merged is None
+                    and candidate is not None
+                    and str(candidate["status"]) == CardStatus.APPROVED.value
+                    and str(candidate["card_type"]) == "PROCEDURE_STEP"
+                ):
+                    connection.execute(
+                        "UPDATE cards SET dedup_status = 'NEW', "
+                        "publish_status = 'INDEXED', retrieval_enabled = 1, "
+                        "planning_rag_enabled = 1, updated_at = ? WHERE id = ?",
+                        (now, candidate_id),
+                    )
+                    reactivated_card_ids.append(candidate_id)
+
             memory_rows: list[sqlite3.Row] = []
-            if card_ids:
-                placeholders = ",".join("?" for _ in card_ids)
+            retired_card_ids = sorted(set(card_ids) | invalidated_canonical_ids)
+            if retired_card_ids:
+                retirement_placeholders = ",".join("?" for _ in retired_card_ids)
                 memory_rows = connection.execute(
                     f"SELECT backend, memory_id, card_id FROM memory_links "
-                    f"WHERE card_id IN ({placeholders})",
-                    card_ids,
+                    f"WHERE card_id IN ({retirement_placeholders})",
+                    retired_card_ids,
                 ).fetchall()
                 for row in memory_rows:
                     connection.execute(
@@ -727,6 +944,19 @@ class KnowledgeStore:
                             now,
                         ),
                     )
+                connection.execute(
+                    f"DELETE FROM memory_links "
+                    f"WHERE card_id IN ({retirement_placeholders})",
+                    retired_card_ids,
+                )
+                connection.execute(
+                    f"UPDATE memory_sync_state SET status = 'RETIRED', "
+                    f"memory_count = 0, detail = 'case rebuild invalidated knowledge', "
+                    f"updated_at = ? WHERE card_id IN ({retirement_placeholders})",
+                    [now, *retired_card_ids],
+                )
+            if card_ids:
+                placeholders = ",".join("?" for _ in card_ids)
                 connection.execute(
                     f"UPDATE cards SET supersedes_id = NULL, updated_at = ? "
                     f"WHERE supersedes_id IN ({placeholders})",
@@ -762,9 +992,16 @@ class KnowledgeStore:
                 "purged_card_count": len(card_ids),
                 "purged_review_count": review_count,
                 "purged_fingerprint_count": len(fingerprints),
-                "purged_index_count": retrieval_count,
+                "purged_index_count": retrieval_count + canonical_retrieval_count,
                 "queued_memory_retirements": len(memory_rows),
                 "old_card_ids": card_ids,
+                "invalidated_semantic_proposal_count": len(stale_proposals),
+                "invalidated_canonical_count": len(invalidated_canonical_ids),
+                "invalidated_canonical_card_ids": sorted(
+                    invalidated_canonical_ids
+                ),
+                "reactivated_semantic_source_count": len(reactivated_card_ids),
+                "reactivated_semantic_source_card_ids": reactivated_card_ids,
             }
             connection.execute(
                 """
@@ -1396,9 +1633,12 @@ class KnowledgeStore:
         with self.connect() as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO relations
+                INSERT INTO relations
                     (card_id, related_card_id, relation_type, confidence, reason, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(card_id, related_card_id, relation_type) DO UPDATE SET
+                    confidence = excluded.confidence,
+                    reason = excluded.reason
                 """,
                 (
                     card_id,
@@ -1409,6 +1649,565 @@ class KnowledgeStore:
                     utc_now(),
                 ),
             )
+
+    def delete_relation(
+        self, card_id: int, related_card_id: int, *, relation_type: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM relations WHERE card_id = ? AND related_card_id = ? "
+                "AND relation_type = ?",
+                (card_id, related_card_id, relation_type.strip().upper()),
+            )
+
+    @staticmethod
+    def _decode_semantic_merge_proposal(
+        row: sqlite3.Row | None,
+    ) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        result = dict(row)
+        result["signals"] = json.loads(str(result.get("signals") or "{}"))
+        result["proposed_merge"] = json.loads(
+            str(result.get("proposed_merge") or "{}")
+        )
+        result["similarity_score"] = round(
+            float(result.get("similarity_score") or 0.0), 6
+        )
+        return result
+
+    def upsert_semantic_merge_proposal(
+        self,
+        *,
+        proposal_id: str,
+        pair_key: str,
+        left_card_id: int,
+        right_card_id: int,
+        left_fingerprint: str,
+        right_fingerprint: str,
+        algorithm_version: str,
+        similarity_score: float,
+        signals: dict[str, Any],
+        reason: str,
+        proposed_merge: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        left_id, right_id = sorted((int(left_card_id), int(right_card_id)))
+        if left_id == right_id:
+            raise StoreError("相似候选必须包含两张不同卡片")
+        now = utc_now()
+        created = False
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM semantic_merge_proposals WHERE pair_key = ?",
+                (pair_key,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE semantic_merge_proposals
+                SET status = 'STALE', updated_at = ?
+                WHERE left_card_id = ? AND right_card_id = ? AND pair_key != ?
+                  AND status IN ('PENDING_REVIEW', 'DEFERRED')
+                """,
+                (now, left_id, right_id, pair_key),
+            )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO semantic_merge_proposals (
+                        proposal_id, pair_key, left_card_id, right_card_id,
+                        left_fingerprint, right_fingerprint, algorithm_version,
+                        similarity_score, signals, reason, proposed_merge,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'PENDING_REVIEW', ?, ?)
+                    """,
+                    (
+                        proposal_id,
+                        pair_key,
+                        left_id,
+                        right_id,
+                        left_fingerprint,
+                        right_fingerprint,
+                        algorithm_version,
+                        max(0.0, min(float(similarity_score), 1.0)),
+                        json.dumps(signals, ensure_ascii=False, sort_keys=True),
+                        reason.strip(),
+                        json.dumps(proposed_merge, ensure_ascii=False, sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+                created = True
+                status = "PENDING_REVIEW"
+            else:
+                status = str(existing["status"])
+                if status in {"PENDING_REVIEW", "DEFERRED"}:
+                    connection.execute(
+                        """
+                        UPDATE semantic_merge_proposals
+                        SET similarity_score = ?, signals = ?, reason = ?,
+                            proposed_merge = ?, updated_at = ?
+                        WHERE proposal_id = ?
+                        """,
+                        (
+                            max(0.0, min(float(similarity_score), 1.0)),
+                            json.dumps(signals, ensure_ascii=False, sort_keys=True),
+                            reason.strip(),
+                            json.dumps(
+                                proposed_merge, ensure_ascii=False, sort_keys=True
+                            ),
+                            now,
+                            str(existing["proposal_id"]),
+                        ),
+                    )
+            if status in {"PENDING_REVIEW", "DEFERRED"}:
+                connection.execute(
+                    """
+                    INSERT INTO relations
+                        (card_id, related_card_id, relation_type,
+                         confidence, reason, created_at)
+                    VALUES (?, ?, 'SIMILAR_TO', ?, ?, ?)
+                    ON CONFLICT(card_id, related_card_id, relation_type)
+                    DO UPDATE SET confidence = excluded.confidence,
+                                  reason = excluded.reason
+                    """,
+                    (
+                        left_id,
+                        right_id,
+                        max(0.0, min(float(similarity_score), 1.0)),
+                        reason.strip(),
+                        now,
+                    ),
+                )
+        proposal = self.get_semantic_merge_proposal(
+            proposal_id if created else str(existing["proposal_id"])
+        )
+        if proposal is None:
+            raise StoreError("相似知识候选写入后无法读取")
+        return proposal, created
+
+    def get_semantic_merge_proposal(
+        self, proposal_id: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM semantic_merge_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+        return self._decode_semantic_merge_proposal(row)
+
+    def list_semantic_merge_proposals(
+        self, *, status: str = "", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        normalized = status.strip().upper()
+        where = ""
+        params: list[Any] = []
+        if normalized and normalized != "ALL":
+            where = "WHERE status = ?"
+            params.append(normalized)
+        params.append(min(max(int(limit), 1), 500))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM semantic_merge_proposals
+                {where}
+                ORDER BY CASE status
+                    WHEN 'PENDING_REVIEW' THEN 0
+                    WHEN 'DEFERRED' THEN 1
+                    ELSE 2 END,
+                    similarity_score DESC, updated_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [
+            decoded
+            for row in rows
+            if (decoded := self._decode_semantic_merge_proposal(row)) is not None
+        ]
+
+    def semantic_merge_proposal_counts(self) -> dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM semantic_merge_proposals "
+                "GROUP BY status"
+            ).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def save_semantic_scan_report(self, report: dict[str, Any]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO semantic_governance_state
+                    (state_key, state_value, updated_at)
+                VALUES ('last_scan', ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_value = excluded.state_value,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    json.dumps(report, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+
+    def get_semantic_scan_report(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT state_value, updated_at FROM semantic_governance_state "
+                "WHERE state_key = 'last_scan'"
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(str(row["state_value"]) or "{}")
+        result = value if isinstance(value, dict) else {"report": value}
+        result["persisted_at"] = str(row["updated_at"])
+        return result
+
+    def stale_semantic_merge_proposals(
+        self, eligible_fingerprints: dict[int, str]
+    ) -> int:
+        stale: list[tuple[str, int, int]] = []
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM semantic_merge_proposals "
+                "WHERE status IN ('PENDING_REVIEW', 'DEFERRED')"
+            ).fetchall()
+        for row in rows:
+            proposal = self._decode_semantic_merge_proposal(row)
+            left_id = int(proposal["left_card_id"])
+            right_id = int(proposal["right_card_id"])
+            if (
+                eligible_fingerprints.get(left_id) != proposal["left_fingerprint"]
+                or eligible_fingerprints.get(right_id) != proposal["right_fingerprint"]
+            ):
+                stale.append((str(proposal["proposal_id"]), left_id, right_id))
+        if not stale:
+            return 0
+        now = utc_now()
+        with self.connect() as connection:
+            connection.executemany(
+                "UPDATE semantic_merge_proposals SET status = 'STALE', updated_at = ? "
+                "WHERE proposal_id = ?",
+                [(now, proposal_id) for proposal_id, _left, _right in stale],
+            )
+            connection.executemany(
+                "DELETE FROM relations WHERE card_id = ? AND related_card_id = ? "
+                "AND relation_type = 'SIMILAR_TO'",
+                [(left_id, right_id) for _proposal, left_id, right_id in stale],
+            )
+        return len(stale)
+
+    def decide_semantic_merge_proposal(
+        self,
+        proposal_id: str,
+        *,
+        decision: str,
+        actor: str,
+        comment: str = "",
+    ) -> dict[str, Any]:
+        normalized = decision.strip().upper()
+        if normalized not in {"REJECT", "DEFER"}:
+            raise StoreError("候选决策必须是 REJECT 或 DEFER")
+        reviewer = actor.strip()
+        if not reviewer:
+            raise StoreError("相似知识确认人不能为空")
+        now = utc_now()
+        new_status = "REJECTED" if normalized == "REJECT" else "DEFERRED"
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT * FROM semantic_merge_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if current is None:
+                raise StoreError("相似知识候选不存在")
+            if str(current["status"]) not in {"PENDING_REVIEW", "DEFERRED"}:
+                raise StoreError(f"当前候选状态不能再次决策: {current['status']}")
+            connection.execute(
+                """
+                UPDATE semantic_merge_proposals
+                SET status = ?, reviewed_by = ?, review_comment = ?,
+                    reviewed_at = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (new_status, reviewer, comment.strip(), now, now, proposal_id),
+            )
+            if normalized == "REJECT":
+                connection.execute(
+                    "DELETE FROM relations WHERE card_id = ? AND related_card_id = ? "
+                    "AND relation_type = 'SIMILAR_TO'",
+                    (int(current["left_card_id"]), int(current["right_card_id"])),
+                )
+        result = self.get_semantic_merge_proposal(proposal_id)
+        if result is None:
+            raise StoreError("相似知识候选决策后无法读取")
+        return result
+
+    def accept_semantic_merge_proposal(
+        self,
+        proposal_id: str,
+        *,
+        actor: str,
+        comment: str,
+        draft: KnowledgeCardDraft,
+        semantic_metadata: dict[str, Any],
+        source_content: str,
+        source_checksum: str,
+    ) -> dict[str, Any]:
+        reviewer = actor.strip()
+        if not reviewer:
+            raise StoreError("相似知识确认人不能为空")
+        now = utc_now()
+        values = draft.to_dict()
+        evidence_quote = draft.evidence_quote.strip()
+        if not evidence_quote or evidence_quote not in source_content:
+            raise StoreError("canonical 卡缺少可定位的派生证据")
+        retired_memory_ids: list[str] = []
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            proposal = connection.execute(
+                "SELECT * FROM semantic_merge_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise StoreError("相似知识候选不存在")
+            if str(proposal["status"]) not in {"PENDING_REVIEW", "DEFERRED"}:
+                raise StoreError(f"当前候选状态不能合并: {proposal['status']}")
+            source_ids = [int(proposal["left_card_id"]), int(proposal["right_card_id"])]
+            placeholders = ",".join("?" for _ in source_ids)
+            sources = connection.execute(
+                f"SELECT * FROM cards WHERE id IN ({placeholders}) ORDER BY id",
+                source_ids,
+            ).fetchall()
+            if len(sources) != 2:
+                raise StoreError("相似候选的来源卡片已不存在")
+            expected_fingerprints = {
+                int(proposal["left_card_id"]): str(proposal["left_fingerprint"]),
+                int(proposal["right_card_id"]): str(proposal["right_fingerprint"]),
+            }
+            for source in sources:
+                source_id = int(source["id"])
+                if str(source["semantic_fingerprint"]) != expected_fingerprints[source_id]:
+                    raise StoreError("来源卡片内容已变化，请重新扫描相似候选")
+                if (
+                    str(source["status"]) != CardStatus.APPROVED.value
+                    or not bool(source["retrieval_enabled"])
+                    or str(source["publish_status"]) != "INDEXED"
+                ):
+                    raise StoreError("来源卡片已不再满足合并条件，请重新扫描")
+
+            document = connection.execute(
+                "SELECT id FROM documents WHERE checksum = ?", (source_checksum,)
+            ).fetchone()
+            if document is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO documents
+                        (source_name, source_type, source_ref, checksum, content, created_at)
+                    VALUES (?, 'semantic_merge', ?, ?, ?, ?)
+                    """,
+                    (
+                        f"Semantic Merge {proposal_id}",
+                        f"semantic-governance://{proposal_id}",
+                        source_checksum,
+                        source_content,
+                        now,
+                    ),
+                )
+                document_id = int(cursor.lastrowid)
+            else:
+                document_id = int(document["id"])
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO chunks
+                    (document_id, chunk_index, char_start, char_end, content)
+                VALUES (?, 0, 0, ?, ?)
+                """,
+                (document_id, len(source_content), source_content),
+            )
+            chunk = connection.execute(
+                "SELECT id FROM chunks WHERE document_id = ? AND chunk_index = 0",
+                (document_id,),
+            ).fetchone()
+            if chunk is None:
+                raise StoreError("无法创建 canonical 卡派生来源")
+
+            semantic_payload = semantic_metadata.get("semantic_payload") or {}
+            cursor = connection.execute(
+                """
+                INSERT INTO cards (
+                    title, summary, knowledge_type, scenario, object_type, object_name,
+                    applicable_versions, prerequisites, procedure_steps, risks,
+                    rollback_steps, validation_steps, keywords,
+                    card_type, card_model_version, review_status, dedup_status,
+                    content_quality, publish_status, planning_rag_enabled,
+                    retrieval_enabled, semantic_fingerprint, semantic_payload,
+                    source_document_id, source_chunk_id, evidence_quote, evidence_locator,
+                    status, quality_score, quality_issues,
+                    comparison_label, comparison_confidence, comparison_reason,
+                    reviewer, review_comment, created_at, updated_at, published_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    values["title"], values["summary"], values["knowledge_type"],
+                    values["scenario"], values["object_type"], values["object_name"],
+                    json.dumps(values["applicable_versions"], ensure_ascii=False),
+                    json.dumps(values["prerequisites"], ensure_ascii=False),
+                    json.dumps(values["procedure_steps"], ensure_ascii=False),
+                    json.dumps(values["risks"], ensure_ascii=False),
+                    json.dumps(values["rollback_steps"], ensure_ascii=False),
+                    json.dumps(values["validation_steps"], ensure_ascii=False),
+                    json.dumps(values["keywords"], ensure_ascii=False),
+                    str(semantic_metadata.get("card_type") or "PROCEDURE_STEP"),
+                    str(semantic_metadata.get("card_model_version") or "semantic_merge_v1"),
+                    CardStatus.APPROVED.value,
+                    str(semantic_metadata.get("dedup_status") or "CANONICAL"),
+                    float(semantic_metadata.get("content_quality") or 95.0),
+                    str(semantic_metadata.get("publish_status") or "INDEXED"),
+                    1, 1,
+                    str(semantic_metadata.get("semantic_fingerprint") or ""),
+                    json.dumps(semantic_payload, ensure_ascii=False, sort_keys=True),
+                    document_id,
+                    int(chunk["id"]),
+                    evidence_quote,
+                    f"semantic-governance://{proposal_id}#canonical",
+                    CardStatus.APPROVED.value,
+                    float(semantic_metadata.get("content_quality") or 95.0),
+                    json.dumps([], ensure_ascii=False),
+                    "CANONICAL_MERGE",
+                    float(proposal["similarity_score"]),
+                    "人工确认相似知识并整理为 canonical 卡",
+                    reviewer,
+                    comment.strip(),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            canonical_card_id = int(cursor.lastrowid)
+
+            memory_rows = connection.execute(
+                f"SELECT backend, memory_id, card_id FROM memory_links "
+                f"WHERE card_id IN ({placeholders})",
+                source_ids,
+            ).fetchall()
+            for memory_row in memory_rows:
+                memory_id = str(memory_row["memory_id"])
+                retired_memory_ids.append(memory_id)
+                source_card_id = int(memory_row["card_id"])
+                lineage = connection.execute(
+                    "SELECT case_id FROM card_lineage WHERE card_id = ?",
+                    (source_card_id,),
+                ).fetchone()
+                connection.execute(
+                    """
+                    INSERT INTO memory_retirements
+                        (backend, memory_id, card_id, case_id, status,
+                         attempts, last_error, updated_at)
+                    VALUES (?, ?, ?, ?, 'PENDING', 0, '', ?)
+                    ON CONFLICT(backend, memory_id) DO UPDATE SET
+                        card_id = excluded.card_id,
+                        case_id = excluded.case_id,
+                        status = 'PENDING', attempts = 0,
+                        last_error = '', updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(memory_row["backend"]), memory_id, source_card_id,
+                        str(lineage["case_id"] if lineage is not None else ""), now,
+                    ),
+                )
+            connection.execute(
+                f"DELETE FROM memory_links WHERE card_id IN ({placeholders})",
+                source_ids,
+            )
+            connection.execute(
+                f"UPDATE memory_sync_state SET status = 'RETIRED', memory_count = 0, "
+                f"detail = 'merged into canonical card', updated_at = ? "
+                f"WHERE card_id IN ({placeholders})",
+                [now, *source_ids],
+            )
+            connection.execute(
+                f"""
+                UPDATE cards
+                SET dedup_status = 'MERGED', publish_status = 'MERGED',
+                    retrieval_enabled = 0, planning_rag_enabled = 0,
+                    updated_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                [now, *source_ids],
+            )
+            connection.execute(
+                "DELETE FROM relations WHERE card_id = ? AND related_card_id = ? "
+                "AND relation_type = 'SIMILAR_TO'",
+                source_ids,
+            )
+            for source_id in source_ids:
+                connection.execute(
+                    """
+                    INSERT INTO relations
+                        (card_id, related_card_id, relation_type,
+                         confidence, reason, created_at)
+                    VALUES (?, ?, 'MERGED_INTO', 1.0, ?, ?)
+                    ON CONFLICT(card_id, related_card_id, relation_type)
+                    DO UPDATE SET confidence = 1.0, reason = excluded.reason
+                    """,
+                    (
+                        source_id, canonical_card_id,
+                        comment.strip() or "人工确认合并为 canonical 知识", now,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO audit_log
+                        (card_id, action, actor, detail, created_at)
+                    VALUES (?, 'MERGED_INTO_CANONICAL', ?, ?, ?)
+                    """,
+                    (
+                        source_id, reviewer,
+                        json.dumps(
+                            {
+                                "proposal_id": proposal_id,
+                                "canonical_card_id": canonical_card_id,
+                                "comment": comment.strip(),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
+                )
+            connection.execute(
+                """
+                INSERT INTO audit_log (card_id, action, actor, detail, created_at)
+                VALUES (?, 'CANONICAL_MERGE_CREATED', ?, ?, ?)
+                """,
+                (
+                    canonical_card_id, reviewer,
+                    json.dumps(
+                        {"proposal_id": proposal_id, "source_card_ids": source_ids},
+                        ensure_ascii=False,
+                    ),
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE semantic_merge_proposals
+                SET status = 'ACCEPTED', reviewed_by = ?, review_comment = ?,
+                    canonical_card_id = ?, reviewed_at = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (
+                    reviewer, comment.strip(), canonical_card_id, now, now, proposal_id,
+                ),
+            )
+        result = self.get_semantic_merge_proposal(proposal_id)
+        if result is None:
+            raise StoreError("相似知识合并后无法读取候选记录")
+        result["retired_memory_ids"] = retired_memory_ids
+        return result
 
     def knowledge_graph(
         self,

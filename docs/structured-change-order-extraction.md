@@ -108,7 +108,7 @@ timestamp、duration、boolean、number 等值由 Python 规范化。时间戳�
 
 当 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时，案例包页面显示“重建当前案例”。确认后端点 `POST /api/knowledge-case-bundles/{case_id}/rebuild` 只清理该 `change-order:<source_sha256>` 的派生 cards、审核状态、关系、fingerprint、检索/外部长记忆映射、抽取报告和 ingestion 完成态，然后以 `force_rebuild=true` 重跑完整 Adapter → Builder → QA → Store 流程。原始上传文件、documents 行、source content、source_sha256 和结构证据不会删除。
 
-普通 ingest 继续幂等；只有请求体包含 `{"confirmation":"REBUILD_CURRENT_CASE"}` 的显式 Demo 操作会强制重建。旧 K ID 不复用，案例包改用递增 `build_generation` 辅助前后对比。当前报告会替换 `card_build_report.json`，旧报告归档为 `card_build_report.generation-N.json`，并写入 `rebuild.previous_card_count`、`new_card_count` 与各层 purge 计数。`DEMO_FULL_RESET_ENABLED` 仅是保留且默认关闭的可选配置，本版本没有开放全库重置入口。
+普通 ingest 继续幂等；只有请求体包含 `{"confirmation":"REBUILD_CURRENT_CASE"}` 的显式 Demo 操作会强制重建。旧 K ID 不复用，案例包改用递增 `build_generation` 辅助前后对比。若旧卡参与过相似知识人工合并，重建会同步失效候选、链式下架派生 canonical 卡，并恢复仍有效且不再被其他合并覆盖的来源卡。当前报告会替换 `card_build_report.json`，旧报告归档为 `card_build_report.generation-N.json`，并写入 `rebuild.previous_card_count`、`new_card_count` 与各层 purge 计数。`DEMO_FULL_RESET_ENABLED` 仅是保留且默认关闭的可选配置，本版本没有开放全库重置入口。
 
 ## 数据边界
 

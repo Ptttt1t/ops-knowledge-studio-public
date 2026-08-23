@@ -27,6 +27,7 @@ from .documents import (
     document_capabilities,
 )
 from .schema import CardStatus
+from .semantic_governance import SemanticGovernanceError, SemanticGovernanceWorker
 from .runtime_tasks import create_knowledge_runtime
 from .security import WebSecurity, WebSecurityError
 from .service import KnowledgeRequestError, KnowledgeService, KnowledgeServiceError
@@ -67,6 +68,12 @@ REAL_CHANGE_DRAFT_EXPORT_PATTERN = re.compile(
 REAL_CHANGE_EVALUATION_PATTERN = re.compile(
     r"^/api/change-evaluations/([^/]+)$"
 )
+SEMANTIC_MERGE_PROPOSAL_PATTERN = re.compile(
+    r"^/api/semantic-merge-proposals/([^/]+)$"
+)
+SEMANTIC_MERGE_DECISION_PATTERN = re.compile(
+    r"^/api/semantic-merge-proposals/([^/]+)/decision$"
+)
 
 
 class KnowledgeHTTPServer(ThreadingHTTPServer):
@@ -85,9 +92,16 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self.runtime = runtime
         self.change_demos = ChangeDemoWebManager(service)
         self.change_drafts = service.change_drafts
+        self.semantic_governance = service.semantic_governance
+        self.semantic_governance_worker = SemanticGovernanceWorker(
+            self.semantic_governance,
+            interval_seconds=service.settings.semantic_scan_interval_seconds,
+        )
+        self.semantic_governance_worker.start()
         self.security = WebSecurity(service.settings)
 
     def server_close(self) -> None:
+        self.semantic_governance_worker.stop()
         self.change_demos.close()
         self.runtime.stop()
         super().server_close()
@@ -272,6 +286,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 KnowledgeRequestError,
                 ChangeSessionLimitError,
                 ChangeDraftError,
+                SemanticGovernanceError,
             ),
         ):
             headers = (
@@ -358,6 +373,39 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/stats":
                 self._send_json(self.server.service.stats())
+                return
+            if path == "/api/semantic-governance":
+                result = self.server.semantic_governance.list_proposals(
+                    status="PENDING_REVIEW", limit=1
+                )
+                result["worker_running"] = (
+                    self.server.semantic_governance_worker.running
+                )
+                self._send_json(result)
+                return
+            if path == "/api/semantic-merge-proposals":
+                query = parse_qs(parsed.query)
+                status = query.get("status", ["PENDING_REVIEW"])[0]
+                limit = int(query.get("limit", ["100"])[0])
+                result = self.server.semantic_governance.list_proposals(
+                    status=status, limit=limit
+                )
+                result["worker_running"] = (
+                    self.server.semantic_governance_worker.running
+                )
+                self._send_json(result)
+                return
+            proposal_match = SEMANTIC_MERGE_PROPOSAL_PATTERN.match(path)
+            if proposal_match:
+                proposal = self.server.semantic_governance.get_proposal(
+                    unquote(proposal_match.group(1))
+                )
+                if proposal is None:
+                    self._send_json(
+                        {"error": "相似知识候选不存在"}, HTTPStatus.NOT_FOUND
+                    )
+                else:
+                    self._send_json(proposal)
                 return
             if path == "/api/change-cases":
                 self._send_json({"cases": self.server.change_demos.cases()})
@@ -527,6 +575,21 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.CREATED)
                 return
             payload = self._read_json()
+            if path == "/api/semantic-merge-proposals/scan":
+                result = self.server.semantic_governance.scan(actor=principal)
+                self._send_json(result)
+                return
+            semantic_decision_match = SEMANTIC_MERGE_DECISION_PATTERN.match(path)
+            if semantic_decision_match:
+                result = self.server.semantic_governance.decide(
+                    unquote(semantic_decision_match.group(1)),
+                    decision=str(payload.get("decision") or ""),
+                    actor=principal,
+                    comment=str(payload.get("comment") or ""),
+                    merged_card=payload.get("merged_card"),
+                )
+                self._send_json(result)
+                return
             if path == "/api/change-drafts/recommend":
                 result = self.server.change_drafts.recommend(
                     payload.get("request"),

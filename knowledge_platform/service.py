@@ -262,6 +262,7 @@ class KnowledgeService:
             settings.max_concurrent_ingestions
         )
         self._change_drafts: Any | None = None
+        self._semantic_governance: Any | None = None
 
     @property
     def change_drafts(self) -> Any:
@@ -272,6 +273,16 @@ class KnowledgeService:
 
             self._change_drafts = RealChangeDraftService(self)
         return self._change_drafts
+
+    @property
+    def semantic_governance(self) -> Any:
+        """Lazily create the human-governed semantic merge service."""
+
+        if self._semantic_governance is None:
+            from .semantic_governance import SemanticGovernanceService
+
+            self._semantic_governance = SemanticGovernanceService(self)
+        return self._semantic_governance
 
     def ingest_file(
         self, path: Path, *, source_name: str | None = None
@@ -1902,6 +1913,16 @@ class KnowledgeService:
                 f"purge retrieval entries={purge['purged_index_count']}",
             )
             self._demo_rebuild_log(
+                normalized_case_id,
+                "invalidate semantic proposals="
+                f"{purge['invalidated_semantic_proposal_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
+                "invalidate canonical cards="
+                f"{purge['invalidated_canonical_count']}",
+            )
+            self._demo_rebuild_log(
                 normalized_case_id, "invalidate ingestion cache"
             )
             invalidated_drafts = self.change_drafts.store.invalidate_case_references(
@@ -1931,6 +1952,26 @@ class KnowledgeService:
                         "当前案例外部长记忆清理失败；已停止生成新卡，请重试"
                     )
 
+            semantic_reactivation_sync: list[dict[str, Any]] = []
+            for card_id in purge["reactivated_semantic_source_card_ids"]:
+                card = self.store.get_card(int(card_id))
+                if card is None:
+                    continue
+                try:
+                    semantic_reactivation_sync.append(self.memory.sync_card(card))
+                except Exception as exc:
+                    failure = {
+                        "status": "FAILED",
+                        "card_id": int(card_id),
+                        "error": str(exc),
+                    }
+                    semantic_reactivation_sync.append(failure)
+                    self.trace.log(
+                        "semantic_source_reactivation_sync_degraded",
+                        case_id=normalized_case_id,
+                        **failure,
+                    )
+
             rebuild_context = {
                 "previous_generation": int(purge["previous_generation"]),
                 "current_generation": int(purge["current_generation"]),
@@ -1942,6 +1983,15 @@ class KnowledgeService:
                     purge["purged_fingerprint_count"]
                 ),
                 "purged_long_term_memory_count": queued_memories,
+                "invalidated_semantic_proposal_count": int(
+                    purge["invalidated_semantic_proposal_count"]
+                ),
+                "invalidated_canonical_count": int(
+                    purge["invalidated_canonical_count"]
+                ),
+                "reactivated_semantic_source_count": int(
+                    purge["reactivated_semantic_source_count"]
+                ),
                 "invalidated_change_draft_count": int(invalidated_drafts),
                 "archived_report_path": (
                     str(archived_report_path) if archived_report_path else None
@@ -1962,6 +2012,7 @@ class KnowledgeService:
                 rebuild_context=rebuild_context,
             )
             result["memory_retirement_cleanup"] = retirement_cleanup
+            result["semantic_reactivation_sync"] = semantic_reactivation_sync
             self._demo_rebuild_log(
                 normalized_case_id,
                 f"rebuild completed cards={result['extracted_cards']}",

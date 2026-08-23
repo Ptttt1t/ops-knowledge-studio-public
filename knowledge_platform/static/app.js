@@ -5,6 +5,7 @@ const pageTitles = {
   results: "变更结果与审计",
   ingest: "知识采集与加工",
   review: "知识审核队列",
+  "semantic-governance": "相似知识治理",
   library: "知识资产库",
   graph: "知识关系图",
 };
@@ -34,6 +35,7 @@ let activeRealChangeDraft = null;
 let realChangePollTimer = null;
 let activeRealChangeEvaluation = null;
 let realChangeEvaluationPollTimer = null;
+let semanticGovernancePollTimer = null;
 let knowledgeGraphData = { nodes: [], edges: [], meta: {} };
 let knowledgeGraphSelectedId = "";
 let knowledgeGraphFrame = null;
@@ -547,6 +549,110 @@ async function loadReviewQueue() {
   target.innerHTML = content.length ? content.join("") : "当前没有待审核知识";
 }
 
+const semanticProposalStatusLabels = {
+  PENDING_REVIEW: "待确认",
+  ACCEPTED: "已合并",
+  REJECTED: "已排除",
+  DEFERRED: "暂缓",
+  STALE: "已失效",
+};
+
+function semanticCardComparisonHtml(card, side) {
+  if (!card) return `<div class="semantic-source-card missing">来源卡片已不存在</div>`;
+  const operation = card.generalized_operation || card.procedure_steps?.join("\n") || "";
+  const validation = card.validation || card.validation_steps?.join("\n") || "";
+  return `<div class="semantic-source-card">
+    <div class="semantic-source-head"><span>${side}</span><strong>K${card.id} · ${escapeHtml(card.title)}</strong></div>
+    <p>${escapeHtml(card.summary || "无摘要")}</p>
+    <dl>
+      <dt>通用化操作</dt><dd>${escapeHtml(operation || "—")}</dd>
+      <dt>验证</dt><dd>${escapeHtml(validation || "—")}</dd>
+      <dt>适用阶段</dt><dd>${escapeHtml((card.applicable_phases || []).join("、") || "—")}</dd>
+      <dt>来源</dt><dd>${escapeHtml(card.source_name || card.source_ref || "—")}</dd>
+    </dl>
+    <button class="button small secondary" type="button" data-open-card="${card.id}">查看原卡</button>
+  </div>`;
+}
+
+function semanticProposalHtml(proposal) {
+  const merge = proposal.proposed_merge || {};
+  const editable = ["PENDING_REVIEW", "DEFERRED"].includes(proposal.status);
+  const signals = proposal.signals || {};
+  const shared = (signals.shared_core_tokens || []).slice(0, 12).join("、") || "无稳定共享锚点";
+  const canonical = proposal.canonical_card;
+  const editor = editable ? `<div class="semantic-merge-editor">
+    <div class="semantic-editor-grid">
+      <label>canonical 标题<input data-merge-field="title" value="${escapeHtml(merge.title || "")}"></label>
+      <label>适用阶段<input data-merge-field="applicable_phases" value="${escapeHtml((merge.applicable_phases || []).join("、"))}"></label>
+      <label class="span-2">摘要<textarea rows="2" data-merge-field="summary">${escapeHtml(merge.summary || "")}</textarea></label>
+      <label class="span-2">通用化操作<textarea rows="4" data-merge-field="generalized_operation">${escapeHtml(merge.generalized_operation || "")}</textarea></label>
+      <label>验证<textarea rows="3" data-merge-field="validation">${escapeHtml(merge.validation || "")}</textarea></label>
+      <label>回退<textarea rows="3" data-merge-field="rollback">${escapeHtml(merge.rollback || "")}</textarea></label>
+      <label class="span-2">影响分析<textarea rows="2" data-merge-field="impact_analysis">${escapeHtml(merge.impact_analysis || "")}</textarea></label>
+      <label class="span-2">人工意见<input data-merge-comment placeholder="说明合并或排除依据"></label>
+    </div>
+    <div class="semantic-proposal-actions">
+      <button class="button primary" type="button" data-semantic-action="ACCEPT">确认合并</button>
+      <button class="button danger" type="button" data-semantic-action="REJECT">不是同一知识</button>
+      <button class="button secondary" type="button" data-semantic-action="DEFER">暂缓</button>
+    </div>
+  </div>` : canonical ? `<div class="semantic-canonical-result">
+    <strong>已生成 canonical 卡 K${canonical.id}：${escapeHtml(canonical.title)}</strong>
+    <button class="button small secondary" type="button" data-open-card="${canonical.id}">查看 canonical 卡</button>
+  </div>` : `<p class="muted-copy">该候选已结束，不再改变检索状态。</p>`;
+  return `<article class="panel semantic-proposal" data-proposal-id="${escapeHtml(proposal.proposal_id)}">
+    <div class="semantic-proposal-head">
+      <div><p class="eyebrow">${escapeHtml(proposal.proposal_id)}</p><h2>${semanticProposalStatusLabels[proposal.status] || escapeHtml(proposal.status)}</h2></div>
+      <div class="semantic-score"><strong>${Math.round(Number(proposal.similarity_score || 0) * 100)}%</strong><small>候选相似度</small></div>
+    </div>
+    <p class="semantic-reason">${escapeHtml(proposal.reason || "")}</p>
+    <div class="semantic-signal-strip"><span>共享锚点：${escapeHtml(shared)}</span><span>包含度 ${escapeHtml(signals.token_containment ?? "—")}</span><span>文本顺序 ${escapeHtml(signals.sequence_similarity ?? "—")}</span></div>
+    <div class="semantic-source-grid">
+      ${semanticCardComparisonHtml(proposal.left_card, "来源 A")}
+      ${semanticCardComparisonHtml(proposal.right_card, "来源 B")}
+    </div>
+    ${editor}
+  </article>`;
+}
+
+function renderSemanticGovernanceSummary(data) {
+  const counts = data.counts || {};
+  document.getElementById("semantic-proposal-count").textContent = counts.PENDING_REVIEW || 0;
+  document.getElementById("semantic-pending-count").textContent = counts.PENDING_REVIEW || 0;
+  document.getElementById("semantic-accepted-count").textContent = counts.ACCEPTED || 0;
+  document.getElementById("semantic-rejected-count").textContent = counts.REJECTED || 0;
+  const lastScan = data.last_scan || {};
+  document.getElementById("semantic-last-scan").textContent = lastScan.completed_at
+    ? new Date(lastScan.completed_at).toLocaleString("zh-CN", { hour12: false }) : "—";
+  document.getElementById("semantic-last-scan-detail").textContent = lastScan.status
+    ? `${lastScan.status} · ${lastScan.created_proposal_count || 0} 个新增候选` : "尚未运行";
+  const enabled = Boolean(data.enabled);
+  const badge = document.getElementById("semantic-governance-badge");
+  badge.textContent = enabled ? (data.worker_running ? "后台扫描中" : "已启用") : "默认关闭";
+  badge.className = `synthetic-stamp ${enabled ? "" : "disabled"}`;
+  document.getElementById("semantic-scan-now").disabled = !enabled;
+  document.getElementById("semantic-governance-policy").textContent = enabled
+    ? `本地算法 ${data.policy?.algorithm_version || "—"} · 阈值 ${data.policy?.minimum_score ?? "—"} · 不自动合并 · 不向模型外发正文`
+    : "请设置 SEMANTIC_GOVERNANCE_ENABLED=true 并重启服务；已有候选仍可继续人工处理。";
+}
+
+async function loadSemanticGovernanceSummary() {
+  const data = await api("/api/semantic-governance");
+  renderSemanticGovernanceSummary(data);
+  return data;
+}
+
+async function loadSemanticGovernance() {
+  const status = document.getElementById("semantic-proposal-status").value;
+  const data = await api(`/api/semantic-merge-proposals?status=${encodeURIComponent(status)}&limit=100`);
+  renderSemanticGovernanceSummary(data);
+  const target = document.getElementById("semantic-proposal-list");
+  target.classList.toggle("empty", !data.proposals.length);
+  target.innerHTML = data.proposals.length
+    ? data.proposals.map(semanticProposalHtml).join("")
+    : "当前筛选状态下没有相似知识候选";
+}
+
 async function loadLibrary() {
   const query = document.getElementById("library-query").value.trim();
   const status = document.getElementById("library-status").value;
@@ -587,6 +693,8 @@ const graphRelationLabels = {
   VALIDATES: "验证",
   ROLLBACK_OF: "回退对应",
   CHILD_OF: "章节属于",
+  SIMILAR_TO: "待确认相似",
+  MERGED_INTO: "已合并到",
 };
 
 function graphSvgElement(name, attributes = {}) {
@@ -874,8 +982,10 @@ function renderKnowledgeGraph() {
   if (!knowledgeGraphData.nodes.length) return;
 
   knowledgeGraphData.edges.forEach(edge => {
+    const relationClass = String(edge.relation_type || "")
+      .toLowerCase().replaceAll("_", "-").replace(/[^a-z0-9-]/g, "");
     const line = graphSvgElement("line", {
-      class: `graph-edge${edge.explicit ? " explicit" : ""}`,
+      class: `graph-edge${edge.explicit ? " explicit" : ""} relation-${relationClass}`,
       "data-source": edge.source,
       "data-target": edge.target,
       "data-relation": edge.relation_type,
@@ -978,7 +1088,10 @@ async function loadKnowledgeGraph() {
 async function refreshAll() {
   try {
     await refreshHealth();
-    await Promise.all([refreshStats(), loadRecent(), loadReviewQueue(), loadLibrary()]);
+    await Promise.all([
+      refreshStats(), loadRecent(), loadReviewQueue(), loadLibrary(),
+      loadSemanticGovernanceSummary(),
+    ]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -1337,6 +1450,7 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   document.getElementById("page-title").textContent = pageTitles[page];
   if (["query", "results"].includes(page)) loadLatestChangeSession().catch(error => toast(error.message, true));
   if (page === "real-change") loadRealChangeWorkbench().catch(error => toast(error.message, true));
+  if (page === "semantic-governance") loadSemanticGovernance().catch(error => toast(error.message, true));
   if (page === "graph") loadKnowledgeGraph().catch(error => toast(error.message, true));
 }));
 
@@ -1352,8 +1466,61 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
   if (document.getElementById("page-real-change").classList.contains("active")) {
     await loadRealChangeWorkbench();
   }
+  if (document.getElementById("page-semantic-governance").classList.contains("active")) {
+    await loadSemanticGovernance();
+  }
 });
 document.getElementById("library-search").addEventListener("click", () => loadLibrary().catch(error => toast(error.message, true)));
+document.getElementById("semantic-proposal-status").addEventListener("change", () => loadSemanticGovernance().catch(error => toast(error.message, true)));
+document.getElementById("semantic-scan-now").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  setBusy(button, true, "正在扫描……");
+  try {
+    const report = await api("/api/semantic-merge-proposals/scan", {
+      method: "POST", body: JSON.stringify({}),
+    });
+    toast(`扫描完成：发现 ${report.candidate_count || 0} 对候选，新增 ${report.created_proposal_count || 0} 对`);
+    await loadSemanticGovernance();
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false); }
+});
+document.getElementById("semantic-proposal-list").addEventListener("click", async event => {
+  const openCard = event.target.closest("[data-open-card]");
+  if (openCard) {
+    await window.showDetail(Number(openCard.dataset.openCard));
+    return;
+  }
+  const actionButton = event.target.closest("[data-semantic-action]");
+  if (!actionButton) return;
+  const proposalElement = actionButton.closest("[data-proposal-id]");
+  const proposalId = proposalElement?.dataset.proposalId;
+  const decision = actionButton.dataset.semanticAction;
+  if (!proposalId || !decision) return;
+  if (decision === "ACCEPT" && !window.confirm("确认后将生成 canonical 卡，两张原卡保留但立即退出所有检索。是否继续？")) return;
+  if (decision === "REJECT" && !window.confirm("确认这两张卡不是同一知识？相同内容版本下不会再次推送。")) return;
+  const mergedCard = {};
+  proposalElement.querySelectorAll("[data-merge-field]").forEach(input => {
+    const field = input.dataset.mergeField;
+    mergedCard[field] = field === "applicable_phases"
+      ? input.value.split(/[、,，]/).map(item => item.trim()).filter(Boolean)
+      : input.value.trim();
+  });
+  const comment = proposalElement.querySelector("[data-merge-comment]")?.value.trim() || "";
+  setBusy(actionButton, true, "正在提交……");
+  try {
+    const payload = { decision, comment };
+    if (decision === "ACCEPT") payload.merged_card = mergedCard;
+    const result = await api(`/api/semantic-merge-proposals/${encodeURIComponent(proposalId)}/decision`, {
+      method: "POST", body: JSON.stringify(payload),
+    });
+    toast(decision === "ACCEPT"
+      ? `合并完成，已生成 canonical 卡 K${result.canonical_card_id}`
+      : decision === "REJECT" ? "已记录为非同一知识" : "候选已暂缓");
+    await Promise.all([loadSemanticGovernance(), loadLibrary()]);
+    if (document.getElementById("page-graph").classList.contains("active")) await loadKnowledgeGraph();
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(actionButton, false); }
+});
 document.getElementById("graph-reload").addEventListener("click", () => loadKnowledgeGraph().catch(error => toast(error.message, true)));
 document.getElementById("graph-status").addEventListener("change", () => loadKnowledgeGraph().catch(error => toast(error.message, true)));
 document.getElementById("graph-query").addEventListener("input", applyKnowledgeGraphEmphasis);
@@ -1658,6 +1825,10 @@ async function bootstrap() {
   await refreshAll();
   await loadChangeCases();
   await loadLatestChangeSession();
+  clearInterval(semanticGovernancePollTimer);
+  semanticGovernancePollTimer = window.setInterval(() => {
+    loadSemanticGovernanceSummary().catch(() => {});
+  }, 60000);
 }
 
 document.getElementById("auth-form").addEventListener("submit", async event => {

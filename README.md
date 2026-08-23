@@ -42,7 +42,7 @@ flowchart LR
 | 模块 | 能力 | 关键约束 |
 | --- | --- | --- |
 | 知识采集 | 上传文档或粘贴文本，分片、抽取知识卡片并精确定位来源 | 抽取结果默认进入待审核状态 |
-| 知识治理 | 质量评分、重复/冲突/新版本比较、批准、驳回、替代与人工删除 | 只有 `APPROVED` 可被可信检索；删除保留审计并回收长期记忆 |
+| 知识治理 | 质量评分、重复/冲突/新版本比较、相似知识候选、人工合并、批准、驳回、替代与人工删除 | 只有 `APPROVED` 可被可信检索；相似卡不会自动合并；删除保留审计并回收长期记忆 |
 | 可信方案 | 本地混合检索、可选 MindMemOS 语义后备 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
 | 变更生成 | 环境感知、知识复用、风险评分、分步计划、验证与回退生成 | 所有云资源与网络均为隔离模拟 |
 | 审批执行 | 精确确认串、参数摘要、灰度执行、故障注入与自动回退 | 审批前不修改模拟网络 |
@@ -174,6 +174,22 @@ CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
 页面先推荐最多三个完整且为 `APPROVED` 的案例包，操作者确认后才异步生成。模型只输出规范化草案，真实 `action_list`、分组任务视图和 `ExecutionResult` 由程序装配并硬校验；只有 `REVIEW_APPROVED` revision 可以下载 `change_order_draft.json` 和 `provenance_report.json`。留一案例盲测会隔离目标及近重复案例，生成后才读取隐藏答案并输出 `evaluation_report.json`。
 
 该页面持续标注“未鉴权能力试验”。默认 Demo 配置下的申请人和审核人都是自报身份，不能作为正式审计证据；禁止公网暴露，也不要把内网 Profile、真实案例、Prompt、数据库或评测报告提交到公开仓库。完整流程、字段策略和接口见 [真实 ChangeOrder 草案生成与盲测](docs/real-change-generation.md)。
+
+## 相似知识持续治理
+
+“相似知识治理”页面面向已经审核并发布的 `PROCEDURE_STEP`。后台使用本地确定性算法周期扫描通用化操作、验证、回退、阶段和对象锚点，只创建 `PENDING_REVIEW` 候选与图谱中的 `SIMILAR_TO` 关系，不调用模型、不外发正文，也不会自动改变现有卡片。
+
+在 `.env` 中显式启用后重启服务：
+
+```dotenv
+SEMANTIC_GOVERNANCE_ENABLED=true
+SEMANTIC_SCAN_INTERVAL_SECONDS=3600
+SEMANTIC_PROPOSAL_MIN_SCORE=0.68
+SEMANTIC_SCAN_MAX_CARDS=500
+SEMANTIC_SCAN_MAX_PROPOSALS=100
+```
+
+操作者可以对候选执行合并、排除或暂缓。确认合并时，页面允许人工整理 canonical 卡；系统在同一事务中创建新的 `APPROVED + INDEXED` 卡，将两张来源卡保留为审核证据但退出检索，并把关系改为 `MERGED_INTO`。排除结果绑定卡片 fingerprint；内容未变化时后台不会重复推送，内容变化后旧判断自动 `STALE` 并允许重新提议。重建任一来源案例会链式下架受影响的 canonical 卡、失效候选并恢复仍有效的其他来源卡，避免旧合并结果残留。详细策略与接口见 [相似知识人工合并治理](docs/semantic-governance.md)。
 
 ## 可选 MindMemOS 长期记忆
 
@@ -416,7 +432,7 @@ python run.py agent-query --question "生成生产专线路由切换建议"
 
 结构适配中，`action_list` 是 canonical action metadata；它进入 `CASE_CONTEXT.actions`，不再伪装成有序 Procedure。`change_tool_relate_action` 的 group name 和 group count 是动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的来源；四组 Procedure Key 分别映射为前检、实施、验证和回退。正文只消费已确认的 Procedure 业务字段，HTML/图片/转义由 `normalize_rich_text()` 清理，timestamp 等确定性字段由 Python 按显式时区转换。semantic section 默认保存在 Parent 的 `operation_sections[]`；只有“步骤确实超长”且存在足够多有独立价值的 section 时才发布 children，并保证 Parent/Child 不会同时进入检索。标题包含 phase 语义，高置信 target/value 匹配可建立 `VALIDATES` 和 `ROLLBACK_OF`。跨阶段相同知识按 semantic fingerprint 复用；`EXECUTION_OUTCOME` 固定 `planning_rag_enabled=false`。报告明确区分 `structural_source_coverage` 和 `semantic_content_coverage`，并输出逐卡 QA 与 `skip_reason`。详见 [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)。
 
-Demo 模式下可在 Change Case Bundle 详情点击“重建当前案例”。它按 `case_id/source_sha256` 精确清除派生知识、审核、关系、fingerprint、检索/外部长记忆映射和缓存，再以当前 Builder 强制重跑；原始上传 JSON 不删除，普通重复采集仍保持幂等，重建后的 K ID 不复用。该按钮仅在 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时显示，生产模式返回 404。全库重置配置默认关闭且当前未开放入口。
+Demo 模式下可在 Change Case Bundle 详情点击“重建当前案例”。它按 `case_id/source_sha256` 精确清除派生知识、审核、关系、fingerprint、检索/外部长记忆映射和缓存，并失效由这些卡片派生的语义合并结果，再以当前 Builder 强制重跑；原始上传 JSON 不删除，普通重复采集仍保持幂等，重建后的 K ID 不复用。该按钮仅在 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时显示，生产模式返回 404。全库重置配置默认关闭且当前未开放入口。
 
 Web 工作台的“知识关系图”把现有 SQLite 治理数据投影为可交互网络：案例包、知识卡、业务对象和来源文档作为节点，案例归属、对象描述、来源追溯以及 `DUPLICATE_OF`、`CONFLICTS_WITH`、`CANDIDATE_VERSION_OF`、`SUPERSEDES` 等已落库关系作为边。该页面不推断新的概念关系，也不改变审批、检索或存储语义；只读接口为 `GET /api/knowledge-graph`。
 

@@ -33,6 +33,7 @@
         <button class="nav-item" data-page="results">变更结果 <span id="result-count" class="nav-count">0</span></button>
         <button class="nav-item" data-page="ingest">知识采集</button>
         <button class="nav-item" data-page="review">知识审核队列 <span id="review-count" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="semantic-governance">相似知识治理 <span id="semantic-proposal-count" class="nav-count">0</span></button>
         <button class="nav-item" data-page="library">知识库</button>
         <button class="nav-item" data-page="graph">知识关系图</button>
       </nav>
@@ -407,6 +408,44 @@
           <label class="grow">审核意见<input id="review-comment" placeholder="可选：判断依据、修改说明或驳回原因"></label>
         </article>
         <div id="review-queue" class="review-grid empty">当前没有待审核知识</div>
+      </section>
+
+      <section id="page-semantic-governance" class="page">
+        <article class="change-hero semantic-governance-hero">
+          <div>
+            <p class="eyebrow">HUMAN-GOVERNED SEMANTIC MERGE</p>
+            <h2>相似知识治理</h2>
+            <p>后台只发现并推送候选，不会自动合并。确认后生成一张可检索的 canonical 卡，原卡保留审计证据并退出检索。</p>
+          </div>
+          <span id="semantic-governance-badge" class="synthetic-stamp">检查配置</span>
+        </article>
+
+        <div class="metric-grid semantic-governance-metrics">
+          <article class="metric warning"><span>待人工确认</span><strong id="semantic-pending-count">0</strong><small>不会自动改变知识</small></article>
+          <article class="metric accent"><span>已合并</span><strong id="semantic-accepted-count">0</strong><small>canonical 知识</small></article>
+          <article class="metric"><span>已排除</span><strong id="semantic-rejected-count">0</strong><small>相同内容版本不再推送</small></article>
+          <article class="metric"><span>最近扫描</span><strong id="semantic-last-scan">—</strong><small id="semantic-last-scan-detail">尚未运行</small></article>
+        </div>
+
+        <article class="panel semantic-governance-controls">
+          <div>
+            <p class="eyebrow">INCREMENTAL DISCOVERY</p>
+            <h2>候选队列</h2>
+            <p id="semantic-governance-policy" class="muted-copy">加载本地相似度策略中……</p>
+          </div>
+          <label>候选状态
+            <select id="semantic-proposal-status">
+              <option value="PENDING_REVIEW">待确认</option>
+              <option value="DEFERRED">暂缓</option>
+              <option value="ACCEPTED">已合并</option>
+              <option value="REJECTED">已排除</option>
+              <option value="STALE">已失效</option>
+              <option value="ALL">全部</option>
+            </select>
+          </label>
+          <button id="semantic-scan-now" class="button secondary" type="button">立即扫描</button>
+        </article>
+        <div id="semantic-proposal-list" class="semantic-proposal-list empty">当前没有相似知识候选</div>
       </section>
 
       <section id="page-library" class="page">

@@ -202,6 +202,11 @@ class Settings:
     change_generation_max_case_bundles: int = 3
     change_generation_max_context_cards: int = 24
     change_generation_max_output_tokens: int = 8192
+    semantic_governance_enabled: bool = False
+    semantic_scan_interval_seconds: int = 3600
+    semantic_proposal_min_score: float = 0.68
+    semantic_scan_max_cards: int = 500
+    semantic_scan_max_proposals: int = 100
 
     @property
     def api_configured(self) -> bool:
@@ -292,6 +297,14 @@ class Settings:
                 "max_context_cards": self.change_generation_max_context_cards,
                 "max_output_tokens": self.change_generation_max_output_tokens,
                 "unauthenticated_pilot": self.demo_mode,
+            },
+            "semantic_governance": {
+                "enabled": self.semantic_governance_enabled,
+                "scan_interval_seconds": self.semantic_scan_interval_seconds,
+                "proposal_min_score": self.semantic_proposal_min_score,
+                "scan_max_cards": self.semantic_scan_max_cards,
+                "scan_max_proposals": self.semantic_scan_max_proposals,
+                "model_content_export": False,
             },
             "demo_management": {
                 "rebuild_enabled": self.demo_mode and self.demo_rebuild_enabled,
@@ -654,6 +667,21 @@ class Settings:
             change_generation_max_output_tokens=_read_int(
                 values, "CHANGE_GENERATION_MAX_OUTPUT_TOKENS", 8192
             ),
+            semantic_governance_enabled=_read_bool(
+                values, "SEMANTIC_GOVERNANCE_ENABLED", False
+            ),
+            semantic_scan_interval_seconds=_read_int(
+                values, "SEMANTIC_SCAN_INTERVAL_SECONDS", 3600
+            ),
+            semantic_proposal_min_score=_read_float(
+                values, "SEMANTIC_PROPOSAL_MIN_SCORE", 0.68
+            ),
+            semantic_scan_max_cards=_read_int(
+                values, "SEMANTIC_SCAN_MAX_CARDS", 500
+            ),
+            semantic_scan_max_proposals=_read_int(
+                values, "SEMANTIC_SCAN_MAX_PROPOSALS", 100
+            ),
         )
         if settings.change_max_active_sessions > settings.change_max_retained_sessions:
             raise ConfigurationError(
@@ -667,6 +695,16 @@ class Settings:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CASE_BUNDLES 必须在 1 到 3 之间")
         if settings.change_generation_max_context_cards <= 0:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CONTEXT_CARDS 必须大于 0")
+        if not 0 <= settings.semantic_proposal_min_score <= 1:
+            raise ConfigurationError("SEMANTIC_PROPOSAL_MIN_SCORE 必须在 0 到 1 之间")
+        if settings.semantic_scan_interval_seconds < 60:
+            raise ConfigurationError(
+                "SEMANTIC_SCAN_INTERVAL_SECONDS 不能小于 60"
+            )
+        if settings.semantic_scan_max_cards < 2:
+            raise ConfigurationError("SEMANTIC_SCAN_MAX_CARDS 不能小于 2")
+        if settings.semantic_scan_max_proposals <= 0:
+            raise ConfigurationError("SEMANTIC_SCAN_MAX_PROPOSALS 必须大于 0")
         if not 0 <= settings.change_order_semantic_reuse_threshold <= 1:
             raise ConfigurationError(
                 "CHANGE_ORDER_SEMANTIC_REUSE_THRESHOLD 必须在 0 到 1 之间"
