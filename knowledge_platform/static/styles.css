@@ -369,32 +369,16 @@ dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 .graph-legend .card::before { border-color: var(--green); background: var(--panel); }
 .graph-legend .object::before { border-color: var(--amber); background: var(--amber-soft); transform: rotate(45deg); }
 .graph-legend .source::before { border-color: var(--blue); background: #e7f0f4; }
-.knowledge-graph-stage { position: relative; min-height: 620px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: linear-gradient(rgba(31,107,79,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(31,107,79,.035) 1px, transparent 1px), #fbfcf8; background-size: 28px 28px; }
-#knowledge-graph-svg { display: block; width: 100%; min-height: 620px; cursor: grab; touch-action: none; user-select: none; }
-#knowledge-graph-svg:active { cursor: grabbing; }
-#graph-arrow path { fill: #aeb8b1; }
-.graph-edge { stroke: #cdd3cf; stroke-width: 1; opacity: .72; transition: opacity .15s, stroke .15s, stroke-width .15s; }
-.graph-edge.explicit { stroke: var(--amber); stroke-dasharray: 5 4; stroke-width: 1.5; opacity: .9; }
-.graph-edge.relation-similar-to { stroke: var(--amber); stroke-dasharray: 3 4; }
-.graph-edge.relation-merged-into { stroke: var(--green); stroke-dasharray: none; stroke-width: 2; }
-.graph-edge.active { stroke: var(--green); stroke-width: 2; opacity: 1; }
-.graph-edge.dimmed { opacity: .08; }
-.graph-node { cursor: pointer; outline: none; transition: opacity .15s; }
-.graph-node circle { stroke-width: 2; vector-effect: non-scaling-stroke; transition: stroke-width .15s, opacity .15s; }
-.graph-node.kind-case circle { fill: var(--green); stroke: #174f3a; }
-.graph-node.kind-card circle { fill: var(--panel); stroke: var(--green); }
-.graph-node.kind-object circle { fill: var(--amber-soft); stroke: var(--amber); }
-.graph-node.kind-source circle { fill: #e7f0f4; stroke: var(--blue); }
-.graph-node.status-PENDING_REVIEW circle, .graph-node.status-DRAFT circle { stroke: var(--amber); stroke-dasharray: 3 2; }
-.graph-node.status-REJECTED circle { stroke: var(--red); stroke-dasharray: 2 2; }
-.graph-node.status-SUPERSEDED circle { opacity: .62; }
-.graph-node.selected circle { stroke-width: 4; }
-.graph-node.matched:not(.selected) circle { stroke-width: 3; }
-.graph-node.dimmed { opacity: .13; }
-.graph-node:focus circle { stroke-width: 4; }
-.graph-node-label { fill: var(--ink); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 9px; paint-order: stroke; stroke: #fbfcf8; stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
-.graph-node.kind-card .graph-node-label { font-size: 8px; }
-.graph-zoom-controls { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+.knowledge-graph-stage { position: relative; min-height: 620px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: radial-gradient(circle at 48% 42%, rgba(255,255,255,.95) 0, rgba(247,250,246,.82) 42%, rgba(225,235,228,.76) 100%), linear-gradient(rgba(31,107,79,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(31,107,79,.03) 1px, transparent 1px); background-size: auto, 30px 30px, 30px 30px; }
+#knowledge-graph-canvas { display: block; width: 100%; height: 620px; cursor: grab; touch-action: none; user-select: none; outline: none; }
+#knowledge-graph-canvas.is-dragging { cursor: grabbing !important; }
+#knowledge-graph-canvas:focus-visible { box-shadow: inset 0 0 0 3px rgba(31,107,79,.24); }
+.graph-tooltip { position: absolute; z-index: 4; display: grid; gap: 4px; max-width: 280px; padding: 9px 11px; border: 1px solid rgba(31,107,79,.22); border-radius: 7px; color: var(--ink); background: rgba(255,254,249,.96); box-shadow: 0 10px 28px rgba(30,50,39,.16); font-size: 10px; line-height: 1.35; pointer-events: none; }
+.graph-tooltip[hidden] { display: none; }
+.graph-tooltip strong { overflow-wrap: anywhere; font-size: 11px; }
+.graph-tooltip span { color: var(--muted); }
+.graph-gesture-hint { position: absolute; left: 13px; bottom: 10px; z-index: 2; margin: 0; padding: 5px 8px; border-radius: 5px; color: #607068; background: rgba(255,254,249,.82); font-size: 9px; pointer-events: none; }
+.graph-zoom-controls { position: absolute; z-index: 3; right: 12px; top: 12px; display: flex; gap: 6px; }
 .graph-zoom-controls .button { min-width: 34px; padding-inline: 9px; background: rgba(255,254,249,.92); }
 .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; pointer-events: none; }
 .graph-empty[hidden] { display: none; }
@@ -411,4 +395,4 @@ dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 
 @media (max-width: 1220px) { .change-case-catalog { grid-template-columns: repeat(3,minmax(0,1fr)); } .change-launcher { grid-template-columns: repeat(2,minmax(0,1fr)); } .change-launcher > div { grid-column: 1 / -1; } .change-primary-grid, .real-change-grid, .real-change-editor-grid { grid-template-columns: 1fr; } .real-change-recommend-panel { position: static; } .approval-panel { grid-template-columns: repeat(2,minmax(0,1fr)); } .approval-copy { grid-column: 1 / -1; } .real-change-review-bar { grid-template-columns: repeat(2,minmax(0,1fr)); } .graph-tools, .semantic-governance-controls { grid-template-columns: repeat(2,minmax(0,1fr)); } .graph-tools > div, .semantic-governance-controls > div { grid-column: 1 / -1; } .graph-layout { grid-template-columns: 1fr; } .graph-inspector { position: static; } }
 @media (max-width: 1050px) { .metric-grid, .real-change-profile-strip, .real-change-draft-summary { grid-template-columns: repeat(2,1fr); } .two-column, .query-layout { grid-template-columns: 1fr; } .review-grid { grid-template-columns: 1fr; } .change-stages { grid-template-columns: repeat(4,1fr); } .change-stage:nth-child(4)::after, .change-stage:last-child::after { display: none; } }
-@media (max-width: 760px) { .app-shell { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } nav { grid-template-columns: repeat(2,1fr); } .sidebar-foot { margin-top: 20px; } .main { padding: 24px 16px; } .metric-grid, .memory-status-grid, .real-change-profile-strip, .real-change-draft-summary, .real-change-form, .semantic-source-grid, .semantic-editor-grid { grid-template-columns: 1fr; } .real-change-form .span-2, .semantic-editor-grid .span-2 { grid-column: auto; } .review-controls, .library-tools, .change-case-catalog, .change-launcher, .approval-panel, .graph-tools, .semantic-governance-controls, .real-change-review-bar, .real-change-evaluation-launcher { display: grid; grid-template-columns: 1fr; } .change-stages { grid-template-columns: repeat(2,1fr); } .change-stage:nth-child(even)::after { display: none; } .change-hero, .real-change-warning { align-items: flex-start; } .synthetic-stamp { min-width: 92px; font-size: 12px; } .network-topology { min-height: 470px; } .topology-node.route-a { left: 5%; top: 13%; } .topology-node.route-b { left: 5%; bottom: 12%; } .topology-node.destination { left: 28%; top: 42%; } .topology-node.primary { right: 4%; top: 25%; } .topology-node.standby { right: 4%; bottom: 23%; } .change-bottom-grid { grid-template-columns: 1fr; } .graph-panel-head { display: grid; } .graph-legend { justify-content: start; } .knowledge-graph-stage, #knowledge-graph-svg { min-height: 500px; } }
+@media (max-width: 760px) { .app-shell { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } nav { grid-template-columns: repeat(2,1fr); } .sidebar-foot { margin-top: 20px; } .main { padding: 24px 16px; } .metric-grid, .memory-status-grid, .real-change-profile-strip, .real-change-draft-summary, .real-change-form, .semantic-source-grid, .semantic-editor-grid { grid-template-columns: 1fr; } .real-change-form .span-2, .semantic-editor-grid .span-2 { grid-column: auto; } .review-controls, .library-tools, .change-case-catalog, .change-launcher, .approval-panel, .graph-tools, .semantic-governance-controls, .real-change-review-bar, .real-change-evaluation-launcher { display: grid; grid-template-columns: 1fr; } .change-stages { grid-template-columns: repeat(2,1fr); } .change-stage:nth-child(even)::after { display: none; } .change-hero, .real-change-warning { align-items: flex-start; } .synthetic-stamp { min-width: 92px; font-size: 12px; } .network-topology { min-height: 470px; } .topology-node.route-a { left: 5%; top: 13%; } .topology-node.route-b { left: 5%; bottom: 12%; } .topology-node.destination { left: 28%; top: 42%; } .topology-node.primary { right: 4%; top: 25%; } .topology-node.standby { right: 4%; bottom: 23%; } .change-bottom-grid { grid-template-columns: 1fr; } .graph-panel-head { display: grid; } .graph-legend { justify-content: start; } .knowledge-graph-stage { min-height: 500px; } #knowledge-graph-canvas { height: 500px; } .graph-gesture-hint { max-width: calc(100% - 96px); } }

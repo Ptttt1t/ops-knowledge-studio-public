@@ -80,12 +80,19 @@ class KnowledgeGraphTests(unittest.TestCase):
                 with urlopen(f"{base}/", timeout=5) as response:
                     page = response.read().decode("utf-8")
                 self.assertIn('data-page="graph">知识关系图', page)
-                self.assertIn('id="knowledge-graph-svg"', page)
+                self.assertIn('id="knowledge-graph-canvas"', page)
+                self.assertIn('id="knowledge-graph-tooltip"', page)
+                self.assertIn('id="graph-rotate-left"', page)
+                self.assertIn('id="graph-rotate-right"', page)
+                self.assertIn("拖动旋转", page)
 
                 with urlopen(f"{base}/app.js", timeout=5) as response:
                     script = response.read().decode("utf-8")
                 self.assertIn("/api/knowledge-graph", script)
                 self.assertIn("renderKnowledgeGraphDetail", script)
+                self.assertIn("projectKnowledgeGraphNode", script)
+                self.assertIn("graphCompactLabel", script)
+                self.assertIn('return `K${node.entity_id}`', script)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -69,7 +69,7 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 
 ### 3. 用关系图检查知识结构
 
-关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`MERGED_INTO` 等显式关系。
+三维关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`MERGED_INTO` 等显式关系。拖动可旋转视角，Shift + 拖动可平移，滚轮可缩放；节点只常驻显示短标识，完整名称在悬停浮层和右侧详情中查看。
 
 ![知识资产关系图](docs/images/knowledge-graph.png)
 
