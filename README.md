@@ -1,89 +1,221 @@
 # Ops Knowledge Studio
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
+![Version](https://img.shields.io/badge/version-1.5.0-b88924)
+![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
-一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、工单、复盘和历史方案转化为可审核的知识资产，再用这些已批准知识生成变更方案，经硬校验、人工审批、模拟执行和结果回流形成完整闭环。
+一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
+
+它不是“把文档丢进向量库后直接问模型”，而是把证据定位、知识建模、人工审核、可信检索、变更审批、模拟执行、结果反馈和相似知识合并放进同一个受治理闭环。
 
 > [!IMPORTANT]
-> 仓库内置的云网络案例、资源标识、指标和执行结果全部是合成演示数据。当前版本不会连接真实华为云、AWS、Azure、CMDB、监控或工单系统，也不接受真实云凭据。
+> 仓库中的工单号、服务名、资源标识、网络地址、人员、指标和执行结果全部是合成演示数据。默认版本不会连接真实云账号、CMDB、监控、工单或执行系统，也不接受真实云凭据。
 
-## 这个项目解决什么问题
+![Ops Knowledge Studio 平台概览](docs/images/platform-overview.png)
 
-普通 RAG 可以“找到资料并回答”，但生产运维还需要回答另外几个问题：引用的知识是否经过审核、执行动作是否与当前环境一致、谁批准了什么参数、失败后能否安全回退，以及这次执行经验如何进入下一轮知识治理。
+## 为什么需要它
 
-Ops Knowledge Studio 将这些环节放进同一个可审计流程：
+生产运维中的知识辅助不能只回答“资料里写了什么”，还必须回答：
+
+- 这条知识是否经过人工审核？
+- 当前结论引用了哪张卡、哪个字段和哪段来源？
+- 历史执行结果是否被错误地当成当前规划依据？
+- 具体设备 ID、IP、阈值和版本来自用户输入，还是模型猜测？
+- 两张表述不同的检查卡是否其实是一条可复用知识？
+- 变更失败后能否回退，审批是否绑定了参数和环境快照？
+- 代码升级后重建同一案例，旧卡、旧索引和旧合并关系是否真的失效？
+
+Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型、状态流、硬门禁和人工决策点。
+
+## 当前能力地图
+
+| 模块 | 已实现能力 | 关键边界 |
+| --- | --- | --- |
+| 文档采集 | 文本、Markdown、CSV、JSON、YAML、PDF、DOCX、图片/OCR | 文档大小、页数、解压比、像素和模型调用次数受限 |
+| ChangeOrder Adapter | 结构指纹、真实路径、JSON Pointer、字符区间、SHA-256 证据 | Schema 冲突时失败关闭，不把疑似工单交给模型猜 |
+| Knowledge Card Builder | `CASE_CONTEXT`、`PROCEDURE_STEP`、`EXECUTION_OUTCOME` | Extraction Unit 不等于 Knowledge Card；正文禁止 raw JSON |
+| 案例包 | 一个 ChangeOrder 对应一个 `ChangeCaseBundle`，包内保存有序卡片 | 支持整包原子审核和当前案例精确重建 |
+| 知识治理 | 质量 QA、证据复核、批准、驳回、替代、重复状态 | 只有 `APPROVED + INDEXED + retrieval_enabled` 可进入可信检索 |
+| 相似知识治理 | 后台增量发现、人工合并/排除/暂缓、canonical 卡 | 不自动合并，不调用模型，不外发正文 |
+| 知识关系图 | 案例、卡片、对象、来源、版本、验证、回退、相似和合并关系 | 当前是 SQLite 关系投影与可视化，不是独立图数据库 |
+| 可信问答 | 本地混合检索、字段级引用、可选只读 Agent | 无强相关已审核证据时拒绝输出“可信方案” |
+| 合成变更 Demo | 风险评估、计划生成、人工审批、灰度模拟、失败回退、反馈 | 只修改隔离模拟器，不操作真实基础设施 |
+| 真实 ChangeOrder BETA | 结构化需求、完整案例推荐、草案生成、留版、审核、JSON 导出、盲测 | 默认关闭；只生成草案，不注册真实执行工具 |
+| Harness Runtime | SQLite Run、步骤、事件、检查点、幂等、取消、恢复、工具审批 | 参数、预算或审批上下文漂移会使旧授权失效 |
+| MindMemOS | 可选的跨表述语义后备与长期记忆同步 | 默认关闭；内容外发需第二个显式开关；结果仍回到本地复核 |
+
+## 产品界面
+
+以下界面截图均由当前代码使用公开合成数据生成，不包含真实 ChangeOrder 或内网信息。
+
+### 1. ChangeOrder 以案例包为整体治理
+
+一个完整 ChangeOrder 先建立案例包，再生成最多一张 Context、逐源 Procedure 和独立 Execution Outcome。页面同时显示结构覆盖、语义覆盖、Builder 版本、Card Model 版本和重建入口。
+
+![ChangeOrder 案例包展开视图](docs/images/change-case-bundle-expanded.png)
+
+案例包在知识库中是一级资产，而不是十五张彼此失联的卡片：
+
+![ChangeOrder 案例包列表](docs/images/change-case-bundles.png)
+
+### 2. 相似知识由系统发现、由人决定
+
+后台会持续比较已批准 Procedure 卡，推送可能重复或高度复用的候选。操作者可以并排查看来源、适用阶段、通用化操作和验证内容，再确认合并、排除或暂缓。
+
+![相似知识人工治理](docs/images/semantic-governance.png)
+
+确认合并后，系统创建新的 canonical 卡；原卡保留审计证据但退出所有普通检索。图谱关系由待确认的 `SIMILAR_TO` 变为确定的 `MERGED_INTO`。
+
+### 3. 用关系图检查知识结构
+
+关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`MERGED_INTO` 等显式关系。
+
+![知识资产关系图](docs/images/knowledge-graph.png)
+
+这里的“知识图谱”是 SQLite 中实体和关系的交互式投影，适合治理检查、来源追踪和关系浏览；当前没有引入 Neo4j 等独立图数据库，也不声称具备开放世界图推理能力。
+
+### 4. 真实 ChangeOrder 生成是隔离的 BETA 能力
+
+真实生成页面与合成执行 Demo 分开。功能默认关闭，页面持续显示“未鉴权能力试验”和 `REAL_CHANGE_GENERATION_ENABLED` 状态。
+
+![真实 ChangeOrder 草案生成 BETA](docs/images/real-change-generation-beta.png)
+
+它只生成和审核 JSON 草案，不执行变更；所有具体值必须来自结构化表单参数，缺失值以占位符暴露并阻断审核。
+
+### 5. 合成变更闭环仍可独立体验
+
+仓库内置十个合成云网络案例，覆盖简单切换和十几步分波次变更。它们用于验证审批、快照、灰度、失败注入和自动回退，不依赖真实云环境。
+
+| 方案与拓扑 | 执行结果与审计 |
+| --- | --- |
+| ![合成变更方案](docs/images/change-case-library.png) | ![合成执行结果](docs/images/change-execution-result.png) |
+
+![复杂变更计划](docs/images/complex-change-plan.png)
+
+## 核心架构
 
 ```mermaid
 flowchart LR
-    A["SOP / 工单 / 复盘"] --> B["知识抽取与证据定位"]
-    B --> C["人工审核"]
-    C -->|APPROVED| D["本地可信检索"]
-    D -->|直接命中| E["可信方案生成"]
-    D -->|无命中| M["MindMemOS 语义后备"]
-    M --> V["映射回本地卡片并复核 APPROVED"]
-    V --> E
-    E --> F["硬校验与风险决策"]
-    F --> G["人工审批"]
-    G --> H["模拟执行与验证"]
-    H --> I["执行反馈候选"]
-    I -->|PENDING_REVIEW| C
+    S["SOP / ChangeOrder / 复盘"] --> A["安全解析与 ChangeOrder Adapter"]
+    A --> B["规范化业务对象"]
+    B --> C["Semantic Card Builder"]
+    C --> Q["证据、Coverage 与内容 QA"]
+    Q --> H["人工审核"]
+    H -->|APPROVED| R["本地可信检索"]
+    R --> G["可信问答 / 真实草案生成"]
+    H --> M["相似知识增量发现"]
+    M --> D["人工合并决策"]
+    D --> K["Canonical Knowledge"]
+    K --> R
+    G --> P["人工审批"]
+    P --> X["隔离模拟执行"]
+    X --> F["反馈候选"]
+    F --> H
 ```
 
-核心原则：
+系统坚持四个分层：
 
-- **上下文可信**：只有 `APPROVED` 知识可以进入可信方案；回答保留 `[K编号]` 证据引用。
-- **决策分层**：模型负责语言理解与叙述，资源、动作、阈值、审批和回退由确定性规则控制。
-- **工具受控**：非只读工具必须经过持久化审批，审批与具体参数摘要绑定。
-- **全程可追溯**：运行状态、检查点、工具调用、前后快照、验证结果和操作者均写入审计记录。
-- **反馈不直发**：新执行经验只生成 `PENDING_REVIEW` 候选，不会自动升级为可信知识。
+1. **事实层**：原始文档、JSON Pointer、字符范围和 SHA-256。
+2. **知识层**：Card Type、业务字段、通用操作、实例参数和语义关系。
+3. **治理层**：审核、去重、发布、质量、合并和索引状态。
+4. **变更层**：需求、计划、硬校验、审批、执行、验证和回退。
 
-## 功能总览
+模型负责语言理解与有限生成；时间戳、时长、布尔值、枚举、数值、资源规格、版本、任务双视图对账和审批绑定由程序确定性处理。
 
-| 模块 | 能力 | 关键约束 |
+## ChangeOrder 如何变成知识
+
+当前流水线：
+
+```text
+ChangeOrder JSON
+→ ChangeOrder Adapter
+→ normalized business objects
+→ ProcedureStep normalization
+→ semantic unit building
+→ dedup / reuse
+→ Knowledge Card
+→ QA + review + index
+```
+
+### Card Type
+
+| Card Type | 语义 | 默认进入规划 RAG |
 | --- | --- | --- |
-| 知识采集 | 上传文档或粘贴文本，分片、抽取知识卡片并精确定位来源 | 抽取结果默认进入待审核状态 |
-| 知识治理 | 质量评分、重复/冲突/新版本比较、相似知识候选、人工合并、批准、驳回、替代与人工删除 | 只有 `APPROVED` 可被可信检索；相似卡不会自动合并；删除保留审计并回收长期记忆 |
-| 可信方案 | 本地混合检索、可选 MindMemOS 语义后备 + DeepSeek 生成带证据的运维建议 | 无强相关证据时拒绝给出可信方案 |
-| 变更生成 | 环境感知、知识复用、风险评分、分步计划、验证与回退生成 | 所有云资源与网络均为隔离模拟 |
-| 审批执行 | 精确确认串、参数摘要、灰度执行、故障注入与自动回退 | 审批前不修改模拟网络 |
-| 运行时 | SQLite Run、事件、步骤、检查点、取消、恢复和幂等执行 | 参数漂移或快照漂移会使旧审批失效 |
-| 反馈闭环 | 将执行日志和结果整理为知识候选 | 必须再次人工审核 |
-| 长期记忆 | 可选接入 MindMemOS Vanilla，实现跨表述语义召回与反馈记忆 | 默认关闭且禁止内容外发；召回后必须通过阈值、对象/动作相关性和本地 `APPROVED` 状态复核 |
+| `CASE_CONTEXT` | 工单身份、服务范围、区域、窗口、治理、风险影响、灰度、工具与 Action metadata | 是 |
+| `PROCEDURE_STEP` | 一个规范化 source ProcedureStep，包含 operation、validation、rollback、impact | 是 |
+| `EXECUTION_OUTCOME` | 历史执行状态、验证记录、失败原因和结果反馈 | 否 |
 
-## 界面预览
+关键建模规则：
 
-### 1. 从已批准案例生成变更方案
+- 每个 ChangeOrder 最多生成一个 `CASE_CONTEXT`。
+- `/data/action_list` 是 Action/Capability metadata，不是有序 Procedure。
+- 默认 `1 source ProcedureStep = 1 retrievable Procedure Knowledge Unit`。
+- section 默认保存在 `operation_sections[]`；只有步骤确实过长且 section 可独立操作时才发布 child。
+- Parent 和 Child 绝不同时 `INDEXED`；拆分后 Parent 是 `CONTAINER`。
+- HTML、实体、图片和 JSON escape 经过 `normalize_rich_text()`；图片只保留 attachment/evidence metadata。
+- `impact_analysis`、`risk_level`、`risk_control` 和 `inferred_risk` 分开建模。
+- `generalized_operation` 与 `instance_parameters` 分层，历史参数只作为案例证据。
+- 高置信 target/value 关系可以建立 `VALIDATES` 和 `ROLLBACK_OF`。
+- `action_list` 与 `change_tool_relate_action` 使用稳定 JSON serialization 和 SHA-256 multiset reconciliation 对账。
 
-页面统一展示案例选择、风险、前置校验、模拟拓扑、知识证据、分步操作、验证项和人工审批入口。
+每次构建会输出 `card_build_report.json`，包含结构覆盖、语义覆盖、Parent/Child 发布、noop section、重复复用、标题冲突、关系数量、逐卡 QA 和 `skip_reason`。示例见 [card_build_report.example.json](docs/card_build_report.example.json)。
 
-![变更案例库与方案生成](docs/images/change-case-library.png)
+## 知识状态不是一个字段
 
-### 2. 展开十几步复杂变更计划
+平台将过去容易混淆的状态拆开：
 
-复杂案例会按 `CANARY / WAVE-1 / WAVE-2 / FINAL` 等波次生成长计划。下图为 14 步东西向防火墙服务链变更，包含 120 分钟窗口、51 项硬校验和逐路由表回退日志。
+| 状态 | 回答的问题 | 示例 |
+| --- | --- | --- |
+| `review_status` | 人是否批准了这条知识？ | `PENDING_REVIEW` / `APPROVED` |
+| `dedup_status` | 它与其他知识是什么关系？ | `NEW` / `DUPLICATE` / `CANONICAL` / `MERGED` |
+| `content_quality` | 正文和证据质量如何？ | `0–100` |
+| `publish_status` | 它应以何种形态发布？ | `CANDIDATE` / `INDEXED` / `CONTAINER` / `SKIPPED` |
+| `retrieval_enabled` | 普通检索能否召回？ | `true` / `false` |
+| `planning_rag_enabled` | 能否进入新变更规划？ | Execution Outcome 固定为 `false` |
 
-![十四步复杂变更计划](docs/images/complex-change-plan.png)
+这意味着“已批准”不等于“一定进入检索”，“重复”也不会再与质量分或审核状态混为一谈。
 
-### 3. 查看执行结果与完整审计
+## 相似知识人工合并
 
-结果页集中展示工单终态、执行后有效下一跳、步骤验证、前后状态哈希、自动回退信息和审计时间线。
+启用后，Web Server 会启动有界后台扫描器：
 
-![变更执行结果与审计](docs/images/change-execution-result.png)
+```dotenv
+SEMANTIC_GOVERNANCE_ENABLED=true
+SEMANTIC_SCAN_INTERVAL_SECONDS=3600
+SEMANTIC_PROPOSAL_MIN_SCORE=0.68
+SEMANTIC_SCAN_MAX_CARDS=500
+SEMANTIC_SCAN_MAX_PROPOSALS=100
+```
 
-### 4. 回到统一知识资产库
+处理流程：
 
-历史案例以 `APPROVED` 知识参与下一次方案生成；新执行反馈仍停留在审核队列。
+```text
+APPROVED + INDEXED Procedure Cards
+→ 本地确定性相似度
+→ PENDING_REVIEW + SIMILAR_TO
+→ 人工 ACCEPT / REJECT / DEFER
+→ canonical card + MERGED_INTO
+```
 
-![已批准知识资产库](docs/images/knowledge-library.png)
+- 扫描不调用 LLM，也不会把正文发送给外部模型。
+- 分数只是候选门槛，不是合并结论。
+- `REJECTED` 与来源 fingerprint 绑定；内容不变时不重复推送。
+- 内容或审批状态变化后旧候选自动 `STALE`。
+- 合并在一个 SQLite 事务中完成，来源卡立即退出本地检索和长期记忆映射。
+- 重建任一来源案例会链式下架派生 canonical，恢复仍有效的其他来源卡。
+
+完整说明见 [相似知识人工合并治理](docs/semantic-governance.md)。
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.10～3.13；
-- Git；
-- Windows、Linux 或 macOS；
-- DeepSeek API Key 为可选项：离线变更演示、知识浏览和本地治理不需要 Key。
+- Python `3.10–3.13`
+- Git
+- Windows、Linux 或 macOS
+- DeepSeek 兼容 API：知识抽取、可信回答和真实草案生成需要；合成变更 Demo 和已有知识浏览不需要
+- 可选 OCR：PaddleOCR、PaddlePaddle、PyMuPDF
 
 ### Windows + Conda
 
@@ -113,14 +245,213 @@ python run.py init
 python run.py serve
 ```
 
-启动后访问：
+打开 <http://127.0.0.1:8765>。
 
-- Web 工作台：<http://127.0.0.1:8765>
-- 无鉴权存活检查：<http://127.0.0.1:8765/api/health/live>
+`.env.example` 默认采用内网 Demo 模式，关闭启动令牌、访问令牌和请求边界检查；它适合本机或防火墙隔离的可信内网体验，不是公网部署模板。
 
-仓库的 `.env.example` 默认是内部 Demo 模式，不要求启动令牌或 Web Access Token，浏览器可直接打开。启动日志会明确打印三条 `[DEMO MODE] ... disabled` 提示，避免把演示配置误认为生产配置。日常启动只需要激活环境并执行 `python run.py serve`。
+## 建议的首次体验
 
-如果要恢复生产安全边界，至少设置：
+### 路线 A：不调用模型，体验合成变更闭环
+
+1. 打开“变更方案生成”。
+2. 选择任一内置案例。
+3. 生成变更单并检查风险、快照、步骤、验证和回退。
+4. 输入页面要求的精确确认串。
+5. 观察灰度执行；也可以选择故障场景验证自动回退。
+6. 在“变更结果”查看事件、前后状态哈希和反馈候选。
+
+CLI 也可直接运行：
+
+```powershell
+python run.py demo-change --case-id dc-route-failover --actor demo-operator
+```
+
+复杂案例列表和推荐输入见 [十个合成云网络案例](sample_data/change_case_documents/README.md)。
+
+### 路线 B：导入知识并走审核闭环
+
+在 `.env` 中填写服务端 API 配置：
+
+```dotenv
+DEEPSEEK_API_KEY=YOUR_API_KEY
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+```
+
+然后：
+
+```powershell
+python run.py ingest --file sample_data/demo_upgrade_sop.md
+python run.py list --status PENDING_REVIEW
+python run.py review --id 1 --action approve --reviewer knowledge-owner
+python run.py query --question "升级前必须检查什么，失败后如何回退？"
+```
+
+对于结构化 ChangeOrder，建议在 Web 页面查看和审核整个案例包，而不是逐张卡片操作。
+
+## 真实 ChangeOrder 草案生成 BETA
+
+这条能力默认关闭，并与合成执行 Demo 完全隔离。启用前必须从一份已批准的代表案例提取、人工检查并激活 `SchemaProfile`：
+
+```powershell
+python run.py change-schema-profile-inspect --case-id "change-order:<source-sha256>" |
+  Out-File -Encoding utf8 .\schema_profile.json
+
+python run.py change-schema-profile-activate `
+  --file .\schema_profile.json `
+  --actor schema-admin
+
+python run.py change-schema-profile-show
+```
+
+确认 Profile 后，在可信内网 `.env` 中开启：
+
+```dotenv
+REAL_CHANGE_GENERATION_ENABLED=true
+CHANGE_DRAFT_DB_PATH=data/change_drafts.db
+CHANGE_GENERATION_MAX_CASE_BUNDLES=3
+CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
+CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+```
+
+生成流程：
+
+```text
+RealChangeRequest
+→ 推荐并人工确认 1–3 个完整 APPROVED 案例包
+→ GeneratedChangeDraft
+→ 程序确定性装配真实 JSON
+→ 硬门禁
+→ 人工审核
+→ change_order_draft.json + provenance_report.json
+```
+
+主要门禁：
+
+- 没有激活且结构一致的 Profile 时禁止生成。
+- 案例包必须完整读取；超出上下文预算时要求减少案例，不静默截断。
+- 所有具体值必须来自表单；无来源参数直接失败。
+- `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
+- `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
+- 模型协议失败只允许一次协议修复；仍失败则保留诊断并停止，不生成 fallback 草案。
+- 只有当前 `REVIEW_APPROVED` revision 可以导出。
+- 留一案例盲测会在生成期间隔离目标及内容近重复案例。
+
+完整说明见 [真实 ChangeOrder 草案生成与能力盲测](docs/real-change-generation.md)。
+
+## Demo 中重建当前案例
+
+在 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时，案例包详情会显示“重建当前案例”。该操作：
+
+- 保留原始上传 JSON、source file 和 `source_sha256`；
+- 精确清除当前 case 的卡片、审核、关系、fingerprint、索引、缓存和旧报告；
+- 失效依赖这些卡片的相似候选与 canonical 合并结果；
+- 强制以当前 Adapter 和 Builder 重新运行；
+- 使用新的单调递增 K ID，并增加 `build_generation`；
+- 不影响其他案例，也不关闭普通 ingest 的幂等机制。
+
+`DEMO_FULL_RESET_ENABLED` 当前保留但默认关闭，Web 未开放全库重置入口。
+
+## 可选 MindMemOS 长期记忆
+
+MindMemOS 是本地检索无强命中时的实验性语义后备，不替代 SQLite 知识库和审核状态。
+
+```dotenv
+MINDMEMOS_ENABLED=true
+MINDMEMOS_BASE_URL=http://127.0.0.1:8000
+MINDMEMOS_API_KEY=LOCAL_MEMORY_API_KEY
+MINDMEMOS_USER_ID=ops-knowledge-studio
+MINDMEMOS_APP_ID=ops-knowledge-studio
+MINDMEMOS_MIN_RELEVANCE_SCORE=0.65
+MINDMEMOS_MIN_LOCAL_ANCHORS=2
+
+# 完成数据边界确认后再单独开启
+MINDMEMOS_ALLOW_CONTENT_EXPORT=true
+```
+
+可信门禁：
+
+- 只同步本地 `APPROVED` 且可检索的卡片。
+- 外发字段采用白名单，不包含 `source_ref`、`evidence_locator`、原始证据正文或本地路径。
+- 返回的自由文本不直接进入答案，只使用 `memory_id` 映射回本地 card ID。
+- 每次召回重新检查本地状态、内容哈希、相关性、对象和动作锚点。
+- 外部服务失败时降级到本地检索。
+
+详见 [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)。
+
+## 常用 CLI
+
+```text
+init                         初始化 SQLite
+serve                        启动 Web 工作台
+ingest                       导入并加工文档
+list / show                  查看卡片
+review                       审核、驳回或替代卡片
+case-bundles / case-bundle   查看 ChangeOrder 案例包
+review-case-bundle           原子地审核整个案例包
+search                       本地治理检索
+query / agent-query          可信回答与只读 Agent
+change-schema-profile-*      管理真实生成 SchemaProfile
+memory-status / memory-sync  检查或同步 MindMemOS
+demo-change                  运行合成变更闭环
+run-*                        管理持久化 Harness Run
+```
+
+查看完整参数：
+
+```powershell
+python run.py --help
+python run.py demo-change --help
+python run.py run-submit --help
+```
+
+## 数据与目录
+
+```text
+change_management/     合成案例、计划、审批、模拟执行、反馈
+harness/                DeepSeek 客户端、配置、Runtime、Tool Registry
+knowledge_platform/     文档解析、Adapter、Card Builder、治理、检索、Web
+sample_data/            合成 SOP、案例文档和同结构 ChangeOrder fixtures
+knowledge_sources/      知识来源与公开测试语料
+scripts/                诊断、评估、导入和实验脚本
+docs/                   部署、安全、ChangeOrder、MindMemOS 与专题文档
+data/                   SQLite 数据库，默认不提交
+artifacts/              运行、报告、审计与模拟执行工件，默认不提交
+```
+
+主要持久化边界：
+
+- `data/knowledge.db`：文档、卡片、证据、案例包、关系、审核与记忆映射。
+- `data/runtime.db`：Run、步骤、事件、检查点和工具审批。
+- `data/change_drafts.db`：SchemaProfile、真实草案 revision 和盲测报告。
+- `artifacts/change_order_card_reports/`：逐案例 `card_build_report.json`。
+- `artifacts/change_demos/`：合成变更计划、快照、执行与反馈工件。
+
+## 测试与验证
+
+```powershell
+python -m unittest discover -s tests -t .
+python -m compileall -q harness knowledge_platform tests
+node --check knowledge_platform/static/app.js
+```
+
+当前分支回归结果：`144 tests passed`。
+
+测试覆盖：
+
+- ChangeOrder 结构识别、动态 action group 和双视图 reconciliation；
+- Card Type、rich text、确定性时间戳、section publication 和跨阶段复用；
+- 案例包审核、证据漂移、内容 QA 和 case-scoped rebuild；
+- 相似候选、拒绝抑制、人工 canonical 合并、图谱变化和重建失效；
+- 真实草案推荐、Profile、留版、审核、导出、盲测和模型协议失败；
+- Runtime 幂等、预算、审批、取消、恢复和并发；
+- Web 鉴权、请求边界、文档炸弹防护和长期记忆治理。
+
+CI 配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+
+## 部署与安全边界
+
+默认 Demo 只适合本机或防火墙隔离的可信内网。正式部署至少需要：
 
 ```dotenv
 DEMO_MODE=false
@@ -132,460 +463,36 @@ PLATFORM_CSP_ALLOW_INLINE=false
 DEEPSEEK_ALLOW_INSECURE_HTTP=false
 ```
 
-再运行 `python run.py generate-access-token`，将输出的 `PLATFORM_ACCESS_TOKEN_HASH=...` 写入 `.env`，并在浏览器首次打开时输入对应明文令牌。
-
-## 三分钟体验变更闭环
-
-推荐从 Web 界面体验：
-
-1. 启动服务，打开左侧 **变更方案生成**。
-2. 从案例库选择一个场景，例如 **NAT 网关蓝绿切换**。
-3. 选择 **正常闭环**，点击 **生成变更单**。
-4. 核对环境快照、知识证据、风险、硬校验、计划哈希和回退方案。
-5. 输入页面提示的精确确认串，例如 `APPROVE CHG-DEMO-NAT-002`。
-6. 批准后观察双 AZ 灰度执行；完成后进入 **变更结果** 查看证据和审计。
-7. 可选择将执行经验送入知识审核队列，再由人工决定是否批准。
-
-直接拒绝、关闭标准输入或输入错误确认串都不会修改模拟网络。
-
-## 真实 ChangeOrder 草案生成 BETA
-
-左侧新增的 **真实变更生成 BETA** 与上述合成 Demo 完全隔离。它只读取已审核知识并生成、校验、留版和人工审核真实结构草案，不注册执行工具，也不会把草案或审核结果写回知识库。功能默认关闭；内网管理员必须先从一份已批准的代表案例建立并激活 `SchemaProfile`：
+生成访问令牌摘要：
 
 ```powershell
-python run.py change-schema-profile-inspect --case-id "change-order:<source-sha256>" |
-  Out-File -Encoding utf8 .\schema_profile.json
-
-# 人工检查字段类型和 policy 后激活；该文件含真实字段样例，不要提交仓库
-python run.py change-schema-profile-activate --file .\schema_profile.json --actor schema-admin
-python run.py change-schema-profile-show
+python run.py generate-access-token
 ```
 
-然后在内网 `.env` 中显式启用并重启服务：
-
-```dotenv
-REAL_CHANGE_GENERATION_ENABLED=true
-CHANGE_DRAFT_DB_PATH=data/change_drafts.db
-CHANGE_GENERATION_MAX_CASE_BUNDLES=3
-CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
-CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
-```
-
-页面先推荐最多三个完整且为 `APPROVED` 的案例包，操作者确认后才异步生成。模型只输出规范化草案，真实 `action_list`、分组任务视图和 `ExecutionResult` 由程序装配并硬校验；只有 `REVIEW_APPROVED` revision 可以下载 `change_order_draft.json` 和 `provenance_report.json`。留一案例盲测会隔离目标及近重复案例，生成后才读取隐藏答案并输出 `evaluation_report.json`。
-
-该页面持续标注“未鉴权能力试验”。默认 Demo 配置下的申请人和审核人都是自报身份，不能作为正式审计证据；禁止公网暴露，也不要把内网 Profile、真实案例、Prompt、数据库或评测报告提交到公开仓库。完整流程、字段策略和接口见 [真实 ChangeOrder 草案生成与盲测](docs/real-change-generation.md)。
-
-## 相似知识持续治理
-
-“相似知识治理”页面面向已经审核并发布的 `PROCEDURE_STEP`。后台使用本地确定性算法周期扫描通用化操作、验证、回退、阶段和对象锚点，只创建 `PENDING_REVIEW` 候选与图谱中的 `SIMILAR_TO` 关系，不调用模型、不外发正文，也不会自动改变现有卡片。
-
-在 `.env` 中显式启用后重启服务：
-
-```dotenv
-SEMANTIC_GOVERNANCE_ENABLED=true
-SEMANTIC_SCAN_INTERVAL_SECONDS=3600
-SEMANTIC_PROPOSAL_MIN_SCORE=0.68
-SEMANTIC_SCAN_MAX_CARDS=500
-SEMANTIC_SCAN_MAX_PROPOSALS=100
-```
-
-操作者可以对候选执行合并、排除或暂缓。确认合并时，页面允许人工整理 canonical 卡；系统在同一事务中创建新的 `APPROVED + INDEXED` 卡，将两张来源卡保留为审核证据但退出检索，并把关系改为 `MERGED_INTO`。排除结果绑定卡片 fingerprint；内容未变化时后台不会重复推送，内容变化后旧判断自动 `STALE` 并允许重新提议。重建任一来源案例会链式下架受影响的 canonical 卡、失效候选并恢复仍有效的其他来源卡，避免旧合并结果残留。详细策略与接口见 [相似知识人工合并治理](docs/semantic-governance.md)。
-
-## 可选 MindMemOS 长期记忆
-
-平台现在支持把 [MindMemOS](https://github.com/mindscale-noah/MindMemOS) `vanilla` 模式作为实验性的可插拔语义记忆后端。本地检索仍是第一路径；只有本地没有可信命中时，才调用 MindMemOS 处理“含义相同、说法不同”的问题。该能力默认关闭，启用服务和允许知识内容外发是两个独立开关。
-
-### 接入架构与可信门禁
-
-```mermaid
-flowchart TD
-    Q["自然语言问题"] --> L["本地严格检索"]
-    L -->|有命中| A["读取本地 APPROVED 卡片"]
-    L -->|无命中| M["MindMemOS Vanilla 语义召回"]
-    M --> T{"rerank 分数达到阈值?"}
-    T -->|否| X["拒绝弱相关候选"]
-    T -->|是| I["memory_id 映射到本地 card_id"]
-    I --> C{"对象 / 动作 / 本地锚点一致?"}
-    C -->|否| X
-    C -->|是| S{"卡片仍为 APPROVED 且内容哈希一致?"}
-    S -->|否| X
-    S -->|是| A
-    A --> E["固定字段与证据指针校验"]
-    E --> R["生成带 K 编号引用的可信建议"]
-```
-
-MindMemOS 只负责扩展候选召回，不替代本地知识库和审核状态：
-
-- `MINDMEMOS_ENABLED=true` 只启用适配器；只有再显式设置 `MINDMEMOS_ALLOW_CONTENT_EXPORT=true` 才允许同步知识内容；
-- 外发采用字段白名单，不发送 `source_ref`、`evidence_locator`、原始证据正文或本地文件路径；
-- 只同步本地 `APPROVED` 卡片，草稿、待审核、已驳回和已替代知识不会进入长期记忆；卡片变化或退出批准状态时会排队回收旧记忆；
-- MindMemOS 返回的自由文本不进入答案，只使用 `memory_id` 查找本地持久映射；
-- 每次召回都重新读取本地卡片并复核状态和内容哈希，旧映射无法绕过审批；
-- 语义候选必须同时通过 MindMemOS rerank 分数、本地词项锚点、对象类别与动作意图检查；数据库、Kubernetes、证书、身份等相邻领域的弱相关问题会被拒绝；
-- 同步使用数据库租约和稳定幂等键；批处理会公平扫描全部待同步卡片，避免固定前 N 张长期占满批次；
-- MindMemOS 不可用、超时或返回异常时，自动降级到原有本地检索；
-- API Key 只保存在服务端 `.env`，不会进入健康接口、前端配置或日志。
-
-### 配置与体验
-
-先独立启动 MindMemOS，确认 `http://127.0.0.1:8000/healthz` 可用，然后在 Ops Knowledge Studio 的 `.env` 中配置：
-
-```dotenv
-MINDMEMOS_ENABLED=true
-MINDMEMOS_BASE_URL=http://127.0.0.1:8000
-MINDMEMOS_API_KEY=本地实验用的_vanilla_API_Key
-MINDMEMOS_USER_ID=ops-knowledge-studio
-MINDMEMOS_APP_ID=ops-knowledge-studio
-MINDMEMOS_TIMEOUT_SECONDS=60
-MINDMEMOS_TOP_K=10
-MINDMEMOS_MAX_SYNC_CARDS=20
-MINDMEMOS_MIN_RELEVANCE_SCORE=0.65
-MINDMEMOS_MIN_LOCAL_ANCHORS=2
-MINDMEMOS_MAX_SEMANTIC_CARDS=1
-# 确认外发字段白名单和数据边界后再显式开启
-MINDMEMOS_ALLOW_CONTENT_EXPORT=true
-```
-
-远程 MindMemOS 地址必须使用 HTTPS；明文 HTTP 只允许回环主机。随后执行：
-
-```powershell
-# 检查服务健康与本地映射统计
-python run.py memory-status --probe
-
-# 幂等同步已批准卡片
-python run.py memory-sync
-
-# 观察本地结果、语义后备和最终合并诊断
-python run.py search --query "第二阶段失败后应从哪一侧开始撤销"
-```
-
-Web 概览页会显示 MindMemOS 健康状态、已同步卡片数和记忆映射数；知识查询结果会标明本地命中、是否启用语义后备、映射到的已批准卡片和最终采用的证据。
-
-### 当前实验与验收口径
-
-历史本地实验使用 10 张合成 `APPROVED` 云网络卡片，形成 22 条记忆映射，并选取 3 个刻意避开原词的跨表述问题做 Top-1 检查：
-
-| 检索方式 | Top-1 命中预期卡片 | 结果 |
-| --- | ---: | ---: |
-| 原有本地严格检索 | 1 / 3 | 33.3% |
-| 本地检索 + MindMemOS 语义后备 | 3 / 3 | 100% |
-
-这个结果只说明语义后备在当时的小规模合成样本上补回了跨表述召回，不是通用性能基准。当前验收脚本还加入 4 个困难负例：数据库主从回退、Kubernetes Ingress 证书轮换、IAM 权限回退和无关生活问题；只有正例全部命中且困难负例误接受率为 0，脚本才返回成功。实验同时发现 Schema 模式容易改写运维事实且写入明显更慢，因此适配器固定使用 Vanilla 模式；任何外部记忆仍必须通过本地审批、相关性和证据门禁。
-
-MindMemOS 默认关闭，不影响原有离线演示。完整部署、故障降级和实验说明见 [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)。
-
-## 当前可靠性与安全加固
-
-本分支针对 Web 信任边界、资源耗尽和长时记忆集成补充了以下防线：
-
-- **一致性读取**：变更中心读取 Runtime 与变更库时会校验状态组合；遇到跨库提交窗口会短暂重试，仍无法获得一致快照时返回 503，不展示自相矛盾的工单状态；
-- **真实硬超时**：非只读云网络工具在独立 Python 子进程中执行，超时会终止整个子进程，避免后台线程在响应超时后继续修改模拟环境；
-- **审计轨迹保护**：问题、提示词、正文和 Bearer 凭据默认脱敏；轨迹按天数与文件数双重轮转，并使用 SHA-256 哈希链或可选 HMAC-SHA256 校验完整性；
-- **同步并发控制**：MindMemOS 同步使用租约、内容哈希、幂等键和退休队列；并发刷新不会重复写入，卡片被替代或退出批准状态后会回收对应远端记忆；
-- **依赖与兼容性**：支持范围明确为 Python 3.10～3.13；CI 覆盖 Windows、Ubuntu 的全部支持版本，并单独安装 OCR 可选依赖做能力冒烟检查。
-
-这些控制让项目更适合受控演示和继续研发，但不等于已经满足生产环境的企业身份、双人复核、凭据托管和真实云变更要求。
-
-## 内置云网络案例
-
-平台预置 10 个 `APPROVED` 合成历史案例。案例定义同时驱动环境模拟、知识检索、变更单生成和前端拓扑，避免界面与实际执行逻辑脱节。其中 3 个复杂案例分别包含 10、12、14 个可执行、可验证、可逆序回退的路由步骤。
-
-| 案例 ID | 变更单 | 场景 | 执行步骤 | 核心动作 |
-| --- | --- | --- | ---: | --- |
-| `dc-route-failover` | `CHG-DEMO-ROUTE-001` | 专线路由主备切换 | 2 | 双 AZ 路由从劣化主专线切至健康备用专线 |
-| `nat-egress-bluegreen` | `CHG-DEMO-NAT-002` | NAT 网关蓝绿切换 | 2 | 生产出口按 AZ 从旧 NAT 切至绿色 NAT |
-| `firewall-cluster-maintenance` | `CHG-DEMO-CFW-003` | 云防火墙集群维护切流 | 2 | 将流量切至备用防火墙节点完成维护 |
-| `cross-region-dr-activation` | `CHG-DEMO-DR-004` | 跨区域灾备链路启用 | 2 | 启用受控灾备路径并验证有效路由 |
-| `partner-extranet-migration` | `CHG-DEMO-B2B-005` | 合作方 VPN 外联迁移 | 2 | 将合作方访问迁移至新的双隧道链路 |
-| `transit-hub-route-domain-migration` | `CHG-DEMO-TGW-006` | 云骨干路由域分批迁移 | 12 | 按运维、应用、数据、共享服务四波迁移 TGW 路由域 |
-| `east-west-firewall-service-chain` | `CHG-DEMO-EWFW-007` | 东西向防火墙服务链插入 | 14 | 分四波将七个业务域导入新版有状态防火墙 |
-| `kubernetes-egress-pool-migration` | `CHG-DEMO-K8S-008` | 多集群容器出口池迁移 | 10 | 按业务等级迁移五组双 AZ Kubernetes 出口路由 |
-| `dns-resolver-endpoint-migration` | `CHG-DEMO-DNS-009` | 混合云 DNS 出站端点迁移 | 6 | 逐域迁移共享、应用、数据 DNS 出站路径 |
-| `private-endpoint-service-cutover` | `CHG-DEMO-PES-010` | 私网终端节点服务切换 | 4 | 切换批处理与分析域 PrivateLink 路由 |
-
-所有案例都会检查资源存在性、CIDR、冲突路由、当前下一跳、备用链路健康度、容量、变更窗口和知识审批状态。执行阶段按案例阈值验证有效下一跳、连通率、丢包和时延；硬校验失败时阻断或按计划逆序回退。
-
-## 命令行演示
-
-### 正常闭环
-
-```powershell
-python run.py demo-change
-```
-
-指定案例：
-
-```powershell
-python run.py demo-change --case-id nat-egress-bluegreen
-```
-
-体验 14 步复杂计划：
-
-```powershell
-python run.py demo-change --case-id east-west-firewall-service-chain
-```
-
-程序会打印变更摘要、知识引用、风险、计划哈希、环境快照和校验结果，然后等待精确确认串。
-
-### 故障注入与自动回退
-
-```powershell
-python run.py demo-change --inject-failure route-switch-az-b
-```
-
-也可以在指定案例中注入故障：
-
-```powershell
-python run.py demo-change --case-id east-west-firewall-service-chain --inject-failure route-switch-ewfw-data-b
-```
-
-### 可选模型润色
-
-```powershell
-python run.py demo-change --use-model
-```
-
-模型只允许润色标题和摘要，不能修改资源标识、CIDR、下一跳、阈值、执行步骤或回退逻辑。模型不可用或输出不合格时会明确记录降级，并回到确定性模板。
-
-## 配置 DeepSeek
-
-复制 `.env.example` 为 `.env`，填写：
-
-```dotenv
-DEEPSEEK_API_KEY=你的API密钥
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-```
-
-项目使用 OpenAI 兼容的 `POST /chat/completions`。若使用兼容代理服务，只替换 Key、Base URL 和模型名，不要把 `/chat/completions` 写进 Base URL。
-
-内部 Demo 可以连接局域网中的 HTTP 兼容模型服务：保持 `DEMO_MODE=true` 和 `DEEPSEEK_ALLOW_INSECURE_HTTP=true`，把 `DEEPSEEK_BASE_URL` 改为对应内网地址即可。HTTP 不提供传输加密；生产环境应切换 HTTPS，并将该开关设为 `false`。
-
-DeepSeek 用于：
-
-- 将原始文档抽取为固定 Schema 的知识卡片；
-- 比较候选知识与现有知识的重复、冲突和版本关系；
-- 基于 `APPROVED` 证据生成可信方案；
-- 在显式 `--use-model` 时润色变更单叙述字段。
-
-不要把真实 `.env` 提交到 Git。仓库默认忽略 `.env`、SQLite 数据库、上传文件、OCR 缓存和运行工件。
-
-## 知识治理流程
-
-### 支持的文档
-
-- 文本：`.txt`、`.md`、`.markdown`、`.log`、`.csv`、`.json`、`.yaml`、`.yml`；
-- Office：`.docx`；
-- PDF：带文本层的 `.pdf` 默认由 `pypdf` 解析；
-- 图片/OCR：`.png`、`.jpg`、`.jpeg`、`.bmp`、`.tif`、`.tiff`、`.webp`。
-
-扫描 PDF 和图片识别需要可选 OCR 依赖：
-
-```text
-python -m pip install -e ".[ocr]"
-python scripts/ocr_smoke_test.py
-```
-
-### 生命周期
-
-```text
-原始文档
-  -> JSON 结构识别 / 普通文档分片与来源定位
-  -> TaskRecord 双视图对账与覆盖率检查（匹配的变更单）
-  -> 建立 ChangeCaseBundle 并按结构顺序挂载原子卡
-  -> DeepSeek 结构化抽取
-  -> 字段与证据质量校验
-  -> 重复 / 冲突 / 新版本比较
-  -> DRAFT / PENDING_REVIEW
-  -> 人工批准 / 驳回 / 替代
-  -> APPROVED 知识进入可信检索
-```
-
-常用命令：
-
-```powershell
-# 导入文档并抽取卡片
-python run.py ingest --file sample_data\demo_upgrade_sop.md
-
-# 查看知识库状态
-python run.py stats
-python run.py list
-python run.py case-bundles
-
-# 查看或整包审核一个结构化变更案例
-python run.py case-bundle --case-id "change-order:<source-sha256>"
-python run.py review-case-bundle --case-id "change-order:<source-sha256>" --action approve --reviewer reviewer-name
-
-# 治理检索；默认本地，启用 MindMemOS 后可在无命中时使用语义后备
-python run.py search --query "路由切换 回退"
-
-# 基于已批准知识生成可信方案
-python run.py query --question "如何安全切换生产专线路由"
-
-# 有步骤上限的只读知识 Agent
-python run.py agent-query --question "生成生产专线路由切换建议"
-```
-
-使用 `python run.py <命令> --help` 查看完整参数。
-
-对于已确认结构的 JSON ChangeOrder，平台自动启用 `change_order_shape_v2` Adapter 和 `change_order_semantic_builder_v2` Card Builder：先创建一个 `ChangeCaseBundle`，再按业务语义生成最多一张 `CASE_CONTEXT`、逐源 `PROCEDURE_STEP` 和独立 `EXECUTION_OUTCOME`。Extraction Unit 只承担证据分块，不再直接决定卡片边界。Web 审核队列和知识库以案例包为一级展示对象，可展开查看全部子卡，也可在一个本地事务中整包批准或驳回；任何子卡未通过证据、双 Coverage、正文 QA 或哈希门禁时，整包批准不会写入部分状态。普通文档仍保持原有单卡生命周期。
-
-结构适配中，`action_list` 是 canonical action metadata；它进入 `CASE_CONTEXT.actions`，不再伪装成有序 Procedure。`change_tool_relate_action` 的 group name 和 group count 是动态业务数据，不限制 group 数量上限，只保留通过 13-field Schema 一致性和 SHA-256 multiset 完整对账的来源；四组 Procedure Key 分别映射为前检、实施、验证和回退。正文只消费已确认的 Procedure 业务字段，HTML/图片/转义由 `normalize_rich_text()` 清理，timestamp 等确定性字段由 Python 按显式时区转换。semantic section 默认保存在 Parent 的 `operation_sections[]`；只有“步骤确实超长”且存在足够多有独立价值的 section 时才发布 children，并保证 Parent/Child 不会同时进入检索。标题包含 phase 语义，高置信 target/value 匹配可建立 `VALIDATES` 和 `ROLLBACK_OF`。跨阶段相同知识按 semantic fingerprint 复用；`EXECUTION_OUTCOME` 固定 `planning_rag_enabled=false`。报告明确区分 `structural_source_coverage` 和 `semantic_content_coverage`，并输出逐卡 QA 与 `skip_reason`。详见 [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)。
-
-Demo 模式下可在 Change Case Bundle 详情点击“重建当前案例”。它按 `case_id/source_sha256` 精确清除派生知识、审核、关系、fingerprint、检索/外部长记忆映射和缓存，并失效由这些卡片派生的语义合并结果，再以当前 Builder 强制重跑；原始上传 JSON 不删除，普通重复采集仍保持幂等，重建后的 K ID 不复用。该按钮仅在 `DEMO_MODE=true` 且 `DEMO_REBUILD_ENABLED=true` 时显示，生产模式返回 404。全库重置配置默认关闭且当前未开放入口。
-
-Web 工作台的“知识关系图”把现有 SQLite 治理数据投影为可交互网络：案例包、知识卡、业务对象和来源文档作为节点，案例归属、对象描述、来源追溯以及 `DUPLICATE_OF`、`CONFLICTS_WITH`、`CANDIDATE_VERSION_OF`、`SUPERSEDES` 等已落库关系作为边。该页面不推断新的概念关系，也不改变审批、检索或存储语义；只读接口为 `GET /api/knowledge-graph`。
-
-可信回答要求模型优先输出不超过 12 条字段指针 claims，平台仍保留去重后最多 30 条的硬上限。标量字段误带 `support_index: 0` 时会安全归一化为 `null`；其他非法索引、未检索卡片、未批准卡片和自由文本仍会被拒绝。协议校验失败时平台只允许一次有界纠错重试，直接查询和只读 Agent 共用这条校验链。
-
-Web 知识库中的每张卡片均提供“删除”按钮。删除操作会移除卡片、关系、结构 lineage 和检索映射，保留不可变审计记录；若卡片已同步到 MindMemOS，还会进入退休队列等待清理。此操作不可从界面撤销，删除前会再次确认。
-
-## 变更状态与审批安全
-
-变更单状态机：
-
-```text
-DRAFT
-  -> BLOCKED
-  -> READY_FOR_APPROVAL
-  -> WAITING_APPROVAL
-  -> REJECTED
-  -> APPROVED
-  -> EXECUTING
-  -> VERIFYING
-  -> SUCCEEDED / ROLLED_BACK / FAILED
-```
-
-审批不是一个孤立的“同意”布尔值，而是绑定以下信息的规范化 SHA-256 摘要：
-
-- `ticket_id`；
-- `revision`；
-- `plan_hash`；
-- `snapshot_version`；
-- 实际工具参数。
-
-审批后若计划、资源、下一跳、故障注入参数或环境快照发生变化，旧审批自动失效。恢复执行会读取检查点和操作日志，已完成步骤不会重复应用。
-
-## 持久化运行时
-
-底层 Harness Runtime 使用独立 SQLite 保存 Run、事件、步骤、检查点和工具审批，可在进程中断后恢复。
-
-```powershell
-# 查看运行
-python run.py run-list
-python run.py run-show --id <run-id> --events
-
-# 取消或恢复
-python run.py run-cancel --id <run-id>
-python run.py run-resume --id <run-id>
-
-# 审批等待中的工具调用
-python run.py run-approve-tool --id <run-id> --tool-name <tool-name> --decision APPROVED --actor <actor>
-```
-
-运行时默认配置：
-
-```dotenv
-HARNESS_RUNTIME_DB_PATH=data/runtime.db
-HARNESS_WORKERS=2
-HARNESS_MAX_QUEUED_RUNS=100
-HARNESS_SYNC_WAIT_SECONDS=900
-```
-
-## 演示工件
-
-每次 CLI 变更演示会在 `artifacts/change_demos/<run>/` 创建隔离目录：
-
-| 文件 | 内容 |
-| --- | --- |
-| `change_order.md` | 可供人工阅读的完整变更单 |
-| `change_package.json` | 工单、校验、执行、反馈和审计全集 |
-| `validation_report.json` | 生成前与执行后的验证证据 |
-| `execution_report.json` | 前后状态哈希、步骤、指标和回退记录 |
-| `feedback.md` | 实际结果、偏差、经验和知识候选 |
-| `runtime_events.json` | 生成 Run 与执行 Run 的持久化事件 |
-| `knowledge.db` / `changes.db` / `cloud_network.db` / `runtime.db` | 本次演示的隔离数据库 |
-
-Web 演示同样隔离运行数据；只有操作者在结果页明确选择“送入知识审核队列”后，才会向主知识库写入一张 `PENDING_REVIEW` 候选。
-
-## 项目结构
-
-```text
-ops-knowledge-studio-public/
-├─ change_management/      # 变更模型、案例、模拟器、存储与运行任务
-├─ harness/                # 持久化 Run、检查点、事件和工具审批
-├─ knowledge_platform/     # 知识抽取、检索、治理、Web 与 CLI
-│  ├─ long_term_memory.py  # MindMemOS HTTP 适配、持久映射和可信状态复核
-│  └─ static/              # 单页工作台前端
-├─ sample_data/            # 可公开使用的演示文档
-├─ scripts/                # 服务启动、OCR 冒烟检查等辅助脚本
-├─ tests/                  # 回归、运行时、平台和变更闭环测试
-├─ docs/                   # 部署、变更演示和设计说明
-├─ run.py                  # 统一入口
-└─ pyproject.toml          # Python 包与依赖配置
-```
-
-关键设计选择：
-
-- 基础模式使用 SQLite 保持单机部署简单，无需 Redis、Docker 或外部消息队列；启用 MindMemOS 时再按需增加其外部依赖；
-- 使用英数字词项、中文二元词和字段权重完成本地混合检索；
-- 使用固定知识卡片 Schema，覆盖场景、对象、版本、步骤、风险、回退、验证和证据；
-- 保留后续接入向量数据库、知识图谱、CMDB 或真实工具适配器的扩展位置。
-
-## 测试与 CI
-
-运行全部测试：
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
-GitHub Actions 会在 Windows 和 Ubuntu、Python 3.10、3.11、3.12、3.13 环境中安装项目并运行同一套测试；另有 Ubuntu / Python 3.10 OCR 可选依赖冒烟任务。建议在提交前至少执行：
-
-```powershell
-python run.py init
-python -m unittest discover -s tests -v
-python run.py demo-change --case-id nat-egress-bluegreen
-```
-
-最后一条命令会等待人工确认；若只想验证拒绝路径，可直接回车结束。
-
-## 部署与安全边界
-
-当前 Web 服务定位为本机或受控内网演示。默认 `DEMO_MODE=true`，关闭启动令牌、Access Token、Host/Origin 边界和严格 CSP，但继续保留 Content-Type、模型调用额度与文档解析限制；这些演示放宽项均可通过配置恢复，不是生产部署基线：
-
-- 保持 `PLATFORM_HOST=127.0.0.1`；
-- 不要直接将 8765 端口暴露到内网或互联网；
-- 多人内网或生产使用时设置 `DEMO_MODE=false`，重新启用 Access Token、Host/Origin 校验和严格 CSP，并在前面增加 HTTPS 反向代理；
-- 当前 `.env.example` 下 Demo 与共享令牌模式的 Web 审计主体都固定为 `shared-operator`，它不提供个人身份或职责分离；
-- 不要把生产数据库、业务文档、上传目录、运行工件或 `.env` 上传到公开仓库；
-- 不要向本项目填入真实云凭据，当前代码没有真实云变更适配器；
-- MindMemOS 即使已启用也默认禁止内容外发；只有确认字段白名单和外部服务数据边界后才设置 `MINDMEMOS_ALLOW_CONTENT_EXPORT=true`；
-- 生产环境应设置独立高熵 `TRACE_HMAC_KEY`，并根据审计制度调整 `TRACE_RETENTION_DAYS` 与 `TRACE_MAX_FILES`；
-- 自动抽取和执行反馈都必须经人工审核后才能成为 `APPROVED` 知识。
-
-数据备份、后台启动、升级和 OCR 安装流程见 [部署指南](docs/deployment.md)。
+并确保：
+
+- 使用 HTTPS 反向代理和真实身份鉴权；
+- API Key 只保存在服务端配置，不写入日志、前端或仓库；
+- 真实 ChangeOrder、SchemaProfile、Prompt、数据库和评测结果不提交公开仓库；
+- `REAL_CHANGE_GENERATION_ENABLED` 只在内网完成 Profile 和模型检查后开启；
+- 不把 Demo 的共享操作者字段当成正式审计身份；
+- 不为 BETA 模块注册真实执行工具；
+- 对 SQLite、`artifacts/` 和报告目录设置备份、权限与保留策略。
+
+部署细节见 [部署指南](docs/deployment.md) 和 [安全加固](docs/security-hardening.md)。
 
 ## 延伸文档
 
-- [部署指南](docs/deployment.md)
-- [云网络变更单最小闭环演示](docs/change-demo.md)
-- [结构化变更单知识抽取](docs/structured-change-order-extraction.md)
-- [card_build_report 合成示例](docs/card_build_report.example.json)
-- [真实 ChangeOrder 草案生成与盲测](docs/real-change-generation.md)
-- [第一阶段加固说明](docs/first-stage-hardening.md)
-- [Web 与资源安全基线](docs/security-hardening.md)
-- [Mini Agent 集成说明](docs/minimax-mini-agent-integration.md)
+- [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)
+- [相似知识人工合并治理](docs/semantic-governance.md)
+- [真实 ChangeOrder 草案生成与能力盲测](docs/real-change-generation.md)
+- [合成变更 Demo](docs/change-demo.md)
 - [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)
+- [第一阶段安全加固](docs/first-stage-hardening.md)
+- [部署指南](docs/deployment.md)
 
-## 当前边界与下一步
+## 当前定位
 
-当前版本已经可以完整演示“感知环境—复用经验—生成方案—硬校验—人工审批—模拟执行—验证回退—反馈沉淀”，但它仍然是本地验证平台。接入真实生产环境前，至少还需要补齐：
+Ops Knowledge Studio 当前是一个可运行、可测试、可审计的能力验证平台：它已经具备完整的知识治理、ChangeOrder 语义建模、人工相似合并、可信检索、草案生成和隔离模拟闭环，但仍不是开箱即用的生产变更系统。
 
-- 企业身份认证、RBAC、职责分离和审批策略；
-- CMDB、监控、工单和云厂商 API 的只读适配器；
-- 凭据托管、网络隔离、审计归档和密钥轮换；
-- 沙箱/预生产验证、限流、熔断和双人复核；
-- 面向真实资源的幂等性、并发冲突和回退失败演练。
-
-在完成这些控制之前，请只把本项目用于本地研发、架构验证和演示。
+走向正式生产还需要接入组织身份、权限模型、CMDB、工单、监控、密钥托管、独立索引服务和真实执行适配器，并完成安全评审、容量评估、灾备和运维责任划分。
