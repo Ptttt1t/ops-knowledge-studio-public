@@ -43,7 +43,9 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
                     (
                         "DEMO_MODE=true",
                         "DEEPSEEK_API_KEY=internal-demo-key",
-                        "DEEPSEEK_BASE_URL=http://10.20.30.40:8080/v1",
+                        # RFC 5737 TEST-NET-1 address; never resolves to an
+                        # organization-internal endpoint.
+                        "DEEPSEEK_BASE_URL=http://192.0.2.10:8080/v1",
                         "DEEPSEEK_MODEL=internal-model",
                         "PLATFORM_AUTH_MODE=token",
                         "PLATFORM_HOST=0.0.0.0",
