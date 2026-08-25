@@ -79,6 +79,8 @@ RealChangeRequest
 
 ## Important Constraints
 
+- 跨电脑 Codex 接力只发生在两台外网开发电脑之间：一台常用外网电脑，以及一台放在工位但接入外网的老旧笔记本。公司内网环境不允许使用 Codex，也不能依赖内网 Codex session 完成开发或诊断。
+- 内网环境仅由人工按批准流程部署代码并使用真实 ChangeOrder 验证。内网数据、卡片、Prompt、SchemaProfile 和报告不出网；外网 Codex 只能接收人工整理的脱敏计数、错误类型、结构特征和 QA 结果。
 - Python 支持范围是 3.10–3.13；CI 在 Windows 和 Linux 的四个版本上运行基础测试。基础依赖只有 `pypdf`，OCR 是可选依赖。
 - 真实业务数据只能在批准的内网运行。公开 GitHub 只允许虚构 service、region、cluster、workload、人员、工单号和 URL。
 - `.env`、SQLite 数据库、上传源文件、模型缓存和 `artifacts/` 不进入 Git；GitHub 不是数据备份介质。
@@ -134,6 +136,7 @@ RealChangeRequest
 ## Development Conventions
 
 - 开始工作按根目录 `AGENTS.md` 做只读恢复；代码、配置和 Git 状态优先于聊天记忆。
+- 外网电脑 A/B 通过 GitHub `pull / commit / push` 接力；不要把“工位外网笔记本”称为内网电脑。内网真实验证是独立的人工环节，不运行 Codex。
 - 使用 `rg` / `rg --files` 定位代码。保持改动范围聚焦，不覆盖用途不明的用户修改。
 - 新业务逻辑必须配 synthetic unit/integration tests。禁止把任何真实 ChangeOrder、卡片、Prompt、路径或内部 URL 固化进 fixture。
 - 常用本地验证：

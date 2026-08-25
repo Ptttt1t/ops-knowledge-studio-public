@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-发布本轮知识治理改进：阻止跨 phase 错误合并、生成可解释共享锚点、让 3D 图按节点类型/阶段聚类、将真实变更草案模型调用固定串行，并建立可经 GitHub 跨电脑接力的仓库级 Codex 上下文。
+保持已发布的知识治理改进稳定，并确保仓库级共享上下文准确支持两台外网开发电脑之间的 Codex 接力；内网环境不运行 Codex，只承担人工部署和真实数据验证。
 
 ## Completed
 
@@ -14,6 +14,7 @@
 - 新增相应 synthetic tests，并同步 README、`.env.example` 和专题文档。
 - 初始化根目录 `AGENTS.md`、长期上下文 `CODEX_CONTEXT.md`、当前交接 `CODEX_HANDOFF.md` 和技术决策 `DECISIONS.md`。
 - 已快进合并并发布到公开仓库 `Ptttt1t/ops-knowledge-studio-public` 的 `main`；发布前将原有测试中的私网字面量替换为 RFC 5737 文档地址。
+- 已纠正跨电脑环境描述：Codex 接力发生在两台外网电脑之间，工位设备是接外网的老旧笔记本；公司内网不运行 Codex，只由人工部署并验证真实数据。
 
 ## Files Changed
 
@@ -35,6 +36,7 @@
 - `python -m compileall -q harness knowledge_platform tests`：通过。
 - `node --check knowledge_platform/static/app.js`：通过。
 - `git diff --check`：通过。
+- 本次环境边界纠正只修改共享文档；`git diff --check` 通过，未改动代码，因此未重复运行 149 项测试。
 - 3D 页面视觉人工检查：本轮未完成；当时无可连接的浏览器实例，仅验证了 API/layout 数据和 JavaScript 语法。不要将其描述为已视觉验收。
 - 真实内网 ChangeOrder：按数据边界未在外网验证。
 
@@ -50,7 +52,7 @@ None.
 
 ## Recommended Next Step
 
-在另一台电脑或内网环境 `git pull --ff-only` 获取 `main`，先按 `AGENTS.md` 恢复上下文并复跑测试；随后用合规的内网案例执行相似扫描和 case rebuild，人工确认：跨 phase 只有关系不出现合并候选、同 phase 候选仍可审核、3D 类型簇和长标签可读、并发生成时模型活动请求数始终不超过 1。只反馈脱敏的计数、phase、关系和 QA 状态，不把真实数据提交到仓库。
+在工位的外网老旧笔记本上执行 `git pull --ff-only` 获取 `main`，由新的 Codex session 按 `AGENTS.md` 恢复上下文并复跑测试。内网验证是另一条人工流程：按批准方式部署当前版本，用合规的真实案例执行相似扫描和 case rebuild，人工确认跨 phase 关系、同 phase 候选、3D 类型簇和模型并发；只向外网反馈脱敏的计数、phase、关系、错误类型和 QA 状态，绝不把真实数据带到 Codex 环境。
 
 ## Last Updated
 
