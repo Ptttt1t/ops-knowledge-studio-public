@@ -11,3 +11,7 @@ knowledge_sources/uploads/
 knowledge_sources/public_test_corpus/raw/
 tmp/
 _web-serve.*.log
+
+# Local Codex/agent state. Shared project memory is tracked in AGENTS.md and docs/.
+.codex/
+.agents/

@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-该模块持续发现“语义可能相同但名称、阶段或表述不同”的已批准 Procedure 卡，并把判断交给人工知识负责人。系统不会自动合并，不使用 LLM 生成候选，不把卡片正文发送到外部服务，也不把历史实例参数直接提升为通用规则。
+该模块持续发现“语义可能相同但名称或表述不同”的已批准 Procedure 卡，并把同阶段的合并判断交给人工知识负责人。`procedure_group` 是硬约束：跨阶段知识只建立相似关系，不能合并 semantic identity。系统不会自动合并，不使用 LLM 生成候选，不把卡片正文发送到外部服务，也不把历史实例参数直接提升为通用规则。
 
 当前候选范围严格限定为：
 
@@ -13,7 +13,14 @@
 - 已有稳定 `semantic_fingerprint`；
 - 不属于同一 `source_procedure_pointer` 的 Parent/Child lineage。
 
-后台扫描受 `SEMANTIC_SCAN_MAX_CARDS` 与 `SEMANTIC_SCAN_MAX_PROPOSALS` 限制。算法先清理 phase 标题前缀和 rich text，再比较 generalized operation、validation、rollback、对象与 action 锚点；实例参数不参与通用身份。非 fingerprint 完全相同的候选至少需要两个共享的非泛化核心锚点。分数只负责进入人工队列，不是自动合并结论。
+后台扫描受 `SEMANTIC_SCAN_MAX_CARDS` 与 `SEMANTIC_SCAN_MAX_PROPOSALS` 限制。算法先清理 phase 标题前缀和 rich text，再比较 generalized operation、validation、rollback、对象与 action；实例参数不参与通用身份。内部相似度可以使用字符特征，但页面“共享锚点”只来自完整业务短语、标题、对象、action、关键词和参数名，不展示无语义的中文 n-gram。分数只负责进入人工队列，不是自动合并结论。
+
+阶段策略：
+
+- `PRECHECK`、`IMPLEMENTATION`、`VALIDATION`、`ROLLBACK` 之间禁止 `MERGE`；
+- 同阶段才允许创建 `PENDING_REVIEW + SIMILAR_TO`；
+- 跨阶段达到相似阈值时建立 `CROSS_PHASE_SIMILAR`，两张卡继续保持 `INDEXED`；
+- 扫描时和接受合并时都会校验阶段，历史候选不能绕过约束。
 
 ## 状态与图谱
 
@@ -27,6 +34,7 @@ PENDING_REVIEW -> ACCEPTED
 ```
 
 - 待确认时建立 `SIMILAR_TO`，在图谱中显示为虚线候选关系。
+- 跨阶段相似建立 `CROSS_PHASE_SIMILAR`，只用于解释复用或关联，不进入人工合并队列。
 - 确认合并后删除 `SIMILAR_TO`，新建一张独立、单调递增 K ID 的 canonical 卡，并建立两条 `MERGED_INTO`。
 - 来源卡仍保留 `APPROVED` 和原始证据，但变为 `dedup_status=MERGED`、`publish_status=MERGED`、`retrieval_enabled=false`，因此不会与 canonical 卡同时进入本地检索、向量索引或外部长记忆。
 - canonical 卡为 `dedup_status=CANONICAL`、`publish_status=INDEXED`、`retrieval_enabled=true`。
@@ -50,14 +58,14 @@ PENDING_REVIEW -> ACCEPTED
 ## 配置
 
 ```dotenv
-SEMANTIC_GOVERNANCE_ENABLED=false
+SEMANTIC_GOVERNANCE_ENABLED=true
 SEMANTIC_SCAN_INTERVAL_SECONDS=3600
 SEMANTIC_PROPOSAL_MIN_SCORE=0.68
 SEMANTIC_SCAN_MAX_CARDS=500
 SEMANTIC_SCAN_MAX_PROPOSALS=100
 ```
 
-默认关闭。启用后 Web Server 会启动后台 daemon；也可在页面点击“立即扫描”。扫描间隔最小值与候选上限由配置加载器校验。
+`DEMO_MODE=true` 且未显式配置时默认开启。生产模式默认关闭，但可显式启用。启用后 Web Server 会启动后台 daemon；也可在页面点击“立即扫描”。扫描间隔最小值与候选上限由配置加载器校验。
 
 ## API
 
@@ -77,7 +85,7 @@ SEMANTIC_SCAN_MAX_PROPOSALS=100
     "title": "通用业务健康检查",
     "summary": "检查告警、探针和关键业务指标。",
     "generalized_operation": "检查目标系统的活动告警、服务探针和关键业务指标。",
-    "applicable_phases": ["PRECHECK", "VALIDATION"]
+    "applicable_phases": ["PRECHECK"]
   }
 }
 ```

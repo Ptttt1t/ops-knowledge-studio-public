@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import unicodedata
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
@@ -656,6 +657,23 @@ class RealChangeDraftService:
             knowledge_service.settings.project_root / "data" / "change_drafts.db"
         )
         self.store = ChangeDraftStore(path)
+        self._model_slots = threading.BoundedSemaphore(
+            value=knowledge_service.settings.change_draft_model_max_concurrency
+        )
+
+    def _call_generation_model(
+        self, system_prompt: str, user_prompt: str
+    ) -> tuple[Any, dict[str, Any]]:
+        # The web runtime may execute multiple draft jobs concurrently. Only the
+        # personal-model call is serialized here, leaving retrieval, validation,
+        # ingestion and unrelated model paths unaffected.
+        with self._model_slots:
+            return self.knowledge.client.chat_json(
+                system_prompt,
+                user_prompt,
+                retries=0,
+                max_tokens=self.knowledge.settings.change_generation_max_output_tokens,
+            )
 
     @property
     def enabled(self) -> bool:
@@ -1784,11 +1802,9 @@ class RealChangeDraftService:
                         + repair_context
                     )
                 try:
-                    payload, usage = self.knowledge.client.chat_json(
+                    payload, usage = self._call_generation_model(
                         GENERATION_SYSTEM_PROMPT,
                         user_prompt,
-                        retries=0,
-                        max_tokens=self.knowledge.settings.change_generation_max_output_tokens,
                     )
                 except Exception as exc:
                     validation_error = f"模型请求失败：{exc}"

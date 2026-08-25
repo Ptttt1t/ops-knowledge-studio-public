@@ -85,6 +85,19 @@ def _read_bool(values: Mapping[str, str], name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} 必须是 true 或 false，当前值为 {raw!r}")
 
 
+def _read_demo_feature(
+    values: Mapping[str, str],
+    name: str,
+    demo_mode: bool,
+    *,
+    destructive_or_sensitive: bool = False,
+) -> bool:
+    """Default safe Demo features on without opening high-risk capabilities."""
+
+    default = bool(demo_mode and not destructive_or_sensitive)
+    return _read_bool(values, name, default)
+
+
 def _has_setting(values: Mapping[str, str], name: str) -> bool:
     return name in os.environ or name in values
 
@@ -202,6 +215,7 @@ class Settings:
     change_generation_max_case_bundles: int = 3
     change_generation_max_context_cards: int = 24
     change_generation_max_output_tokens: int = 8192
+    change_draft_model_max_concurrency: int = 1
     semantic_governance_enabled: bool = False
     semantic_scan_interval_seconds: int = 3600
     semantic_proposal_min_score: float = 0.68
@@ -296,6 +310,7 @@ class Settings:
                 "max_case_bundles": self.change_generation_max_case_bundles,
                 "max_context_cards": self.change_generation_max_context_cards,
                 "max_output_tokens": self.change_generation_max_output_tokens,
+                "model_max_concurrency": self.change_draft_model_max_concurrency,
                 "unauthenticated_pilot": self.demo_mode,
             },
             "semantic_governance": {
@@ -574,11 +589,14 @@ class Settings:
                     "artifacts/change_order_card_reports",
                 ),
             ),
-            demo_rebuild_enabled=_read_bool(
-                values, "DEMO_REBUILD_ENABLED", True
+            demo_rebuild_enabled=_read_demo_feature(
+                values, "DEMO_REBUILD_ENABLED", demo_mode
             ),
-            demo_full_reset_enabled=_read_bool(
-                values, "DEMO_FULL_RESET_ENABLED", False
+            demo_full_reset_enabled=_read_demo_feature(
+                values,
+                "DEMO_FULL_RESET_ENABLED",
+                demo_mode,
+                destructive_or_sensitive=True,
             ),
             max_model_calls_per_ingest=_read_int(
                 values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60
@@ -667,8 +685,11 @@ class Settings:
             change_generation_max_output_tokens=_read_int(
                 values, "CHANGE_GENERATION_MAX_OUTPUT_TOKENS", 8192
             ),
-            semantic_governance_enabled=_read_bool(
-                values, "SEMANTIC_GOVERNANCE_ENABLED", False
+            change_draft_model_max_concurrency=_read_int(
+                values, "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY", 1
+            ),
+            semantic_governance_enabled=_read_demo_feature(
+                values, "SEMANTIC_GOVERNANCE_ENABLED", demo_mode
             ),
             semantic_scan_interval_seconds=_read_int(
                 values, "SEMANTIC_SCAN_INTERVAL_SECONDS", 3600
@@ -695,6 +716,10 @@ class Settings:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CASE_BUNDLES 必须在 1 到 3 之间")
         if settings.change_generation_max_context_cards <= 0:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CONTEXT_CARDS 必须大于 0")
+        if settings.change_draft_model_max_concurrency != 1:
+            raise ConfigurationError(
+                "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY 当前必须固定为 1"
+            )
         if not 0 <= settings.semantic_proposal_min_score <= 1:
             raise ConfigurationError("SEMANTIC_PROPOSAL_MIN_SCORE 必须在 0 到 1 之间")
         if settings.semantic_scan_interval_seconds < 60:

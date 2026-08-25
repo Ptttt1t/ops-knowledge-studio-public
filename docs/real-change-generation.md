@@ -55,7 +55,10 @@ CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
 CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1
 ```
+
+`CHANGE_DRAFT_MODEL_MAX_CONCURRENCY` 只约束真实草案生成和协议修复的个人模型调用，当前固定为 `1`，配置为其他值会在启动时失败。多个草案任务可以同时排队和执行本地检索/校验，但前一个模型请求完成后才会发送下一个；知识抽取、普通问答和其他模型路径不受该信号量影响。
 
 重启 `python run.py serve` 后打开左侧 **真实变更生成 BETA**。页面会同时显示功能开关、活动 Profile 和来源案例；任一条件缺失都会禁止推荐和生成。
 

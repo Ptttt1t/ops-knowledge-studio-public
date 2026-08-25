@@ -498,9 +498,16 @@
           <article class="panel graph-panel">
             <div class="panel-head graph-panel-head">
               <div><p class="eyebrow">INTERACTIVE 3D GRAPH</p><h2>三维关系网络</h2></div>
-              <div class="graph-legend" aria-label="节点类型图例">
-                <span class="case">案例包</span><span class="card">知识卡</span>
-                <span class="object">业务对象</span><span class="source">来源文档</span>
+              <div class="graph-legend-stack">
+                <div class="graph-legend" aria-label="节点形状图例">
+                  <span class="case">案例包</span><span class="card">知识卡</span>
+                  <span class="object">业务对象</span><span class="source">来源文档</span>
+                </div>
+                <div class="graph-cluster-legend" aria-label="知识阶段空间簇图例">
+                  <span class="context">案例上下文</span><span class="precheck">前检</span>
+                  <span class="implementation">实施</span><span class="validation">验证</span>
+                  <span class="rollback">回退</span><span class="outcome">执行结果</span>
+                </div>
               </div>
             </div>
             <div id="knowledge-graph-stage" class="knowledge-graph-stage">

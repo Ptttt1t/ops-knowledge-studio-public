@@ -1,0 +1,56 @@
+# Codex project protocol
+
+本文件是 Ops Knowledge Studio 的仓库级协作规则。它与 `docs/CODEX_CONTEXT.md`、`docs/CODEX_HANDOFF.md`、`docs/DECISIONS.md` 一起，构成不同电脑、不同 Codex session 之间共享的项目记忆。
+
+## 开始工作前
+
+每次进入本仓库开始工作，必须先完成以下只读检查：
+
+1. 阅读本文件。
+2. 阅读 `docs/CODEX_CONTEXT.md`。
+3. 阅读 `docs/CODEX_HANDOFF.md`。
+4. 涉及架构、技术方案或历史设计选择时，阅读 `docs/DECISIONS.md`。
+5. 检查 `git status`、当前 branch 和最近的 `git log`。
+6. 根据当前代码、配置和 Git 状态确认真实实现，再开始修改；不要只依据当前聊天上下文直接动手。
+
+假设下一位接手者完全看不到本次聊天记录，也不能访问上一台电脑的本地 Memory。后续开发必需的重要信息必须沉淀到仓库；本地 Codex Memory 只能作为辅助，不能成为关键项目知识的唯一来源。
+
+## 长期记忆边界
+
+- `docs/CODEX_CONTEXT.md` 保存稳定的项目背景、架构、业务规则、长期约束和开发约定。只有这些内容发生实质变化时才更新。
+- `docs/CODEX_HANDOFF.md` 保存当前最新交接状态。每轮有实际意义的开发结束时覆盖为最新状态，删除已失效内容，不无限追加。
+- `docs/DECISIONS.md` 只保存以后可能被问到“为什么这样设计”的重要决策，不记录普通代码修改。
+- 临时调试日志、一次性命令输出、无长期价值的探索过程不写入长期记忆。
+- 不要为了“更新文档”机械记录每个小修改。只保留能帮助下一次开发判断和行动的信息。
+- 不要把 `.env`、API Key、Token、Cookie、账号认证文件、真实内网数据、`data/*.db`、上传文件、`artifacts/`、`.codex/`、`.agents/` 或本地 session 状态提交到 Git。
+
+## 项目开发规则
+
+- 真实 ChangeOrder、真实知识卡、真实 Prompt、SchemaProfile、评测结果和内部地址只能留在批准的内网环境；公开仓库测试只使用合成 fixture。
+- 修改前先分清合成变更 Demo、知识平台和真实变更草案 BETA 的边界，禁止为 BETA 注册或调用真实执行工具。
+- 保留确定性证据、人工审核和状态门禁；不要用 fallback 或规则结果伪装模型能力。
+- 不覆盖或删除用途不明的现有工作区修改。发现不属于当前任务的变更时保留并在交接中说明。
+- 面向用户的每次答复开头说明当前使用的具体模型。
+
+## 一轮开发结束前的交接协议
+
+对有实际意义的开发任务，在 commit / push 前依次执行：
+
+1. 检查代码、配置和完整 diff，确认没有意外文件或敏感信息。
+2. 运行与修改范围匹配的单元测试、smoke test 或静态检查；未执行或失败的验证必须如实记录。
+3. 将 `docs/CODEX_HANDOFF.md` 更新为当前最新状态。
+4. 若产生稳定的长期项目知识，更新 `docs/CODEX_CONTEXT.md`。
+5. 若形成新的重要设计决策，更新 `docs/DECISIONS.md`。
+6. 复核共享文档与当前代码、配置和测试结果一致。
+7. 再进行 commit / push，并核对远端 branch 的 SHA。
+
+非常小且不改变交接状态、长期知识或技术决策的修改，不要求无意义地改动全部记忆文件。
+
+## Git 发布约定
+
+本项目公开仓库 remote 为 `github`，目标为 `Ptttt1t/ops-knowledge-studio-public`。当用户说“合并”或要求发布线上版本时，除非用户另有说明，含义是：
+
+1. 基于最新 `github/main` 检查祖先关系；
+2. 将已验证的功能分支快进合并到本地 `main`；
+3. push `main` 到 `github/main`；
+4. 比较本地和远端 SHA，确认线上分支确实更新。

@@ -698,7 +698,22 @@ const graphRelationLabels = {
   ROLLBACK_OF: "回退对应",
   CHILD_OF: "章节属于",
   SIMILAR_TO: "待确认相似",
+  CROSS_PHASE_SIMILAR: "跨阶段相似",
   MERGED_INTO: "已合并到",
+};
+
+const graphClusterLabels = {
+  CASE_BUNDLE: "案例包",
+  CASE_CONTEXT: "案例上下文",
+  PRECHECK: "变更前检查",
+  IMPLEMENTATION: "变更实施",
+  VALIDATION: "变更验证",
+  ROLLBACK: "变更回退",
+  EXECUTION_OUTCOME: "执行结果",
+  PROCEDURE_OTHER: "其他步骤",
+  OTHER_CARD: "其他知识卡",
+  BUSINESS_OBJECT: "业务对象",
+  SOURCE_DOCUMENT: "来源文档",
 };
 
 function graphHash(value) {
@@ -746,7 +761,7 @@ function graphNodeSearchText(node) {
   return [
     node.label, node.summary, node.status, node.knowledge_type,
     node.object_type, node.object_name, node.source_type, node.source_ref,
-    node.unit_role, node.entity_id,
+    node.unit_role, node.procedure_group, node.cluster, node.entity_id,
   ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
 }
 
@@ -805,6 +820,7 @@ function renderKnowledgeGraphDetail(node) {
     facts.append(term, detail);
   };
   addFact("节点类型", { card: "知识卡", case: "案例包", object: "业务对象", source: "来源文档" }[node.kind]);
+  addFact("空间簇", graphClusterLabels[node.cluster] || node.cluster);
   if (node.kind === "card") {
     addFact("卡片编号", `K${node.entity_id}`);
     addFact("治理状态", statusLabels[node.status] || node.status);
@@ -893,7 +909,18 @@ function graphNodeColors(node) {
     object: { fill: "#f4ead2", stroke: "#b88924" },
     source: { fill: "#e7f0f4", stroke: "#39738d" },
   };
-  const colors = palette[node.kind] || palette.card;
+  const cardClusters = {
+    CASE_CONTEXT: { fill: "#d9f0ea", stroke: "#277a68" },
+    PRECHECK: { fill: "#e4eef8", stroke: "#3b6f9f" },
+    IMPLEMENTATION: { fill: "#dff0df", stroke: "#3e7d4b" },
+    VALIDATION: { fill: "#eee7f8", stroke: "#70529b" },
+    ROLLBACK: { fill: "#f8e6dd", stroke: "#b35f3f" },
+    EXECUTION_OUTCOME: { fill: "#eceff0", stroke: "#65747a" },
+    PROCEDURE_OTHER: { fill: "#f7f0d9", stroke: "#9a782e" },
+  };
+  const colors = node.kind === "card" && cardClusters[node.cluster]
+    ? cardClusters[node.cluster]
+    : palette[node.kind] || palette.card;
   if (["PENDING_REVIEW", "DRAFT"].includes(node.status)) return { ...colors, stroke: "#b88924" };
   if (node.status === "REJECTED") return { ...colors, stroke: "#aa3d32" };
   return colors;
@@ -902,6 +929,7 @@ function graphNodeColors(node) {
 function graphEdgeColor(edge, active) {
   if (active) return "#1f6b4f";
   if (edge.relation_type === "MERGED_INTO") return "#1f6b4f";
+  if (edge.relation_type === "CROSS_PHASE_SIMILAR") return "#70529b";
   if (edge.explicit) return "#b88924";
   return "#aeb8b1";
 }
@@ -1010,7 +1038,7 @@ function drawKnowledgeGraph() {
     ctx.globalAlpha = opacity;
     ctx.strokeStyle = color;
     ctx.lineWidth = connected ? 2.1 : edge.explicit ? 1.45 : 1;
-    if (["SIMILAR_TO", "CANDIDATE_VERSION_OF", "CONFLICTS_WITH"].includes(edge.relation_type)) {
+    if (["SIMILAR_TO", "CROSS_PHASE_SIMILAR", "CANDIDATE_VERSION_OF", "CONFLICTS_WITH"].includes(edge.relation_type)) {
       ctx.setLineDash([4, 5]);
     }
     ctx.beginPath();
@@ -1159,21 +1187,29 @@ function runKnowledgeGraphLayout() {
   if (knowledgeGraphFrame) cancelAnimationFrame(knowledgeGraphFrame);
   const nodes = knowledgeGraphData.nodes;
   const nodeById = new Map(nodes.map(node => [node.id, node]));
-  const kindRadius = { case: 70, object: 155, card: 255, source: 350 };
-  const kindIndex = { case: 0, object: 1, card: 2, source: 3 };
-  const kindTotals = Object.fromEntries(Object.keys(kindRadius).map(kind => [kind, nodes.filter(node => node.kind === kind).length]));
-  const kindSeen = { case: 0, object: 0, card: 0, source: 0 };
+  const clusterTotals = {};
+  const clusterSeen = {};
   nodes.forEach(node => {
-    const index = kindSeen[node.kind]++;
-    const total = Math.max(1, kindTotals[node.kind]);
+    const cluster = node.cluster || "OTHER_CARD";
+    clusterTotals[cluster] = (clusterTotals[cluster] || 0) + 1;
+  });
+  nodes.forEach(node => {
+    const cluster = node.cluster || "OTHER_CARD";
+    const index = clusterSeen[cluster] || 0;
+    clusterSeen[cluster] = index + 1;
+    const total = Math.max(1, clusterTotals[cluster]);
+    const centroid = node.cluster_centroid || { x: 0, y: 0, z: 0 };
     const jitter = (graphHash(node.id) % 1000) / 1000;
     const vertical = 1 - 2 * ((index + 0.5) / total);
     const ring = Math.sqrt(Math.max(0, 1 - vertical * vertical));
-    const angle = (index + jitter) * Math.PI * (3 - Math.sqrt(5)) + (kindIndex[node.kind] || 0) * 0.47;
-    const radius = kindRadius[node.kind] || 250;
-    node.x = Math.cos(angle) * ring * radius;
-    node.y = vertical * radius * 0.78;
-    node.z = Math.sin(angle) * ring * radius;
+    const angle = (index + jitter) * Math.PI * (3 - Math.sqrt(5));
+    const radius = Math.min(96, 28 + Math.sqrt(total) * 14);
+    node.clusterX = Number(centroid.x) || 0;
+    node.clusterY = Number(centroid.y) || 0;
+    node.clusterZ = Number(centroid.z) || 0;
+    node.x = node.clusterX + Math.cos(angle) * ring * radius;
+    node.y = node.clusterY + vertical * radius * 0.72;
+    node.z = node.clusterZ + Math.sin(angle) * ring * radius;
     node.vx = 0;
     node.vy = 0;
     node.vz = 0;
@@ -1190,8 +1226,10 @@ function runKnowledgeGraphLayout() {
       const dy = target.y - source.y;
       const dz = target.z - source.z;
       const distance = Math.max(1, Math.hypot(dx, dy, dz));
-      const ideal = edge.explicit ? 165 : edge.relation_type === "CONTAINS" ? 95 : 135;
-      const force = (distance - ideal) * 0.00155 * alpha;
+      const sameCluster = source.cluster === target.cluster;
+      const ideal = sameCluster ? 80 : edge.relation_type === "CONTAINS" ? 150 : edge.explicit ? 205 : 180;
+      const strength = sameCluster ? 0.0018 : 0.00058;
+      const force = (distance - ideal) * strength * alpha;
       const fx = (dx / distance) * force;
       const fy = (dy / distance) * force;
       const fz = (dz / distance) * force;
@@ -1232,15 +1270,16 @@ function runKnowledgeGraphLayout() {
       }
     }
     nodes.forEach(node => {
-      node.vx += -node.x * 0.00035 * alpha;
-      node.vy += -node.y * 0.00035 * alpha;
-      node.vz += -node.z * 0.00035 * alpha;
+      const centroidStrength = node.kind === "card" ? 0.0042 : 0.0034;
+      node.vx += (node.clusterX - node.x) * centroidStrength * alpha;
+      node.vy += (node.clusterY - node.y) * centroidStrength * alpha;
+      node.vz += (node.clusterZ - node.z) * centroidStrength * alpha;
       node.vx *= 0.84;
       node.vy *= 0.84;
       node.vz *= 0.84;
-      node.x = Math.min(430, Math.max(-430, node.x + node.vx));
-      node.y = Math.min(310, Math.max(-310, node.y + node.vy));
-      node.z = Math.min(430, Math.max(-430, node.z + node.vz));
+      node.x = Math.min(520, Math.max(-520, node.x + node.vx));
+      node.y = Math.min(360, Math.max(-360, node.y + node.vy));
+      node.z = Math.min(500, Math.max(-500, node.z + node.vz));
     });
     drawKnowledgeGraph();
     iteration += 1;

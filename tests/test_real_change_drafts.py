@@ -160,6 +160,29 @@ class RealDraftClient(StructuralFakeClient):
         )
 
 
+class ConcurrencyTrackingRealDraftClient(RealDraftClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self._active_lock = threading.Lock()
+        self.active_model_requests = 0
+        self.max_active_model_requests = 0
+
+    def chat_json(self, system_prompt, user_prompt, **kwargs):
+        if system_prompt != GENERATION_SYSTEM_PROMPT:
+            return super().chat_json(system_prompt, user_prompt, **kwargs)
+        with self._active_lock:
+            self.active_model_requests += 1
+            self.max_active_model_requests = max(
+                self.max_active_model_requests, self.active_model_requests
+            )
+        try:
+            time.sleep(0.08)
+            return super().chat_json(system_prompt, user_prompt, **kwargs)
+        finally:
+            with self._active_lock:
+                self.active_model_requests -= 1
+
+
 def real_request() -> dict:
     return {
         "goal": "完成脱敏结构回归变更",
@@ -292,6 +315,48 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertEqual(edited["status"], "READY_FOR_REVIEW")
             with self.assertRaisesRegex(ChangeDraftError, "只有人工审核通过"):
                 service.change_drafts.export_draft(draft["draft_id"])
+
+    def test_real_change_generation_model_calls_are_serialized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = ConcurrencyTrackingRealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            drafts = [
+                service.change_drafts.create_draft(
+                    real_request(),
+                    selected_case_ids=[case["case_id"]],
+                    actor=f"pilot-{index}",
+                )
+                for index in range(3)
+            ]
+            results: list[dict] = []
+            errors: list[Exception] = []
+
+            def generate(draft_id: str) -> None:
+                try:
+                    results.append(service.change_drafts.generate(draft_id))
+                except Exception as exc:  # pragma: no cover - diagnostic capture
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=generate, args=(draft["draft_id"],))
+                for draft in drafts
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(results), 3)
+            self.assertEqual(
+                {result["status"] for result in results}, {"READY_FOR_REVIEW"}
+            )
+            self.assertEqual(client.max_active_model_requests, 1)
+            self.assertEqual(service.settings.change_draft_model_max_concurrency, 1)
 
     def test_protocol_failure_stops_without_partial_or_fallback_draft(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

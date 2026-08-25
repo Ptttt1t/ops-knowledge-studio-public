@@ -8,7 +8,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from harness.config import Settings
+from harness.config import ConfigurationError, Settings
 from knowledge_platform.security import generate_access_token
 from knowledge_platform.service import KnowledgeService
 from knowledge_platform.web import create_server
@@ -23,6 +23,16 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         return service, server, thread
+
+    def test_real_change_model_concurrency_cannot_exceed_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "DEMO_MODE=true\nCHANGE_DRAFT_MODEL_MAX_CONCURRENCY=2\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "固定为 1"):
+                Settings.load(env_file)
 
     def test_demo_mode_allows_internal_http_and_unauthenticated_web_flow(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -48,6 +58,11 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
             self.assertFalse(settings.effective_access_token_required)
             self.assertFalse(settings.request_boundary_checks_enabled)
             self.assertTrue(settings.csp_allow_inline)
+            self.assertTrue(settings.demo_rebuild_enabled)
+            self.assertTrue(settings.semantic_governance_enabled)
+            self.assertFalse(settings.demo_full_reset_enabled)
+            self.assertFalse(settings.real_change_generation_enabled)
+            self.assertEqual(settings.change_draft_model_max_concurrency, 1)
             self.assertEqual(
                 settings.startup_security_messages(),
                 [
@@ -198,6 +213,10 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
             )
             settings = Settings.load(env_file)
             self.assertFalse(settings.demo_mode)
+            self.assertFalse(settings.demo_rebuild_enabled)
+            self.assertFalse(settings.semantic_governance_enabled)
+            self.assertFalse(settings.demo_full_reset_enabled)
+            self.assertFalse(settings.real_change_generation_enabled)
             self.assertTrue(settings.startup_token_required)
             self.assertTrue(settings.effective_access_token_required)
             self.assertFalse(settings.csp_allow_inline)

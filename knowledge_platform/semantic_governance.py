@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from .service import KnowledgeService
 
 
-ALGORITHM_VERSION = "semantic_candidate_v1"
-CANONICAL_CARD_MODEL_VERSION = "semantic_merge_v1"
+ALGORITHM_VERSION = "semantic_candidate_v2"
+CANONICAL_CARD_MODEL_VERSION = "semantic_merge_v2"
 PROPOSAL_STATUSES = {
     "PENDING_REVIEW",
     "ACCEPTED",
@@ -56,6 +56,71 @@ _GENERIC_TOKENS = {
     "validation",
     "operation",
 }
+_PHASE_ALIASES = {
+    "PRECHECK": "PRECHECK",
+    "PRECHECK_STEPS": "PRECHECK",
+    "CHECK_BEFORE_CHANGE": "PRECHECK",
+    "IMPLEMENTATION": "IMPLEMENTATION",
+    "IMPLEMENTATION_STEPS": "IMPLEMENTATION",
+    "CHANGE_IMPLEMENT": "IMPLEMENTATION",
+    "VALIDATION": "VALIDATION",
+    "VALIDATION_STEPS": "VALIDATION",
+    "CHANGE_VERIFIED": "VALIDATION",
+    "ROLLBACK": "ROLLBACK",
+    "ROLLBACK_STEPS": "ROLLBACK",
+    "CHANGE_ROLLBACK": "ROLLBACK",
+}
+_ANCHOR_PHRASES = {
+    "告警检测": ("告警检测", "告警检查", "活动告警", "当前告警"),
+    "客户影响": ("客户影响",),
+    "业务影响": ("业务影响",),
+    "爆炸半径": ("爆炸半径",),
+    "变更回退": ("变更回退", "回退方案", "回滚方案"),
+    "系统参数": ("系统参数", "配置参数"),
+    "白名单": ("白名单",),
+    "CPU扩容": ("cpu扩容", "cpu 扩容", "cpu资源扩容"),
+    "内存扩容": ("内存扩容", "memory扩容", "memory 扩容"),
+    "节点池": ("节点池", "node pool", "nodepool"),
+    "服务探针": ("服务探针", "健康探针", "probe check"),
+    "关键业务指标": ("关键业务指标", "业务指标"),
+    "健康检查": ("健康检查", "健康状态"),
+    "配置回读": ("配置回读",),
+    "容量分析": ("容量分析", "容量检查"),
+    "版本分析": ("版本分析", "版本检查"),
+    "API分析": ("api分析", "api检查"),
+    "监控分析": ("监控分析", "监控检查"),
+    "高危操作": ("高危操作",),
+    "配置备份": ("配置备份", "备份检查", "备份规则"),
+    "风险控制": ("风险控制", "风险项"),
+    "验证条件": ("验证条件", "验证要求"),
+}
+_WEAK_ANCHORS = {
+    "业务",
+    "分析",
+    "列表",
+    "功能",
+    "操作",
+    "检查",
+    "确认",
+    "变更",
+    "系统",
+    "实施",
+    "验证",
+    "回退",
+    "进行",
+    "处理",
+    "结果",
+    "状态",
+    "影响",
+    "以及",
+    "由于",
+    "其中",
+    "无需",
+    "不涉及",
+    "无影响",
+}
+_STRUCTURED_SPLIT = re.compile(r"[\s,，;；、|/\\()（）\[\]{}<>《》:：=]+")
+_TECHNICAL_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_.:-]{1,31}(?![A-Za-z0-9_])")
 
 
 def utc_now() -> str:
@@ -100,6 +165,95 @@ def _phase_neutral_title(value: Any) -> str:
 
 def _identity(value: Any) -> str:
     return _IDENTITY_NOISE.sub("", _clean_text(value).casefold())
+
+
+def normalize_procedure_group(value: Any) -> str:
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    return _PHASE_ALIASES.get(normalized, "")
+
+
+def procedure_group(card: dict[str, Any]) -> str:
+    explicit = normalize_procedure_group(card.get("procedure_group"))
+    if explicit:
+        return explicit
+    phases = {
+        normalized
+        for item in card.get("applicable_phases") or []
+        if (normalized := normalize_procedure_group(item))
+    }
+    return next(iter(phases)) if len(phases) == 1 else ""
+
+
+def _structured_anchor_values(card: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for field in ("keywords", "object_type", "object_name"):
+        raw = card.get(field) or []
+        values.extend(str(item) for item in (raw if isinstance(raw, list) else [raw]))
+    parameters = card.get("instance_parameters") or {}
+    if isinstance(parameters, dict):
+        for key, value in parameters.items():
+            values.extend((str(key), str(value)))
+    actions = card.get("actions") or []
+    if isinstance(actions, list):
+        for action in actions:
+            if isinstance(action, dict):
+                values.extend(
+                    str(value)
+                    for key, value in action.items()
+                    if str(key).casefold()
+                    not in {"id", "unique_id", "tool_unique_id", "action_unique_id"}
+                    and not isinstance(value, (dict, list))
+                )
+            elif not isinstance(action, (dict, list)):
+                values.append(str(action))
+    return values
+
+
+def explainable_anchors(card: dict[str, Any]) -> list[str]:
+    """Extract complete, explainable phrases without exposing Chinese n-grams."""
+
+    operation = (
+        card.get("generalized_operation")
+        or card.get("operation")
+        or card.get("procedure_steps")
+        or ""
+    )
+    searchable = "\n".join(
+        _clean_text(value)
+        for value in (
+            card.get("title"),
+            operation,
+            card.get("validation") or card.get("validation_steps"),
+            card.get("rollback") or card.get("rollback_steps"),
+            card.get("impact_analysis"),
+            *_structured_anchor_values(card),
+        )
+        if _clean_text(value)
+    )
+    folded = searchable.casefold()
+    anchors: list[str] = []
+    for canonical, aliases in _ANCHOR_PHRASES.items():
+        if any(alias.casefold() in folded for alias in aliases):
+            anchors.append(canonical)
+
+    # Structured metadata is already a semantic boundary. Keep complete field
+    # values or technical identifiers; never manufacture a Chinese sliding
+    # window merely to increase the anchor count.
+    for value in _structured_anchor_values(card):
+        clean = _clean_text(value, limit=160).strip("-_.:：")
+        for part in _STRUCTURED_SPLIT.split(clean):
+            candidate = part.strip("-_.:：")
+            if not 2 <= len(candidate) <= 32:
+                continue
+            if candidate.casefold() in _GENERIC_TOKENS or candidate in _WEAK_ANCHORS:
+                continue
+            if re.fullmatch(r"[\u3400-\u9fff]+", candidate) and len(candidate) == 2:
+                # Two-character values are only trusted when they came from the
+                # curated semantic phrase set above.
+                continue
+            anchors.append(candidate)
+    anchors.extend(match.group(0) for match in _TECHNICAL_TOKEN.finditer(searchable))
+    return sorted(_unique(anchors), key=lambda item: (-len(item), item.casefold()))[:30]
 
 
 def _flatten_actions(value: Any) -> str:
@@ -154,6 +308,7 @@ def _semantic_parts(card: dict[str, Any]) -> dict[str, Any]:
         "token_counts": Counter(tokens),
         "action_tokens": action_tokens,
         "object_tokens": object_tokens,
+        "anchors": set(explainable_anchors(card)),
     }
 
 
@@ -178,24 +333,30 @@ def _optional_similarity(left: set[str], right: set[str]) -> float | None:
 def semantic_similarity(
     left: dict[str, Any], right: dict[str, Any]
 ) -> tuple[float, dict[str, Any]]:
+    left_parts = _semantic_parts(left)
+    right_parts = _semantic_parts(right)
+    shared_anchors = sorted(
+        left_parts["anchors"] & right_parts["anchors"],
+        key=lambda item: (-len(item), item.casefold()),
+    )[:30]
     if (
         left.get("semantic_fingerprint")
         and left.get("semantic_fingerprint") == right.get("semantic_fingerprint")
     ):
         return 1.0, {
             "exact_fingerprint": True,
-            "shared_core_tokens": [],
+            "shared_core_tokens": shared_anchors,
+            "shared_anchors": shared_anchors,
             "token_dice": 1.0,
             "token_containment": 1.0,
             "sequence_similarity": 1.0,
         }
-    left_parts = _semantic_parts(left)
-    right_parts = _semantic_parts(right)
     shared = left_parts["tokens"] & right_parts["tokens"]
     if len(shared) < 2:
         return 0.0, {
             "exact_fingerprint": False,
-            "shared_core_tokens": sorted(shared),
+            "shared_core_tokens": shared_anchors,
+            "shared_anchors": shared_anchors,
             "insufficient_shared_anchors": True,
         }
     dice = _dice(left_parts["tokens"], right_parts["tokens"])
@@ -219,7 +380,8 @@ def semantic_similarity(
     )
     return round(score, 6), {
         "exact_fingerprint": False,
-        "shared_core_tokens": sorted(shared)[:30],
+        "shared_core_tokens": shared_anchors,
+        "shared_anchors": shared_anchors,
         "token_dice": round(dice, 6),
         "token_containment": round(containment, 6),
         "sequence_similarity": round(sequence, 6),
@@ -242,6 +404,10 @@ def _prefer_text(values: list[Any], *, limit: int = 12_000) -> str:
 def proposed_canonical_merge(
     left: dict[str, Any], right: dict[str, Any]
 ) -> dict[str, Any]:
+    left_group = procedure_group(left)
+    right_group = procedure_group(right)
+    if not left_group or left_group != right_group:
+        raise SemanticGovernanceError("不同执行阶段的 Procedure Knowledge 不允许合并")
     titles = [_phase_neutral_title(left.get("title")), _phase_neutral_title(right.get("title"))]
     operation = _prefer_text(
         [
@@ -284,8 +450,9 @@ def proposed_canonical_merge(
         ),
         "keywords": _unique([*(left.get("keywords") or []), *(right.get("keywords") or [])]),
         "applicable_phases": _unique(
-            [*(left.get("applicable_phases") or []), *(right.get("applicable_phases") or [])]
+            [left_group]
         ),
+        "procedure_group": left_group,
         "source_card_ids": sorted((int(left["id"]), int(right["id"]))),
     }
 
@@ -337,6 +504,7 @@ class SemanticGovernanceService:
                     if int(right["id"]) == right_id
                     else left["semantic_fingerprint"]
                 ),
+                "procedure_group": procedure_group(left),
             }
         )
 
@@ -361,10 +529,18 @@ class SemanticGovernanceService:
             eligible_fingerprints = {
                 int(card["id"]): str(card["semantic_fingerprint"]) for card in cards
             }
+            eligible_groups = {
+                int(card["id"]): procedure_group(card) for card in cards
+            }
             stale_count = self.knowledge.store.stale_semantic_merge_proposals(
-                eligible_fingerprints
+                eligible_fingerprints,
+                eligible_groups=eligible_groups,
+                algorithm_version=ALGORITHM_VERSION,
             )
             candidates: list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+            cross_phase_relations: list[
+                tuple[int, int, float, str]
+            ] = []
             comparisons = 0
             for left_index, left in enumerate(cards):
                 for right in cards[left_index + 1 :]:
@@ -373,7 +549,39 @@ class SemanticGovernanceService:
                     comparisons += 1
                     score, signals = semantic_similarity(left, right)
                     if score >= self.knowledge.settings.semantic_proposal_min_score:
-                        candidates.append((score, left, right, signals))
+                        left_group = procedure_group(left)
+                        right_group = procedure_group(right)
+                        signals["left_procedure_group"] = left_group
+                        signals["right_procedure_group"] = right_group
+                        signals["phase_merge_compatible"] = bool(
+                            left_group and left_group == right_group
+                        )
+                        if left_group and right_group and left_group != right_group:
+                            anchors = "、".join(
+                                signals.get("shared_anchors") or []
+                            )
+                            reason = (
+                                f"跨阶段相似：{left_group} 与 {right_group}；"
+                                "保留独立阶段知识，不合并 semantic identity"
+                            )
+                            if anchors:
+                                reason += f"；共享锚点：{anchors}"
+                            cross_phase_relations.append(
+                                (
+                                    min(int(left["id"]), int(right["id"])),
+                                    max(int(left["id"]), int(right["id"])),
+                                    score,
+                                    reason,
+                                )
+                            )
+                            continue
+                        if left_group and left_group == right_group:
+                            candidates.append((score, left, right, signals))
+            self.knowledge.store.replace_semantic_governance_relations(
+                "CROSS_PHASE_SIMILAR",
+                cross_phase_relations,
+                scope_card_ids=[int(card["id"]) for card in cards],
+            )
             candidates.sort(
                 key=lambda item: (item[0], int(item[1]["id"]), int(item[2]["id"])),
                 reverse=True,
@@ -395,8 +603,11 @@ class SemanticGovernanceService:
                     "canonical semantic fingerprint 完全一致"
                     if signals.get("exact_fingerprint")
                     else (
-                        "通用操作内容高度相似；共享锚点："
-                        + "、".join(signals.get("shared_core_tokens") or [])
+                        "同阶段通用操作内容高度相似；共享锚点："
+                        + (
+                            "、".join(signals.get("shared_anchors") or [])
+                            or "结构化操作与规范化正文"
+                        )
                     )
                 )
                 proposal, created = self.knowledge.store.upsert_semantic_merge_proposal(
@@ -426,6 +637,7 @@ class SemanticGovernanceService:
                 "eligible_card_count": len(cards),
                 "pair_comparison_count": comparisons,
                 "candidate_count": len(candidates),
+                "cross_phase_relation_count": len(cross_phase_relations),
                 "selected_candidate_count": len(selected),
                 "created_proposal_count": created_count,
                 "refreshed_proposal_count": refreshed_count,
@@ -487,6 +699,7 @@ class SemanticGovernanceService:
             "risk_level",
             "risk_control",
             "applicable_phases",
+            "procedure_group",
             "semantic_fingerprint",
             "source_procedure_pointer",
         )
@@ -524,6 +737,8 @@ class SemanticGovernanceService:
             "last_scan": self.knowledge.store.get_semantic_scan_report(),
             "policy": {
                 "automatic_merge": False,
+                "cross_phase_merge": False,
+                "cross_phase_relation": "CROSS_PHASE_SIMILAR",
                 "model_content_export": False,
                 "minimum_score": self.knowledge.settings.semantic_proposal_min_score,
                 "algorithm_version": ALGORITHM_VERSION,
@@ -558,6 +773,7 @@ class SemanticGovernanceService:
                 "prerequisites",
                 "keywords",
                 "applicable_phases",
+                "procedure_group",
             }
             unknown = sorted(set(overrides) - allowed)
             if unknown:
@@ -584,6 +800,23 @@ class SemanticGovernanceService:
             "applicable_phases",
         ):
             base[field] = _text_list(base.get(field))
+        base["procedure_group"] = normalize_procedure_group(
+            base.get("procedure_group")
+        )
+        normalized_phases = {
+            phase
+            for item in base["applicable_phases"]
+            if (phase := normalize_procedure_group(item))
+        }
+        if len(normalized_phases) != 1:
+            raise SemanticGovernanceError(
+                "canonical Procedure Knowledge 必须且只能属于一个执行阶段"
+            )
+        canonical_group = next(iter(normalized_phases))
+        if base["procedure_group"] and base["procedure_group"] != canonical_group:
+            raise SemanticGovernanceError("procedure_group 与 applicable_phases 不一致")
+        base["procedure_group"] = canonical_group
+        base["applicable_phases"] = [canonical_group]
         if not base["title"]:
             raise SemanticGovernanceError("合并后的 canonical 卡标题不能为空")
         if not base["generalized_operation"]:
@@ -615,7 +848,18 @@ class SemanticGovernanceService:
         proposal = self.knowledge.store.get_semantic_merge_proposal(proposal_id)
         if proposal is None:
             raise SemanticGovernanceError("相似知识候选不存在")
+        left = self.knowledge.store.get_card(int(proposal["left_card_id"]))
+        right = self.knowledge.store.get_card(int(proposal["right_card_id"]))
+        left_group = procedure_group(left or {})
+        right_group = procedure_group(right or {})
+        if not left_group or left_group != right_group:
+            raise SemanticGovernanceError(
+                "不同或未知执行阶段的 Procedure Knowledge 不允许合并；"
+                "请保留独立卡片并使用 CROSS_PHASE_SIMILAR 关系"
+            )
         payload = self._canonical_payload(proposal, merged_card)
+        if payload["procedure_group"] != left_group:
+            raise SemanticGovernanceError("canonical 卡不得改变来源知识的执行阶段")
         source_card_ids = payload["source_card_ids"]
         source_content = "\n".join(
             [
@@ -637,6 +881,7 @@ class SemanticGovernanceService:
                 "validation": _identity(payload["validation"]),
                 "rollback": _identity(payload["rollback"]),
                 "impact_analysis": _identity(payload["impact_analysis"]),
+                "procedure_group": payload["procedure_group"],
             }
         )
         draft = KnowledgeCardDraft(

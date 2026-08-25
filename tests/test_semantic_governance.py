@@ -11,7 +11,11 @@ import unittest
 from urllib.request import Request, urlopen
 
 from knowledge_platform.schema import CardStatus, ComparisonResult, KnowledgeCardDraft
-from knowledge_platform.semantic_governance import SemanticGovernanceWorker
+from knowledge_platform.semantic_governance import (
+    SemanticGovernanceError,
+    SemanticGovernanceWorker,
+    explainable_anchors,
+)
 from knowledge_platform.service import KnowledgeService
 from knowledge_platform.web import create_server
 from tests.test_platform import make_settings
@@ -92,6 +96,7 @@ class SemanticGovernanceTests(unittest.TestCase):
                     "rollback": "",
                     "impact_analysis": "无业务影响",
                     "applicable_phases": [phase],
+                    "procedure_group": phase,
                     "source_procedure_pointer": f"/synthetic/{source_name}/{phase}",
                 },
             },
@@ -109,9 +114,9 @@ class SemanticGovernanceTests(unittest.TestCase):
         right_id = self.add_procedure_card(
             service,
             source_name="case-beta",
-            title="变更后检查：业务验证",
+            title="变更前检查：业务健康核查",
             operation="核查活动告警、服务探针及关键业务指标，确保系统状态正常。",
-            phase="VALIDATION",
+            phase="PRECHECK",
             fingerprint_seed="right-content",
         )
         return left_id, right_id
@@ -140,6 +145,114 @@ class SemanticGovernanceTests(unittest.TestCase):
             self.assertTrue(
                 any(edge["relation_type"] == "SIMILAR_TO" for edge in graph["edges"])
             )
+
+    def test_cross_phase_similarity_creates_relation_but_never_merge_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查当前活动告警，无影响后继续。"
+            precheck_id = self.add_procedure_card(
+                service,
+                source_name="cross-phase-precheck",
+                title="变更前检查：活动告警",
+                operation=operation,
+                phase="PRECHECK",
+                fingerprint_seed="cross-phase-identical",
+            )
+            rollback_id = self.add_procedure_card(
+                service,
+                source_name="cross-phase-rollback",
+                title="回退：活动告警",
+                operation=operation,
+                phase="ROLLBACK",
+                fingerprint_seed="cross-phase-identical",
+            )
+
+            report = service.semantic_governance.scan(actor="test-scanner")
+
+            self.assertEqual(report["candidate_count"], 0)
+            self.assertEqual(report["created_proposal_count"], 0)
+            self.assertEqual(report["cross_phase_relation_count"], 1)
+            self.assertEqual(
+                service.semantic_governance.list_proposals()["proposals"], []
+            )
+            graph = service.knowledge_graph(status="ALL", limit=50)
+            relation = next(
+                edge
+                for edge in graph["edges"]
+                if edge["relation_type"] == "CROSS_PHASE_SIMILAR"
+            )
+            self.assertEqual(
+                {relation["source"], relation["target"]},
+                {f"card:{precheck_id}", f"card:{rollback_id}"},
+            )
+            for card_id, phase in (
+                (precheck_id, "PRECHECK"),
+                (rollback_id, "ROLLBACK"),
+            ):
+                card = service.store.get_card(card_id)
+                assert card is not None
+                self.assertEqual(card["procedure_group"], phase)
+                self.assertTrue(card["retrieval_enabled"])
+
+            # A legacy or manually injected cross-phase proposal is rejected at
+            # the final write boundary as well as by the scanner.
+            proposal, _created = service.store.upsert_semantic_merge_proposal(
+                proposal_id="SMP-CROSSPHASETEST",
+                pair_key="cross-phase-test-key",
+                left_card_id=precheck_id,
+                right_card_id=rollback_id,
+                left_fingerprint=str(
+                    service.store.get_card(precheck_id)["semantic_fingerprint"]
+                ),
+                right_fingerprint=str(
+                    service.store.get_card(rollback_id)["semantic_fingerprint"]
+                ),
+                algorithm_version="legacy-test",
+                similarity_score=1.0,
+                signals={},
+                reason="legacy cross-phase proposal",
+                proposed_merge={
+                    "title": "不应合并",
+                    "summary": operation,
+                    "generalized_operation": operation,
+                    "validation": "",
+                    "rollback": "",
+                    "impact_analysis": "无影响",
+                    "risk_level": "",
+                    "risk_control": "",
+                    "scenario": "synthetic",
+                    "object_type": "service",
+                    "object_name": "demo-service",
+                    "applicable_versions": [],
+                    "prerequisites": [],
+                    "keywords": [],
+                    "applicable_phases": ["PRECHECK", "ROLLBACK"],
+                    "source_card_ids": [precheck_id, rollback_id],
+                },
+            )
+            with self.assertRaisesRegex(SemanticGovernanceError, "不允许合并"):
+                service.semantic_governance.accept(
+                    proposal["proposal_id"],
+                    actor="knowledge-owner",
+                    comment="must fail",
+                )
+
+    def test_shared_anchors_are_complete_semantic_phrases(self) -> None:
+        anchors = explainable_anchors(
+            {
+                "title": "变更前检查：告警与爆炸半径",
+                "generalized_operation": (
+                    "执行告警检测，评估客户影响和爆炸半径，"
+                    "确认系统参数满足验证条件。"
+                ),
+                "keywords": ["告警检测", "客户影响", "系统参数"],
+            }
+        )
+
+        self.assertTrue(
+            {"告警检测", "客户影响", "爆炸半径", "系统参数"}.issubset(anchors)
+        )
+        self.assertTrue({"下影", "于大", "务方", "和应"}.isdisjoint(anchors))
 
     def test_rejection_suppresses_same_content_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -209,7 +322,7 @@ class SemanticGovernanceTests(unittest.TestCase):
                     "title": "通用业务健康检查",
                     "summary": "检查告警、探针和关键业务指标。",
                     "generalized_operation": "检查活动告警、服务探针和关键业务指标，确认目标系统健康。",
-                    "applicable_phases": ["PRECHECK", "VALIDATION"],
+                    "applicable_phases": ["PRECHECK"],
                 },
             )
 
@@ -220,7 +333,8 @@ class SemanticGovernanceTests(unittest.TestCase):
             self.assertEqual(canonical["status"], "APPROVED")
             self.assertEqual(canonical["dedup_status"], "CANONICAL")
             self.assertTrue(canonical["retrieval_enabled"])
-            self.assertEqual(canonical["applicable_phases"], ["PRECHECK", "VALIDATION"])
+            self.assertEqual(canonical["applicable_phases"], ["PRECHECK"])
+            self.assertEqual(canonical["procedure_group"], "PRECHECK")
             for source_id in (left_id, right_id):
                 source = service.store.get_card(source_id)
                 assert source is not None

@@ -37,7 +37,7 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 | Knowledge Card Builder | `CASE_CONTEXT`、`PROCEDURE_STEP`、`EXECUTION_OUTCOME` | Extraction Unit 不等于 Knowledge Card；正文禁止 raw JSON |
 | 案例包 | 一个 ChangeOrder 对应一个 `ChangeCaseBundle`，包内保存有序卡片 | 支持整包原子审核和当前案例精确重建 |
 | 知识治理 | 质量 QA、证据复核、批准、驳回、替代、重复状态 | 只有 `APPROVED + INDEXED + retrieval_enabled` 可进入可信检索 |
-| 相似知识治理 | 后台增量发现、人工合并/排除/暂缓、canonical 卡 | 不自动合并，不调用模型，不外发正文 |
+| 相似知识治理 | 后台增量发现、同阶段人工合并/排除/暂缓、canonical 卡 | 跨阶段只建关系，不合并 semantic identity；不调用模型 |
 | 知识关系图 | 案例、卡片、对象、来源、版本、验证、回退、相似和合并关系 | 当前是 SQLite 关系投影与可视化，不是独立图数据库 |
 | 可信问答 | 本地混合检索、字段级引用、可选只读 Agent | 无强相关已审核证据时拒绝输出“可信方案” |
 | 合成变更 Demo | 风险评估、计划生成、人工审批、灰度模拟、失败回退、反馈 | 只修改隔离模拟器，不操作真实基础设施 |
@@ -65,11 +65,11 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 
 ![相似知识人工治理](docs/images/semantic-governance.png)
 
-确认合并后，系统创建新的 canonical 卡；原卡保留审计证据但退出所有普通检索。图谱关系由待确认的 `SIMILAR_TO` 变为确定的 `MERGED_INTO`。
+确认同阶段知识可以合并后，系统创建新的 canonical 卡；原卡保留审计证据但退出所有普通检索。图谱关系由待确认的 `SIMILAR_TO` 变为确定的 `MERGED_INTO`。不同阶段即使文本一致，也只建立 `CROSS_PHASE_SIMILAR`，两张卡继续独立检索。
 
 ### 3. 用关系图检查知识结构
 
-三维关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`MERGED_INTO` 等显式关系。拖动可旋转视角，Shift + 拖动可平移，滚轮可缩放；节点只常驻显示短标识，完整名称在悬停浮层和右侧详情中查看。
+三维关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`CROSS_PHASE_SIMILAR`、`MERGED_INTO` 等显式关系。布局采用类型质心与局部力导向：Context、前检、实施、验证、回退和执行结果形成不同空间簇，关系边仍参与位置调整。拖动可旋转视角，Shift + 拖动可平移，滚轮可缩放；节点只常驻显示短标识，完整名称在悬停浮层和右侧详情中查看。
 
 ![知识资产关系图](docs/images/knowledge-graph.png)
 
@@ -193,13 +193,18 @@ SEMANTIC_SCAN_MAX_PROPOSALS=100
 ```text
 APPROVED + INDEXED Procedure Cards
 → 本地确定性相似度
-→ PENDING_REVIEW + SIMILAR_TO
+→ 同 procedure_group: PENDING_REVIEW + SIMILAR_TO
 → 人工 ACCEPT / REJECT / DEFER
 → canonical card + MERGED_INTO
+
+跨 procedure_group
+→ CROSS_PHASE_SIMILAR（保留两张阶段卡，不进入合并队列）
 ```
 
 - 扫描不调用 LLM，也不会把正文发送给外部模型。
 - 分数只是候选门槛，不是合并结论。
+- `procedure_group` 是硬约束；PRECHECK、IMPLEMENTATION、VALIDATION、ROLLBACK 之间禁止直接合并。
+- 页面共享锚点来自结构化字段和完整业务短语，不展示中文字符滑窗片段。
 - `REJECTED` 与来源 fingerprint 绑定；内容不变时不重复推送。
 - 内容或审批状态变化后旧候选自动 `STALE`。
 - 合并在一个 SQLite 事务中完成，来源卡立即退出本地检索和长期记忆映射。
@@ -312,6 +317,7 @@ CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
 CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1
 ```
 
 生成流程：
@@ -334,6 +340,7 @@ RealChangeRequest
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
 - 模型协议失败只允许一次协议修复；仍失败则保留诊断并停止，不生成 fallback 草案。
+- 真实草案路径的个人模型调用使用独立信号量，最大并发固定为 `1`；配置为其他值会在启动时失败，不影响其他模块。
 - 只有当前 `REVIEW_APPROVED` revision 可以导出。
 - 留一案例盲测会在生成期间隔离目标及内容近重复案例。
 
@@ -351,6 +358,8 @@ RealChangeRequest
 - 不影响其他案例，也不关闭普通 ingest 的幂等机制。
 
 `DEMO_FULL_RESET_ENABLED` 当前保留但默认关闭，Web 未开放全库重置入口。
+
+Demo 配置遵循“安全功能默认开启”原则：`DEMO_MODE=true` 且未显式配置新功能开关时，非破坏性的 Demo 能力默认可用。全库重置、真实业务数据模型调用等破坏性或敏感能力仍默认关闭，分别受 `DEMO_FULL_RESET_ENABLED=false`、`REAL_CHANGE_GENERATION_ENABLED=false` 保护。
 
 ## 可选 MindMemOS 长期记忆
 
@@ -435,7 +444,7 @@ python -m compileall -q harness knowledge_platform tests
 node --check knowledge_platform/static/app.js
 ```
 
-当前分支回归结果：`144 tests passed`。
+当前分支回归结果：`149 tests passed`。
 
 测试覆盖：
 
@@ -483,6 +492,9 @@ python run.py generate-access-token
 
 ## 延伸文档
 
+- [Codex 长期项目上下文](docs/CODEX_CONTEXT.md)
+- [Codex 当前交接状态](docs/CODEX_HANDOFF.md)
+- [架构与技术决策](docs/DECISIONS.md)
 - [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)
 - [相似知识人工合并治理](docs/semantic-governance.md)
 - [真实 ChangeOrder 草案生成与能力盲测](docs/real-change-generation.md)

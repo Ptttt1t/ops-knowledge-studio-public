@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 
+from .graph_layout import cluster_centroid, node_cluster, procedure_phase
 from .schema import CardStatus, ComparisonResult, KnowledgeCardDraft, LIST_FIELDS
 
 
@@ -1400,6 +1401,7 @@ class KnowledgeStore:
             "subitems",
             "split_decision",
             "applicable_phases",
+            "procedure_group",
             "actions",
             "context",
             "outcome",
@@ -1660,6 +1662,73 @@ class KnowledgeStore:
                 (card_id, related_card_id, relation_type.strip().upper()),
             )
 
+    def replace_semantic_governance_relations(
+        self,
+        relation_type: str,
+        relations: list[tuple[int, int, float, str]],
+        *,
+        scope_card_ids: list[int],
+    ) -> None:
+        """Replace one worker-owned symmetric relationship projection."""
+
+        normalized = relation_type.strip().upper()
+        if normalized != "CROSS_PHASE_SIMILAR":
+            raise StoreError("仅允许替换相似知识治理拥有的跨阶段关系")
+        now = utc_now()
+        with self.connect() as connection:
+            scoped_ids = sorted({int(card_id) for card_id in scope_card_ids})
+            if scoped_ids:
+                placeholders = ",".join("?" for _ in scoped_ids)
+                connection.execute(
+                    f"DELETE FROM relations WHERE relation_type = ? "
+                    f"AND card_id IN ({placeholders}) "
+                    f"AND related_card_id IN ({placeholders})",
+                    [normalized, *scoped_ids, *scoped_ids],
+                )
+            connection.execute(
+                """
+                DELETE FROM relations
+                WHERE relation_type = ?
+                  AND (
+                    NOT EXISTS (
+                      SELECT 1 FROM cards AS left_card
+                      WHERE left_card.id = relations.card_id
+                        AND left_card.status = 'APPROVED'
+                        AND left_card.publish_status = 'INDEXED'
+                        AND left_card.retrieval_enabled = 1
+                    )
+                    OR NOT EXISTS (
+                      SELECT 1 FROM cards AS right_card
+                      WHERE right_card.id = relations.related_card_id
+                        AND right_card.status = 'APPROVED'
+                        AND right_card.publish_status = 'INDEXED'
+                        AND right_card.retrieval_enabled = 1
+                    )
+                  )
+                """,
+                (normalized,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO relations
+                    (card_id, related_card_id, relation_type,
+                     confidence, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        min(int(left_id), int(right_id)),
+                        max(int(left_id), int(right_id)),
+                        normalized,
+                        max(0.0, min(float(score), 1.0)),
+                        str(reason).strip(),
+                        now,
+                    )
+                    for left_id, right_id, score, reason in relations
+                    if int(left_id) != int(right_id)
+                ],
+            )
+
     @staticmethod
     def _decode_semantic_merge_proposal(
         row: sqlite3.Row | None,
@@ -1865,7 +1934,11 @@ class KnowledgeStore:
         return result
 
     def stale_semantic_merge_proposals(
-        self, eligible_fingerprints: dict[int, str]
+        self,
+        eligible_fingerprints: dict[int, str],
+        *,
+        eligible_groups: dict[int, str] | None = None,
+        algorithm_version: str = "",
     ) -> int:
         stale: list[tuple[str, int, int]] = []
         with self.connect() as connection:
@@ -1880,6 +1953,18 @@ class KnowledgeStore:
             if (
                 eligible_fingerprints.get(left_id) != proposal["left_fingerprint"]
                 or eligible_fingerprints.get(right_id) != proposal["right_fingerprint"]
+                or (
+                    eligible_groups is not None
+                    and (
+                        not eligible_groups.get(left_id)
+                        or eligible_groups.get(left_id) != eligible_groups.get(right_id)
+                    )
+                )
+                or (
+                    algorithm_version
+                    and str(proposal.get("algorithm_version") or "")
+                    != algorithm_version
+                )
             ):
                 stale.append((str(proposal["proposal_id"]), left_id, right_id))
         if not stale:
@@ -1985,6 +2070,7 @@ class KnowledgeStore:
                 int(proposal["left_card_id"]): str(proposal["left_fingerprint"]),
                 int(proposal["right_card_id"]): str(proposal["right_fingerprint"]),
             }
+            source_groups: set[str] = set()
             for source in sources:
                 source_id = int(source["id"])
                 if str(source["semantic_fingerprint"]) != expected_fingerprints[source_id]:
@@ -1995,6 +2081,20 @@ class KnowledgeStore:
                     or str(source["publish_status"]) != "INDEXED"
                 ):
                     raise StoreError("来源卡片已不再满足合并条件，请重新扫描")
+                try:
+                    source_payload = json.loads(str(source["semantic_payload"] or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise StoreError("来源卡片阶段元数据无效，请重新扫描") from exc
+                if not isinstance(source_payload, dict):
+                    raise StoreError("来源卡片阶段元数据无效，请重新扫描")
+                source_groups.add(procedure_phase(source_payload))
+            if "" in source_groups or len(source_groups) != 1:
+                raise StoreError("不同或未知执行阶段的知识卡不得合并")
+            canonical_group = procedure_phase(
+                semantic_metadata.get("semantic_payload") or {}
+            )
+            if canonical_group != next(iter(source_groups)):
+                raise StoreError("canonical 卡不得改变来源知识的执行阶段")
 
             document = connection.execute(
                 "SELECT id FROM documents WHERE checksum = ?", (source_checksum,)
@@ -2231,7 +2331,7 @@ class KnowledgeStore:
                 f"""
                 SELECT cards.id, cards.title, cards.summary, cards.knowledge_type,
                        cards.card_type, cards.dedup_status, cards.publish_status,
-                       cards.retrieval_enabled,
+                       cards.retrieval_enabled, cards.semantic_payload,
                        cards.object_type, cards.object_name, cards.status,
                        cards.quality_score, cards.comparison_label,
                        cards.source_document_id, cards.updated_at,
@@ -2273,6 +2373,12 @@ class KnowledgeStore:
         object_nodes: dict[str, dict[str, Any]] = {}
         case_nodes: dict[str, dict[str, Any]] = {}
 
+        def layout_fields(cluster: str) -> dict[str, Any]:
+            return {
+                "cluster": cluster,
+                "cluster_centroid": cluster_centroid(cluster),
+            }
+
         def add_edge(
             source: str,
             target: str,
@@ -2306,6 +2412,18 @@ class KnowledgeStore:
             object_node_id = "object:" + hashlib.sha256(
                 object_key.encode("utf-8")
             ).hexdigest()[:20]
+            try:
+                semantic_payload = json.loads(str(row["semantic_payload"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                semantic_payload = {}
+            if not isinstance(semantic_payload, dict):
+                semantic_payload = {}
+            procedure_group = procedure_phase(semantic_payload)
+            card_cluster = node_cluster(
+                "card",
+                card_type=str(row["card_type"]),
+                semantic_payload=semantic_payload,
+            )
             nodes.append(
                 {
                     "id": card_node_id,
@@ -2324,7 +2442,9 @@ class KnowledgeStore:
                     "quality_score": round(float(row["quality_score"]), 1),
                     "comparison_label": str(row["comparison_label"]),
                     "unit_role": str(row["unit_role"] or ""),
+                    "procedure_group": procedure_group,
                     "updated_at": str(row["updated_at"]),
+                    **layout_fields(card_cluster),
                 }
             )
             source_nodes.setdefault(
@@ -2336,6 +2456,7 @@ class KnowledgeStore:
                     "label": str(row["source_name"]),
                     "source_type": str(row["source_type"]),
                     "source_ref": str(row["source_ref"]),
+                    **layout_fields(node_cluster("source")),
                 },
             )
             object_nodes.setdefault(
@@ -2345,6 +2466,7 @@ class KnowledgeStore:
                     "kind": "object",
                     "label": str(row["object_name"]),
                     "object_type": str(row["object_type"]),
+                    **layout_fields(node_cluster("object")),
                 },
             )
             add_edge(source_node_id, card_node_id, "SOURCE_OF")
@@ -2361,6 +2483,7 @@ class KnowledgeStore:
                         "kind": "case",
                         "entity_id": case_id,
                         "label": str(row["case_title"] or case_id),
+                        **layout_fields(node_cluster("case")),
                     },
                 )
                 add_edge(case_node_id, card_node_id, "CONTAINS")
@@ -2383,6 +2506,12 @@ class KnowledgeStore:
             kind: sum(1 for node in nodes if node["kind"] == kind)
             for kind in ("card", "case", "object", "source")
         }
+        cluster_counts = {
+            cluster: sum(1 for node in nodes if node.get("cluster") == cluster)
+            for cluster in sorted(
+                {str(node.get("cluster") or "OTHER_CARD") for node in nodes}
+            )
+        }
         return {
             "nodes": nodes,
             "edges": edges,
@@ -2393,6 +2522,8 @@ class KnowledgeStore:
                 "edge_count": len(edges),
                 "explicit_relation_count": len(relation_rows),
                 "nodes_by_kind": kind_counts,
+                "nodes_by_cluster": cluster_counts,
+                "layout_strategy": "type_centroid_local_force_v1",
             },
         }
 
