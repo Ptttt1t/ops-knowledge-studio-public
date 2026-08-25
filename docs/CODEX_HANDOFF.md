@@ -13,6 +13,7 @@
 - Demo 安全子功能在 `DEMO_MODE=true` 时默认启用；全库重置和真实草案等破坏性/敏感能力继续默认关闭。
 - 新增相应 synthetic tests，并同步 README、`.env.example` 和专题文档。
 - 初始化根目录 `AGENTS.md`、长期上下文 `CODEX_CONTEXT.md`、当前交接 `CODEX_HANDOFF.md` 和技术决策 `DECISIONS.md`。
+- 已快进合并并发布到公开仓库 `Ptttt1t/ops-knowledge-studio-public` 的 `main`；发布前将原有测试中的私网字面量替换为 RFC 5737 文档地址。
 
 ## Files Changed
 
@@ -54,7 +55,8 @@ None.
 ## Last Updated
 
 - Date: 2026-08-25 (Asia/Shanghai)
-- Implementation branch: `codex/phase-safe-similarity-3d-clusters`
-- Target publication branch: `main`
-- Previous published `main`: `5de0029`
-- Containing commit: 提交后使用 `git log -1 --oneline` 获取；不在文件内保存自引用 SHA。
+- Current branch: `main`
+- Published remote: `github/main` (`Ptttt1t/ops-knowledge-studio-public`)
+- Feature and shared-context commit: `40a2f678a162798b21edcaa7af8ebadb2e2753bd`
+- Public-fixture safety follow-up: `12e3cea9b9cbb59fdac2b4860506e7614eb716e5`
+- Handoff refresh commit: 使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不在文件内保存自引用 SHA。
