@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from http import HTTPStatus
@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import re
+import threading
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 from uuid import uuid4
@@ -99,12 +100,162 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         )
         self.semantic_governance_worker.start()
         self.security = WebSecurity(service.settings)
+        self._lifecycle = threading.Condition()
+        self._shutdown_state = "RUNNING"
+        self._shutdown_requested_at = ""
+        self._shutdown_actor = ""
+        self._active_work_requests = 0
+        self._shutdown_thread: threading.Thread | None = None
+        self._closed = False
+
+    @property
+    def safe_shutdown_enabled(self) -> bool:
+        settings = self.service.settings
+        return bool(settings.demo_mode and settings.demo_safe_shutdown_enabled)
+
+    @staticmethod
+    def _active_model_requests(activity: dict[str, Any]) -> int:
+        routes = activity.get("routes")
+        if isinstance(routes, dict):
+            return sum(
+                max(0, int(route.get("active_requests", 0)))
+                for route in routes.values()
+                if isinstance(route, dict)
+            )
+        return max(0, int(activity.get("active_requests", 0)))
+
+    def shutdown_status(self) -> dict[str, Any]:
+        model_activity = self.service.model_request_activity()
+        with self._lifecycle:
+            state = self._shutdown_state
+            active_work = self._active_work_requests
+            requested_at = self._shutdown_requested_at
+            actor = self._shutdown_actor
+        return {
+            "enabled": self.safe_shutdown_enabled,
+            "state": state,
+            "accepting_new_work": state == "RUNNING",
+            "requested_at": requested_at,
+            "actor": actor,
+            "active_work_requests": active_work,
+            "active_model_requests": self._active_model_requests(model_activity),
+            "runtime_workers": self.runtime.active_worker_count,
+            "change_demo_workers": self.change_demos.active_worker_count,
+            "semantic_worker_running": self.semantic_governance_worker.running,
+            "model_requests": model_activity,
+        }
+
+    def begin_work(self) -> None:
+        with self._lifecycle:
+            if self._shutdown_state != "RUNNING":
+                raise WebSecurityError(
+                    "平台正在安全退出，已停止接收新任务",
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    code="platform_draining",
+                )
+            self._active_work_requests += 1
+
+    def end_work(self) -> None:
+        with self._lifecycle:
+            self._active_work_requests = max(0, self._active_work_requests - 1)
+            self._lifecycle.notify_all()
+
+    def _enter_draining(self, *, actor: str) -> bool:
+        with self._lifecycle:
+            if self._shutdown_state != "RUNNING":
+                return False
+            self._shutdown_state = "DRAINING"
+            self._shutdown_actor = actor
+            self._shutdown_requested_at = datetime.now(timezone.utc).isoformat()
+            self._lifecycle.notify_all()
+            return True
+
+    def _request_background_stops(self) -> None:
+        self.semantic_governance_worker.request_stop()
+        self.runtime.request_stop()
+        self.change_demos.request_stop()
+
+    def _drain(self, *, stop_http_server: bool) -> None:
+        print(f"[SAFE SHUTDOWN] requested actor={self._shutdown_actor}")
+        print("[SAFE SHUTDOWN] admission closed")
+        previous: tuple[Any, ...] | None = None
+        while True:
+            # Reissue stop requests so a request that crossed the admission
+            # boundary just before DRAINING cannot leave a new worker behind.
+            self._request_background_stops()
+            status = self.shutdown_status()
+            snapshot = (
+                status["active_work_requests"],
+                status["active_model_requests"],
+                status["runtime_workers"],
+                status["change_demo_workers"],
+                status["semantic_worker_running"],
+            )
+            if snapshot != previous:
+                print(
+                    "[SAFE SHUTDOWN] draining "
+                    f"work={snapshot[0]} model={snapshot[1]} "
+                    f"runtime_workers={snapshot[2]} "
+                    f"change_demo_workers={snapshot[3]} "
+                    f"semantic_worker={str(snapshot[4]).lower()}"
+                )
+                previous = snapshot
+            if snapshot == (0, 0, 0, 0, False):
+                break
+            with self._lifecycle:
+                self._lifecycle.wait(timeout=0.1)
+        with self._lifecycle:
+            self._shutdown_state = "STOPPING"
+            self._lifecycle.notify_all()
+        print("[SAFE SHUTDOWN] all work and model requests drained")
+        if stop_http_server:
+            print("[SAFE SHUTDOWN] HTTP server stopping")
+            self.shutdown()
+
+    def begin_safe_shutdown(self, *, actor: str, confirmation: str) -> dict[str, Any]:
+        if not self.safe_shutdown_enabled:
+            raise WebSecurityError(
+                "安全退出仅在启用该能力的 Demo Mode 中可用",
+                status=HTTPStatus.NOT_FOUND,
+                code="safe_shutdown_disabled",
+            )
+        if confirmation != "SAFE_SHUTDOWN":
+            raise WebSecurityError(
+                "安全退出确认串不正确",
+                status=HTTPStatus.BAD_REQUEST,
+                code="safe_shutdown_confirmation_required",
+            )
+        started = self._enter_draining(actor=actor)
+        if started:
+            thread = threading.Thread(
+                target=self._drain,
+                kwargs={"stop_http_server": True},
+                name="safe-shutdown-coordinator",
+                daemon=False,
+            )
+            with self._lifecycle:
+                self._shutdown_thread = thread
+            thread.start()
+        return self.shutdown_status()
+
+    def drain_before_close(self, *, actor: str) -> None:
+        """Give Ctrl+C the same remote-request drain guarantee as the UI."""
+
+        if self._enter_draining(actor=actor):
+            self._drain(stop_http_server=False)
 
     def server_close(self) -> None:
+        with self._lifecycle:
+            if self._closed:
+                return
+            self._closed = True
         self.semantic_governance_worker.stop()
         self.change_demos.close()
         self.runtime.stop()
         super().server_close()
+        with self._lifecycle:
+            self._shutdown_state = "STOPPED"
+            self._lifecycle.notify_all()
 
 
 class KnowledgeRequestHandler(BaseHTTPRequestHandler):
@@ -339,13 +490,27 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_static("styles.css", "text/css; charset=utf-8")
                 return
             self._authorize_api(path, "GET")
-            if path == "/api/health/live":
-                self._send_json({"status": "ok"})
+            if path == "/api/admin/safe-shutdown":
+                self._send_json(self.server.shutdown_status())
                 return
-            if path == "/api/health":
+            if path == "/api/health/live":
+                shutdown = self.server.shutdown_status()
                 self._send_json(
                     {
-                        "status": "ok",
+                        "status": (
+                            "ok" if shutdown["state"] == "RUNNING" else "draining"
+                        ),
+                        "shutdown": shutdown,
+                    }
+                )
+                return
+            if path == "/api/health":
+                shutdown = self.server.shutdown_status()
+                self._send_json(
+                    {
+                        "status": (
+                            "ok" if shutdown["state"] == "RUNNING" else "draining"
+                        ),
                         "platform": "Ops Knowledge Studio",
                         "config": self.server.service.settings.public_config(),
                         "document_processing": document_capabilities(),
@@ -357,6 +522,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                         "model_requests": (
                             self.server.service.model_request_activity()
                         ),
+                        "shutdown": shutdown,
                         "long_term_memory": (
                             self.server.service.long_term_memory_status(probe=False)
                         ),
@@ -551,8 +717,21 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        tracked_work = False
         try:
             principal = self._authorize_api(path, "POST")
+            if path == "/api/admin/safe-shutdown":
+                self.server.begin_work()
+                tracked_work = True
+                payload = self._read_json()
+                result = self.server.begin_safe_shutdown(
+                    actor=principal,
+                    confirmation=str(payload.get("confirmation") or ""),
+                )
+                self._send_json(result, HTTPStatus.ACCEPTED)
+                return
+            self.server.begin_work()
+            tracked_work = True
             if path == "/api/ingest-file":
                 filename, file_payload = self._read_upload()
                 saved_path = self._save_upload(filename, file_payload)
@@ -846,11 +1025,17 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
             self._handle_error(exc)
+        finally:
+            if tracked_work:
+                self.server.end_work()
 
     def do_PATCH(self) -> None:
         path = urlparse(self.path).path
+        tracked_work = False
         try:
             principal = self._authorize_api(path, "PATCH")
+            self.server.begin_work()
+            tracked_work = True
             match = REAL_CHANGE_DRAFT_PATTERN.match(path)
             if not match:
                 self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
@@ -864,11 +1049,17 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             self._send_json(result)
         except Exception as exc:
             self._handle_error(exc)
+        finally:
+            if tracked_work:
+                self.server.end_work()
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
+        tracked_work = False
         try:
             principal = self._authorize_api(path, "DELETE")
+            self.server.begin_work()
+            tracked_work = True
             match = CARD_DETAIL_PATTERN.match(path)
             if not match:
                 self._send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
@@ -881,6 +1072,9 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"deleted": True, **result})
         except Exception as exc:
             self._handle_error(exc)
+        finally:
+            if tracked_work:
+                self.server.end_work()
 
     def do_OPTIONS(self) -> None:
         try:
@@ -923,5 +1117,6 @@ def serve(settings: Settings, service: KnowledgeService | None = None) -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n正在停止平台……")
+        server.drain_before_close(actor="keyboard-interrupt")
     finally:
         server.server_close()

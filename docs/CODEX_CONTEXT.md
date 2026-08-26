@@ -92,6 +92,7 @@ RealChangeRequest
 - Web 当前使用共享 token 而非组织级身份。公网暴露、多租户、正式审计和职责分离均不在当前实现能力内。
 - 默认持久化是单主机 SQLite：`data/knowledge.db`、`data/runtime.db`、`data/change_drafts.db`。升级前应停服备份，再执行 `python run.py init`。
 - `HARNESS_WORKERS` 可以处理多个 Run，但单个 Run 内步骤按顺序执行；这与真实草案模型并发信号量是两个不同边界。
+- Demo 安全退出采用 admission close + natural drain：先拒绝新工作并停止后台 Worker 领任务，再等待在途 Web 操作和模型请求归零，最后关闭 HTTP 服务。浏览器关闭不等于服务退出；`Ctrl+C` 和页面按钮都应走排空流程，避免供应商侧请求未正常完成而占用并发槽位。
 
 ## Important Domain Knowledge
 
@@ -121,6 +122,7 @@ RealChangeRequest
 - ChangeOrder 结构层使用 `change_order_shape_v2`；动态 task group 不设上限，只约束每组为 TaskRecord 数组且与 flat view 完全对账。
 - 语义层使用 `change_order_semantic_builder_v2` / card model v2；rich text、时间、section、QA 和报告主要为确定性 Python 逻辑。
 - 相似治理使用 `semantic_candidate_v2` 和 `semantic_merge_v2`。共享锚点来自结构化字段、技术标识符和完整业务短语，不向用户展示中文字符滑窗片段。
+- 相似治理后台扫描只执行本地 SQLite/确定性相似度计算，不调用模型；不要把扫描 Worker 存活误判为 API 并发占用。
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。
 - 可选 MindMemOS 只作语义后备。同步内容有白名单，召回必须映射回本地 card 并重新验证；外部失败退回本地检索。

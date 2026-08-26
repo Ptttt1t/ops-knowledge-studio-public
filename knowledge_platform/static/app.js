@@ -45,6 +45,8 @@ let knowledgeGraphHoveredId = "";
 let knowledgeGraphInteraction = null;
 let knowledgeGraphResizeObserver = null;
 let platformConfig = {};
+let safeShutdownRequested = false;
+let safeShutdownPollTimer = null;
 const accessTokenKey = "ops-knowledge-studio-access-token";
 let accessToken = sessionStorage.getItem(accessTokenKey) || "";
 
@@ -106,6 +108,40 @@ function setBusy(button, busy, label = "处理中……") {
   } else {
     button.textContent = button.dataset.originalText || button.textContent;
     button.disabled = false;
+  }
+}
+
+function renderSafeShutdown(status = {}) {
+  const overlay = document.getElementById("safe-shutdown-overlay");
+  const activeModels = Number(status.active_model_requests || 0);
+  const activeWork = Number(status.active_work_requests || 0);
+  const workers = Number(status.runtime_workers || 0)
+    + Number(status.change_demo_workers || 0)
+    + (status.semantic_worker_running ? 1 : 0);
+  overlay.hidden = false;
+  document.getElementById("safe-shutdown-title").textContent = "正在安全退出";
+  document.getElementById("safe-shutdown-message").textContent =
+    `已停止接收新任务；等待模型请求 ${activeModels}、在途操作 ${activeWork}、后台 Worker ${workers} 排空。请勿关闭终端或强制按 Ctrl+C。`;
+}
+
+function renderSafeShutdownComplete() {
+  clearTimeout(safeShutdownPollTimer);
+  const overlay = document.getElementById("safe-shutdown-overlay");
+  overlay.hidden = false;
+  overlay.classList.add("complete");
+  document.getElementById("safe-shutdown-title").textContent = "平台已安全退出";
+  document.getElementById("safe-shutdown-message").textContent =
+    "模型请求与后台任务已经排空，服务连接已关闭。现在可以关闭此页面。";
+}
+
+async function pollSafeShutdown() {
+  clearTimeout(safeShutdownPollTimer);
+  try {
+    const status = await api("/api/admin/safe-shutdown");
+    renderSafeShutdown(status);
+    safeShutdownPollTimer = window.setTimeout(pollSafeShutdown, 400);
+  } catch (_error) {
+    if (safeShutdownRequested) renderSafeShutdownComplete();
   }
 }
 
@@ -511,6 +547,8 @@ async function refreshHealth() {
   ]);
   const configured = data.config.api_configured;
   platformConfig = data.config || {};
+  const shutdownButton = document.getElementById("safe-shutdown-button");
+  shutdownButton.hidden = !platformConfig.demo_management?.safe_shutdown_enabled;
   document.getElementById("api-dot").classList.toggle("ok", configured);
   document.getElementById("api-status").textContent = configured ? "API 已配置" : "等待填写 API";
   document.getElementById("model-name").textContent = data.config.model;
@@ -1710,6 +1748,23 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
   }
   if (document.getElementById("page-semantic-governance").classList.contains("active")) {
     await loadSemanticGovernance();
+  }
+});
+document.getElementById("safe-shutdown-button").addEventListener("click", async event => {
+  if (!window.confirm("安全退出会立即停止接收新任务，并等待当前模型请求和后台 Worker 排空后关闭平台。\n\n确认安全退出？")) return;
+  const button = event.currentTarget;
+  setBusy(button, true, "正在进入排空状态……");
+  try {
+    const status = await api("/api/admin/safe-shutdown", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "SAFE_SHUTDOWN" }),
+    });
+    safeShutdownRequested = true;
+    renderSafeShutdown(status);
+    pollSafeShutdown();
+  } catch (error) {
+    setBusy(button, false);
+    toast(error.message, true);
   }
 });
 document.getElementById("library-search").addEventListener("click", () => loadLibrary().catch(error => toast(error.message, true)));

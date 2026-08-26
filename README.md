@@ -367,6 +367,17 @@ RealChangeRequest
 
 Demo 配置遵循“安全功能默认开启”原则：`DEMO_MODE=true` 且未显式配置新功能开关时，非破坏性的 Demo 能力默认可用。全库重置、真实业务数据模型调用等破坏性或敏感能力仍默认关闭，分别受 `DEMO_FULL_RESET_ENABLED=false`、`REAL_CHANGE_GENERATION_ENABLED=false` 保护。
 
+## Demo 安全退出
+
+`DEMO_MODE=true` 且 `DEMO_SAFE_SHUTDOWN_ENABLED=true` 时，页面右上角显示“安全退出”。确认后平台会：
+
+- 立即进入 `DRAINING` 并拒绝新的写操作、生成任务和 Runtime Run；
+- 请求相似治理 Worker、主 Runtime 和合成 Demo Runtime 停止领取新任务；
+- 持续显示在途 Web 操作、模型请求和 Worker 数量；
+- 等所有模型 HTTP 请求自然返回或达到客户端超时、后台任务退出后，才关闭 HTTP 服务。
+
+不要把关闭浏览器页面当作停止平台，也不要在模型请求仍运行时直接关闭终端。`Ctrl+C` 现在也会执行同一排空流程，但页面按钮能提供更直观的进度。当前相似知识后台扫描是本地确定性计算，不调用大模型；API 并发通常来自抽取、问答、真实草案或启用模型的合成 Demo。
+
 ## 可选 MindMemOS 长期记忆
 
 MindMemOS 是本地检索无强命中时的实验性语义后备，不替代 SQLite 知识库和审核状态。
@@ -450,7 +461,7 @@ python -m compileall -q harness knowledge_platform tests
 node --check knowledge_platform/static/app.js
 ```
 
-当前分支回归结果：`156 tests passed`。
+当前分支回归结果：`157 tests passed`。
 
 测试覆盖：
 

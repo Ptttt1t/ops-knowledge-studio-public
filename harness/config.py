@@ -179,6 +179,7 @@ class Settings:
     change_order_semantic_reuse_threshold: float = 0.92
     change_order_card_report_dir: Path | None = None
     demo_rebuild_enabled: bool = True
+    demo_safe_shutdown_enabled: bool = True
     demo_full_reset_enabled: bool = False
     max_model_calls_per_ingest: int = 60
     max_cards_per_document: int = 30
@@ -332,6 +333,9 @@ class Settings:
             },
             "demo_management": {
                 "rebuild_enabled": self.demo_mode and self.demo_rebuild_enabled,
+                "safe_shutdown_enabled": (
+                    self.demo_mode and self.demo_safe_shutdown_enabled
+                ),
                 "full_reset_enabled": self.demo_mode and self.demo_full_reset_enabled,
             },
             "long_term_memory": {
@@ -603,6 +607,9 @@ class Settings:
             ),
             demo_rebuild_enabled=_read_demo_feature(
                 values, "DEMO_REBUILD_ENABLED", demo_mode
+            ),
+            demo_safe_shutdown_enabled=_read_demo_feature(
+                values, "DEMO_SAFE_SHUTDOWN_ENABLED", demo_mode
             ),
             demo_full_reset_enabled=_read_demo_feature(
                 values,

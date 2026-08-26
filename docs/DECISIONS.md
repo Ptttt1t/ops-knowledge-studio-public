@@ -150,3 +150,25 @@ Status: Active
 ### Consequences
 
 图布局与外部索引可重建，不能承载唯一审核事实。外部服务失败必须降级；任何合并、重建、撤销或状态变化都要同步清理投影映射。
+
+## Decision: Demo 退出先停止接单并自然排空模型请求
+
+Status: Active
+
+### Decision
+
+页面“安全退出”和命令行 `Ctrl+C` 都先进入 `DRAINING`：原子关闭新工作 admission，通知相似治理、主 Runtime 和合成 Demo Runtime 停止领取任务，等待在途 Web 操作、Worker 和所有已跟踪模型路由的活动请求归零，再关闭 HTTP Server。页面退出入口只在 `DEMO_MODE=true` 且 `DEMO_SAFE_SHUTDOWN_ENABLED=true` 时开放。
+
+### Reason
+
+强制结束主服务线程不能保证供应商已结束正在推理的远程请求，可能让个人账号的并发租约继续占用。当前 urllib 调用没有可靠的跨线程远程取消协议，自然返回或客户端超时是更可验证的释放边界。
+
+### Alternatives considered
+
+- 点击按钮后立即调用 `server.shutdown()` 或结束 Python 进程。
+- 从另一线程强制关闭底层 socket，并假设供应商同步取消推理。
+- 只停止 Web Server，不停止 Runtime 领取队列任务。
+
+### Consequences
+
+退出可能需要等待长模型请求完成，期间页面会显示活动模型、在途操作和 Worker 数量，并拒绝新工作。该机制只能排空本进程能跟踪的请求，不能清理其他进程、其他主机或供应商已泄漏的计数；这种情况仍需网关管理员处理。

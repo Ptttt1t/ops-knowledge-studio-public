@@ -309,7 +309,20 @@ class ChangeDemoWebManager:
         payload["publication"] = publication
         return payload
 
+    def request_stop(self) -> None:
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            session.runtime.request_stop()
+
+    @property
+    def active_worker_count(self) -> int:
+        with self._lock:
+            sessions = list(self._sessions.values())
+        return sum(session.runtime.active_worker_count for session in sessions)
+
     def close(self) -> None:
+        self.request_stop()
         with self._lock:
             sessions = list(self._sessions.values())
         for session in sessions:

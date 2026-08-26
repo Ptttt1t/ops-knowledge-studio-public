@@ -50,10 +50,21 @@
           <p class="eyebrow">KNOWLEDGE GOVERNANCE HARNESS</p>
           <h1 id="page-title">知识能力概览</h1>
         </div>
-        <button id="refresh-button" class="button secondary">刷新数据</button>
+        <div class="topbar-actions">
+          <button id="refresh-button" class="button secondary">刷新数据</button>
+          <button id="safe-shutdown-button" class="button danger" type="button" hidden>安全退出</button>
+        </div>
       </header>
 
       <div id="toast" class="toast" role="status"></div>
+      <div id="safe-shutdown-overlay" class="safe-shutdown-overlay" hidden>
+        <div class="safe-shutdown-card">
+          <p class="eyebrow">SAFE SHUTDOWN</p>
+          <h2 id="safe-shutdown-title">正在安全退出</h2>
+          <p id="safe-shutdown-message">已停止接收新任务，正在等待模型请求和后台 Worker 自然结束。请勿关闭终端或强制按 Ctrl+C。</p>
+          <div class="shutdown-pulse" aria-hidden="true"></div>
+        </div>
+      </div>
 
       <section id="page-dashboard" class="page active">
         <div class="metric-grid">

@@ -263,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
                 server.serve_forever()
             except KeyboardInterrupt:
                 print("\n正在停止平台……")
+                server.drain_before_close(actor="keyboard-interrupt")
             finally:
                 server.server_close()
         elif command == "ingest":

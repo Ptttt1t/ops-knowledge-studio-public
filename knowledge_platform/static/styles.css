@@ -49,6 +49,7 @@ nav { display: grid; gap: 8px; }
 .status-dot.ok { background: #69b88e; box-shadow: 0 0 0 5px rgba(105,184,142,.13); }
 .main { min-width: 0; padding: 32px 42px 60px; }
 .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-family: Georgia, "Microsoft YaHei", serif; font-size: 30px; font-weight: 500; }
 h2 { margin-bottom: 0; font-size: 19px; font-weight: 600; }
@@ -141,6 +142,16 @@ textarea { resize: vertical; line-height: 1.6; }
 .toast { position: fixed; z-index: 20; top: 24px; right: 28px; max-width: 420px; padding: 12px 16px; border-radius: 6px; color: white; background: #1f6b4f; box-shadow: var(--shadow); opacity: 0; pointer-events: none; transform: translateY(-8px); transition: .2s; }
 .toast.show { opacity: 1; transform: none; }
 .toast.error { background: var(--red); }
+.safe-shutdown-overlay { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 24px; background: rgba(15,31,24,.94); }
+.safe-shutdown-overlay[hidden] { display: none; }
+.safe-shutdown-card { width: min(520px,100%); padding: 34px; border: 1px solid rgba(184,214,198,.3); border-radius: 12px; color: #f7fbf8; background: #18372b; box-shadow: 0 30px 90px rgba(0,0,0,.35); }
+.safe-shutdown-card .eyebrow { color: #8fc4a9; }
+.safe-shutdown-card h2 { margin-bottom: 14px; font-family: Georgia,"Microsoft YaHei",serif; font-size: 25px; font-weight: 500; }
+.safe-shutdown-card > p:not(.eyebrow) { margin-bottom: 22px; color: #bad0c5; line-height: 1.7; font-size: 13px; }
+.shutdown-pulse { width: 100%; height: 4px; overflow: hidden; border-radius: 8px; background: rgba(255,255,255,.1); }
+.shutdown-pulse::after { content: ""; display: block; width: 35%; height: 100%; border-radius: inherit; background: #8fc4a9; animation: shutdown-progress 1.2s ease-in-out infinite alternate; }
+.safe-shutdown-overlay.complete .shutdown-pulse::after { width: 100%; animation: none; }
+@keyframes shutdown-progress { from { transform: translateX(0); } to { transform: translateX(185%); } }
 dialog { width: min(760px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; border: 0; border-radius: 10px; padding: 28px; color: var(--ink); background: var(--panel); box-shadow: 0 30px 90px rgba(0,0,0,.25); }
 dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 .dialog-close { position: absolute; right: 14px; top: 12px; border: 0; background: transparent; font-size: 24px; color: var(--muted); }

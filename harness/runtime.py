@@ -280,6 +280,7 @@ class HarnessRuntime:
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
         self._start_lock = threading.Lock()
+        self._accepting = True
 
     def register_task(self, task_type: str, handler: TaskHandler) -> None:
         normalized = task_type.strip()
@@ -297,6 +298,8 @@ class HarnessRuntime:
             self._threads = [thread for thread in self._threads if thread.is_alive()]
             if self._threads:
                 return
+            if not self._accepting:
+                raise HarnessRuntimeError("Runtime 正在停止，不再接受新任务")
             self._stop_event.clear()
             for index in range(self.worker_count):
                 thread = threading.Thread(
@@ -307,11 +310,26 @@ class HarnessRuntime:
                 thread.start()
                 self._threads.append(thread)
 
-    def stop(self, *, timeout_seconds: float = 5.0) -> None:
+    def request_stop(self) -> None:
+        """Stop admission and ask workers to exit after their current task."""
+
+        with self._start_lock:
+            self._accepting = False
         self._stop_event.set()
+
+    @property
+    def active_worker_count(self) -> int:
+        with self._start_lock:
+            self._threads = [thread for thread in self._threads if thread.is_alive()]
+            return len(self._threads)
+
+    def stop(self, *, timeout_seconds: float = 5.0) -> bool:
+        self.request_stop()
         for thread in list(self._threads):
             thread.join(timeout=max(timeout_seconds, 0.0))
-        self._threads = []
+        with self._start_lock:
+            self._threads = [thread for thread in self._threads if thread.is_alive()]
+            return not self._threads
 
     def submit(
         self,
@@ -329,6 +347,8 @@ class HarnessRuntime:
         existing = self.store.find_idempotent(normalized, idempotency_key)
         if existing is not None:
             return existing, False
+        if not self._accepting:
+            raise HarnessRuntimeError("Runtime 正在停止，不再接受新任务")
         if self.store.queued_count() >= self.max_queued_runs:
             raise RunQueueFull("运行队列已满，请稍后重试")
         run, created = self.store.create_run(

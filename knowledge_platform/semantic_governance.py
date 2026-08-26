@@ -1024,10 +1024,14 @@ class SemanticGovernanceWorker:
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
         self._stop.set()
+
+    def stop(self, *, timeout_seconds: float = 5.0) -> bool:
+        self.request_stop()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=max(timeout_seconds, 0.0))
+        return not self.running
 
     def _loop(self) -> None:
         if self._stop.wait(self.initial_delay_seconds):
