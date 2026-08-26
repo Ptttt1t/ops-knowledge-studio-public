@@ -15,6 +15,10 @@ class ModelClient(Protocol):
         response_format: dict[str, str] | None = None,
         max_tokens: int | None = None,
         thinking_mode: str | None = None,
+        http_retries: int | None = None,
+        exclusive: bool = False,
+        model: str | None = None,
+        model_max_concurrency: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]: ...
 
     def chat_json(
@@ -24,4 +28,8 @@ class ModelClient(Protocol):
         *,
         retries: int = 2,
         max_tokens: int | None = None,
+        http_retries: int | None = None,
+        exclusive: bool = False,
+        model: str | None = None,
+        model_max_concurrency: int | None = None,
     ) -> tuple[Any, dict[str, Any] | None]: ...

@@ -92,7 +92,7 @@ Status: Active
 
 ### Decision
 
-真实草案生成使用结构化 `RealChangeRequest`、人工确认的完整 `APPROVED` 案例包和已激活 `SchemaProfile`。模型只输出独立 `GeneratedChangeDraft`，程序确定性装配真实 JSON、派生任务分组、清空 ExecutionResult 并执行硬门禁。模型协议最多修复一次，最大并发固定为 1；只有人工批准 revision 可导出，不提供执行工具。
+真实草案生成使用结构化 `RealChangeRequest`、人工确认的完整 `APPROVED` 案例包和已激活 `SchemaProfile`。模型只输出独立 `GeneratedChangeDraft`，程序确定性装配真实 JSON、派生任务分组、清空 ExecutionResult 并执行硬门禁。模型协议最多修复一次，草案任务并发固定为 1；草案请求取得所选模型路由的进程内独占槽位并关闭底层隐藏 HTTP retry。允许配置同一兼容端点上的一个备用模型，但只在主模型出现明确容量错误时切换一次，并记录实际路由。只有人工批准 revision 可导出，不提供执行工具。
 
 ### Reason
 
@@ -102,11 +102,12 @@ Status: Active
 
 - 让模型直接生成两份任务视图和完整 ChangeOrder JSON。
 - 模型失败后使用规则或部分输出兜底。
+- 对所有模型错误都轮询或随机切换模型。
 - 与合成执行 Demo 共用执行入口。
 
 ### Consequences
 
-`REAL_CHANGE_GENERATION_ENABLED` 默认 false，启用前必须在可信内网完成 Profile 和模型检查。具体参数必须来自表单或占位并阻断审核；生成结果不自动写入知识库，也不能宣称为可执行工单。
+`REAL_CHANGE_GENERATION_ENABLED` 默认 false，启用前必须在可信内网完成 Profile 和模型检查。具体参数必须来自表单或占位并阻断审核；生成结果不自动写入知识库，也不能宣称为可执行工单。同一进程的普通模型路径仍可按各模型上限并发，但同模型在草案调用前必须排空并暂停；备用模型 ID 必须由部署者按网关真实配置提供。该门禁不能代替对残留服务进程和其他主机占用的运维检查。
 
 ## Decision: Demo 安全功能默认开启，但敏感或破坏性功能例外
 

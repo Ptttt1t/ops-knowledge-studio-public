@@ -85,7 +85,8 @@ RealChangeRequest
 - 真实业务数据只能在批准的内网运行。公开 GitHub 只允许虚构 service、region、cluster、workload、人员、工单号和 URL。
 - `.env`、SQLite 数据库、上传源文件、模型缓存和 `artifacts/` 不进入 Git；GitHub 不是数据备份介质。
 - 模型端点通过 `.env` 使用 DeepSeek-compatible API。结构化 JSON 失败可有一次协议修复，但失败后必须停止，不能输出 deterministic fallback 冒充模型结果。
-- 真实变更草案路径的个人模型调用最大并发固定为 `1`；此限制不串行化知识抽取、检索和其他模型路径。
+- 同一进程、同一 base URL/API Key/实际 model ID 的调用共享模型路由门禁；主模型普通路径默认最大并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实变更草案任务之间固定并发 `1`，且请求取得所选模型路由的独占槽位，因此不会与本进程内同模型的抽取、问答或其他 Runtime Worker 重叠。不同 model ID 的门禁和上限相互独立。
+- 真实草案关闭底层隐藏 HTTP retry，由草案服务只管理一次显式协议修复。可通过 `CHANGE_DRAFT_FALLBACK_MODEL` 配置同一兼容端点上的备用模型；只有 429、`count/limit` 等容量错误才从主模型切换一次，协议、内容和校验错误不切换。实际路由写入 revision，避免混淆不同模型的能力结果。`/api/health.model_requests.routes` 提供各路由的进程级活动/等待/峰值诊断，但不能约束其他进程或其他主机。
 - `DEMO_MODE=true` 时，安全且可逆的 Demo 子功能默认启用。破坏性或敏感例外仍默认关闭，当前包括 `DEMO_FULL_RESET_ENABLED=false` 和 `REAL_CHANGE_GENERATION_ENABLED=false`。
 - 真实草案生成必须有已激活且结构一致的 SchemaProfile，且第一版只生成/审核/导出，不注册真实执行工具。
 - Web 当前使用共享 token 而非组织级身份。公网暴露、多租户、正式审计和职责分离均不在当前实现能力内。

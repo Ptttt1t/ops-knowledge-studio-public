@@ -354,6 +354,9 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                             "worker_count": self.server.runtime.worker_count,
                             "max_queued_runs": self.server.runtime.max_queued_runs,
                         },
+                        "model_requests": (
+                            self.server.service.model_request_activity()
+                        ),
                         "long_term_memory": (
                             self.server.service.long_term_memory_status(probe=False)
                         ),

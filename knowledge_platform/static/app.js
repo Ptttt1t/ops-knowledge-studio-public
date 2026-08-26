@@ -1556,6 +1556,7 @@ function renderRealChangeDraft(draft) {
   const revision = draft.revision || {};
   const validation = revision.validation || {};
   const provenance = revision.provenance || {};
+  const modelRouting = revision.model_usage?.model_routing || {};
   const status = String(draft.status || "");
   document.getElementById("real-change-current").textContent = `${draft.draft_id} · ${realChangeStatusLabels[status] || status}`;
   document.getElementById("real-change-draft-id").textContent = draft.draft_id;
@@ -1568,9 +1569,14 @@ function renderRealChangeDraft(draft) {
   document.getElementById("real-change-content-hash").textContent = revision.content_hash ? `${revision.content_hash.slice(0, 16)}…` : "—";
   const message = document.getElementById("real-change-generation-message");
   message.classList.toggle("error", ["BLOCKED", "GENERATION_FAILED", "REJECTED"].includes(status));
+  const routingSummary = modelRouting.selected_model
+    ? ` 实际模型：${modelRouting.selected_model}${modelRouting.fallback_used ? "（主模型容量不足，已自动切换）" : ""}。`
+    : "";
   message.textContent = status === "GENERATING"
     ? "模型正在生成独立规范化草案；协议错误最多修复一次，不会输出规则兜底草案。"
-    : draft.model_error || (validation.passed ? "当前 revision 已通过生成阶段硬校验，等待人工复核。" : "当前 revision 被硬门禁阻断，请检查缺失项或引用。 ");
+    : draft.model_error || (validation.passed
+      ? `当前 revision 已通过生成阶段硬校验，等待人工复核。${routingSummary}`
+      : `当前 revision 被硬门禁阻断，请检查缺失项或引用。${routingSummary}`);
   const editor = document.getElementById("real-change-normalized");
   editor.value = revision.normalized ? JSON.stringify(revision.normalized, null, 2) : "";
   editor.disabled = !revision.normalized;

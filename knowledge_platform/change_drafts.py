@@ -667,13 +667,64 @@ class RealChangeDraftService:
         # The web runtime may execute multiple draft jobs concurrently. Only the
         # personal-model call is serialized here, leaving retrieval, validation,
         # ingestion and unrelated model paths unaffected.
-        with self._model_slots:
-            return self.knowledge.client.chat_json(
-                system_prompt,
-                user_prompt,
-                retries=0,
-                max_tokens=self.knowledge.settings.change_generation_max_output_tokens,
+        settings = self.knowledge.settings
+        routes = [
+            (settings.model, settings.model_max_concurrency, False),
+        ]
+        if settings.change_draft_fallback_model:
+            routes.append(
+                (
+                    settings.change_draft_fallback_model,
+                    settings.change_draft_fallback_model_max_concurrency,
+                    True,
+                )
             )
+        attempted_models: list[str] = []
+        primary_capacity_failure = False
+        with self._model_slots:
+            for model, model_limit, fallback_used in routes:
+                attempted_models.append(model)
+                try:
+                    payload, usage = self.knowledge.client.chat_json(
+                        system_prompt,
+                        user_prompt,
+                        retries=0,
+                        max_tokens=settings.change_generation_max_output_tokens,
+                        # The draft module owns its one explicit protocol-repair
+                        # retry. Hidden HTTP retries can otherwise turn one
+                        # attempt into three provider requests.
+                        http_retries=0,
+                        # Exclusivity is scoped to the selected model route, so
+                        # the fallback model keeps its independent capacity.
+                        exclusive=True,
+                        model=model,
+                        model_max_concurrency=model_limit,
+                    )
+                except Exception as exc:
+                    if not fallback_used and len(routes) > 1 and self._is_capacity_error(exc):
+                        primary_capacity_failure = True
+                        continue
+                    raise
+                routed_usage = dict(usage or {})
+                routed_usage["model_routing"] = {
+                    "selected_model": model,
+                    "fallback_used": fallback_used,
+                    "attempted_models": attempted_models,
+                    "primary_capacity_failure": primary_capacity_failure,
+                }
+                return payload, routed_usage
+        raise ChangeDraftError("没有可用的真实变更草案模型路由")
+
+    @staticmethod
+    def _is_capacity_error(error: Exception) -> bool:
+        message = str(error).casefold()
+        if "http 429" in message or "too many requests" in message:
+            return True
+        if "rate limit" in message or "rate_limit" in message:
+            return True
+        if "账户限额" in message or "并发限制" in message:
+            return True
+        return "count" in message and "limit" in message
 
     @property
     def enabled(self) -> bool:
@@ -1809,6 +1860,8 @@ class RealChangeDraftService:
                 except Exception as exc:
                     validation_error = f"模型请求失败：{exc}"
                     previous_protocol_output = getattr(exc, "raw_output", None)
+                    if self._is_capacity_error(exc):
+                        raise
                     if attempt:
                         raise
                     continue

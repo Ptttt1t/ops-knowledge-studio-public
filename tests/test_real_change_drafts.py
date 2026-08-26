@@ -10,7 +10,7 @@ import time
 import unittest
 from urllib.request import Request, urlopen
 
-from harness.api_client import JSONOutputError
+from harness.api_client import APIError, JSONOutputError
 from knowledge_platform.change_drafts import ChangeDraftError, GENERATION_SYSTEM_PROMPT
 from knowledge_platform.retrieval import SearchHit
 from knowledge_platform.service import KnowledgeService
@@ -183,6 +183,28 @@ class ConcurrencyTrackingRealDraftClient(RealDraftClient):
                 self.active_model_requests -= 1
 
 
+class AccountLimitRealDraftClient(RealDraftClient):
+    def chat_json(self, system_prompt, user_prompt, **kwargs):
+        if system_prompt != GENERATION_SYSTEM_PROMPT:
+            return super().chat_json(system_prompt, user_prompt, **kwargs)
+        self.generation_calls.append((system_prompt, user_prompt))
+        self.generation_kwargs.append(dict(kwargs))
+        raise APIError(
+            "DeepSeek API 返回 HTTP 429: synthetic account limit count 3 limit 2"
+        )
+
+
+class CapacityFailoverRealDraftClient(RealDraftClient):
+    def chat_json(self, system_prompt, user_prompt, **kwargs):
+        if system_prompt != GENERATION_SYSTEM_PROMPT:
+            return super().chat_json(system_prompt, user_prompt, **kwargs)
+        if kwargs.get("model") == "deepseek-v4-flash":
+            self.generation_calls.append((system_prompt, user_prompt))
+            self.generation_kwargs.append(dict(kwargs))
+            raise APIError("synthetic account quota count 3 limit 2")
+        return super().chat_json(system_prompt, user_prompt, **kwargs)
+
+
 def real_request() -> dict:
     return {
         "goal": "完成脱敏结构回归变更",
@@ -202,12 +224,15 @@ def real_request() -> dict:
 
 
 class RealChangeDraftTests(unittest.TestCase):
-    def make_service(self, root: Path, client: RealDraftClient) -> KnowledgeService:
+    def make_service(
+        self, root: Path, client: RealDraftClient, **setting_overrides
+    ) -> KnowledgeService:
         settings = replace(
             make_settings(root),
             real_change_generation_enabled=True,
             change_draft_database_path=root / "data" / "change_drafts.db",
             change_generation_max_context_cards=24,
+            **setting_overrides,
         )
         return KnowledgeService(settings, client=client)
 
@@ -357,12 +382,94 @@ class RealChangeDraftTests(unittest.TestCase):
             )
             self.assertEqual(client.max_active_model_requests, 1)
             self.assertEqual(service.settings.change_draft_model_max_concurrency, 1)
+            self.assertTrue(client.generation_kwargs)
+            self.assertTrue(
+                all(item.get("exclusive") is True for item in client.generation_kwargs)
+            )
+            self.assertTrue(
+                all(item.get("http_retries") == 0 for item in client.generation_kwargs)
+            )
+            self.assertTrue(
+                all(
+                    item.get("model") == service.settings.model
+                    for item in client.generation_kwargs
+                )
+            )
+
+    def test_account_limit_error_does_not_trigger_hidden_or_protocol_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = AccountLimitRealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+
+            with self.assertRaisesRegex(APIError, "HTTP 429"):
+                service.change_drafts.generate(draft["draft_id"])
+
+            self.assertEqual(len(client.generation_calls), 1)
+            self.assertEqual(client.generation_kwargs[0]["http_retries"], 0)
+            self.assertTrue(client.generation_kwargs[0]["exclusive"])
+            failed = service.change_drafts.store.get_draft(draft["draft_id"])
+            assert failed is not None
+            self.assertEqual(failed["status"], "GENERATION_FAILED")
+
+    def test_capacity_error_automatically_uses_configured_fallback_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = CapacityFailoverRealDraftClient()
+            service = self.make_service(
+                root,
+                client,
+                change_draft_fallback_model="synthetic-qwen-27b",
+                change_draft_fallback_model_max_concurrency=6,
+            )
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            self.assertEqual(generated["status"], "READY_FOR_REVIEW")
+            self.assertEqual(len(client.generation_calls), 2)
+            self.assertEqual(
+                [call["model"] for call in client.generation_kwargs],
+                ["deepseek-v4-flash", "synthetic-qwen-27b"],
+            )
+            self.assertEqual(
+                [call["model_max_concurrency"] for call in client.generation_kwargs],
+                [2, 6],
+            )
+            routing = generated["revision"]["model_usage"]["model_routing"]
+            self.assertEqual(routing["selected_model"], "synthetic-qwen-27b")
+            self.assertTrue(routing["fallback_used"])
+            self.assertTrue(routing["primary_capacity_failure"])
+            self.assertEqual(
+                routing["attempted_models"],
+                ["deepseek-v4-flash", "synthetic-qwen-27b"],
+            )
 
     def test_protocol_failure_stops_without_partial_or_fallback_draft(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             client = RealDraftClient(always_invalid=True)
-            service = self.make_service(root, client)
+            service = self.make_service(
+                root,
+                client,
+                change_draft_fallback_model="synthetic-qwen-27b",
+                change_draft_fallback_model_max_concurrency=6,
+            )
             case = self.prepare_case(service, root)
             self.activate_profile(service, case["case_id"])
             self.force_bundle_hits(service, case["case_id"])
@@ -377,6 +484,10 @@ class RealChangeDraftTests(unittest.TestCase):
             failed = service.change_drafts.store.get_draft(draft["draft_id"])
             assert failed is not None
             self.assertEqual(len(client.generation_calls), 2)
+            self.assertEqual(
+                [call["model"] for call in client.generation_kwargs],
+                ["deepseek-v4-flash", "deepseek-v4-flash"],
+            )
             self.assertEqual(failed["status"], "GENERATION_FAILED")
             self.assertIsNone(failed["revision"])
 

@@ -34,6 +34,46 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, "固定为 1"):
                 Settings.load(env_file)
 
+    def test_change_draft_fallback_model_configuration_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "\n".join(
+                    (
+                        "DEEPSEEK_MODEL=synthetic-primary-model",
+                        "DEEPSEEK_MODEL_MAX_CONCURRENCY=2",
+                        "CHANGE_DRAFT_FALLBACK_MODEL=synthetic-qwen-27b",
+                        "CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=6",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            settings = Settings.load(env_file)
+
+            self.assertEqual(settings.model_max_concurrency, 2)
+            self.assertEqual(
+                settings.change_draft_fallback_model, "synthetic-qwen-27b"
+            )
+            self.assertEqual(
+                settings.change_draft_fallback_model_max_concurrency, 6
+            )
+            self.assertTrue(
+                settings.public_config()["real_change_generation"][
+                    "fallback_model_configured"
+                ]
+            )
+
+    def test_change_draft_fallback_cannot_repeat_primary_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "DEEPSEEK_MODEL=same-model\nCHANGE_DRAFT_FALLBACK_MODEL=SAME-MODEL\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "必须与 DEEPSEEK_MODEL 不同"):
+                Settings.load(env_file)
+
     def test_demo_mode_allows_internal_http_and_unauthenticated_web_flow(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -64,7 +104,12 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
             self.assertTrue(settings.semantic_governance_enabled)
             self.assertFalse(settings.demo_full_reset_enabled)
             self.assertFalse(settings.real_change_generation_enabled)
+            self.assertEqual(settings.model_max_concurrency, 2)
             self.assertEqual(settings.change_draft_model_max_concurrency, 1)
+            self.assertEqual(settings.change_draft_fallback_model, "")
+            self.assertEqual(
+                settings.change_draft_fallback_model_max_concurrency, 2
+            )
             self.assertEqual(
                 settings.startup_security_messages(),
                 [

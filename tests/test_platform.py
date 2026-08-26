@@ -299,6 +299,180 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(usage["total_tokens"], 4)
             self.assertEqual(calls, 2)
 
+    def test_account_model_gate_caps_normal_calls_and_isolates_exclusive_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = replace(
+                make_settings(Path(directory)),
+                api_key="synthetic-account-gate-key",
+                model_max_concurrency=2,
+            )
+            clients = [DeepSeekClient(settings), DeepSeekClient(settings)]
+            active: set[str] = set()
+            peak_active = 0
+            exclusive_collision = False
+            lock = threading.Lock()
+            barrier = threading.Barrier(4)
+            errors: list[Exception] = []
+
+            def gated_urlopen(request, timeout):
+                nonlocal peak_active, exclusive_collision
+                self.assertGreater(timeout, 0)
+                payload = json.loads(request.data.decode("utf-8"))
+                label = str(payload["messages"][-1]["content"])
+                with lock:
+                    if label == "exclusive" and active:
+                        exclusive_collision = True
+                    if label != "exclusive" and "exclusive" in active:
+                        exclusive_collision = True
+                    active.add(label)
+                    peak_active = max(peak_active, len(active))
+                time.sleep(0.08)
+                with lock:
+                    active.remove(label)
+                return FakeHTTPResponse(
+                    {
+                        "choices": [
+                            {"message": {"role": "assistant", "content": "ok"}}
+                        ],
+                        "usage": {"total_tokens": 4},
+                    }
+                )
+
+            def invoke(label: str, *, exclusive: bool = False) -> None:
+                try:
+                    barrier.wait(timeout=2)
+                    clients[0 if label == "normal-1" else 1].chat(
+                        [{"role": "user", "content": label}],
+                        exclusive=exclusive,
+                        http_retries=0,
+                    )
+                except Exception as exc:  # pragma: no cover - diagnostic capture
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=invoke, args=("normal-1",)),
+                threading.Thread(target=invoke, args=("normal-2",)),
+                threading.Thread(
+                    target=invoke,
+                    args=("exclusive",),
+                    kwargs={"exclusive": True},
+                ),
+            ]
+            with patch("harness.api_client.urlopen", gated_urlopen):
+                for thread in threads:
+                    thread.start()
+                barrier.wait(timeout=2)
+                for thread in threads:
+                    thread.join(timeout=5)
+
+            self.assertEqual(errors, [])
+            self.assertFalse(exclusive_collision)
+            self.assertLessEqual(peak_active, 2)
+            diagnostics = clients[0].model_activity()
+            self.assertEqual(diagnostics["max_concurrency"], 2)
+            self.assertEqual(diagnostics["active_requests"], 0)
+            self.assertGreaterEqual(diagnostics["exclusive_requests"], 1)
+            self.assertGreaterEqual(diagnostics["total_requests"], 3)
+
+    def test_exclusive_call_can_disable_hidden_http_retries_on_account_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = replace(
+                make_settings(Path(directory)),
+                api_key="synthetic-no-hidden-retry-key",
+                api_max_retries=2,
+                model_max_concurrency=2,
+            )
+            client = DeepSeekClient(settings)
+            calls = 0
+
+            def account_limited(request, timeout):
+                nonlocal calls
+                calls += 1
+                self.assertGreater(timeout, 0)
+                raise HTTPError(
+                    request.full_url,
+                    429,
+                    "account limit",
+                    hdrs=None,
+                    fp=BytesIO(b'{"error":"synthetic count 3 limit 2"}'),
+                )
+
+            with patch("harness.api_client.urlopen", account_limited):
+                with self.assertRaisesRegex(APIError, "HTTP 429") as raised:
+                    client.chat(
+                        [{"role": "user", "content": "synthetic request"}],
+                        exclusive=True,
+                        http_retries=0,
+                    )
+
+            self.assertEqual(calls, 1)
+            self.assertIn("active=1", str(raised.exception))
+            self.assertIn("limit=2", str(raised.exception))
+            self.assertIn("exclusive=true", str(raised.exception))
+            self.assertEqual(client.model_activity()["active_requests"], 0)
+
+    def test_model_routes_have_independent_concurrency_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = replace(
+                make_settings(Path(directory)),
+                api_key="synthetic-independent-model-routes",
+                model_max_concurrency=2,
+            )
+            client = DeepSeekClient(settings)
+            request_barrier = threading.Barrier(2)
+            active_models: set[str] = set()
+            peak_active = 0
+            lock = threading.Lock()
+            errors: list[Exception] = []
+
+            def overlapping_urlopen(request, timeout):
+                nonlocal peak_active
+                self.assertGreater(timeout, 0)
+                payload = json.loads(request.data.decode("utf-8"))
+                model = str(payload["model"])
+                with lock:
+                    active_models.add(model)
+                    peak_active = max(peak_active, len(active_models))
+                request_barrier.wait(timeout=2)
+                with lock:
+                    active_models.remove(model)
+                return FakeHTTPResponse(
+                    {
+                        "choices": [
+                            {"message": {"role": "assistant", "content": "ok"}}
+                        ],
+                        "usage": {"total_tokens": 4},
+                    }
+                )
+
+            def invoke(model: str, limit: int) -> None:
+                try:
+                    client.chat(
+                        [{"role": "user", "content": model}],
+                        model=model,
+                        model_max_concurrency=limit,
+                        exclusive=True,
+                        http_retries=0,
+                    )
+                except Exception as exc:  # pragma: no cover - diagnostic capture
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=invoke, args=("deepseek-v4-flash", 2)),
+                threading.Thread(target=invoke, args=("synthetic-qwen-27b", 6)),
+            ]
+            with patch("harness.api_client.urlopen", overlapping_urlopen):
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=5)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(peak_active, 2)
+            routes = client.model_activity()["routes"]
+            self.assertEqual(routes["deepseek-v4-flash"]["max_concurrency"], 2)
+            self.assertEqual(routes["synthetic-qwen-27b"]["max_concurrency"], 6)
+
     def test_chunking_preserves_overlap_and_boundaries(self):
         text = "第一段。\n" + "A" * 80 + "\n最后一段。"
         chunks = chunk_text(text, chunk_size=50, overlap=10)

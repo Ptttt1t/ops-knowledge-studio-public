@@ -55,10 +55,36 @@ CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
 CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+DEEPSEEK_MODEL_MAX_CONCURRENCY=2
 CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1
+CHANGE_DRAFT_FALLBACK_MODEL=
+CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=2
 ```
 
-`CHANGE_DRAFT_MODEL_MAX_CONCURRENCY` 只约束真实草案生成和协议修复的个人模型调用，当前固定为 `1`，配置为其他值会在启动时失败。多个草案任务可以同时排队和执行本地检索/校验，但前一个模型请求完成后才会发送下一个；知识抽取、普通问答和其他模型路径不受该信号量影响。
+`DEEPSEEK_MODEL_MAX_CONCURRENCY` 是同一 Python 进程内按 base URL、API Key 指纹和实际 model ID 共享的主模型门禁，默认允许普通模型路径并发 `2`。`CHANGE_DRAFT_MODEL_MAX_CONCURRENCY` 继续固定为 `1`；真实草案请求会取得所选模型路由的独占槽位，等待该模型正在运行的抽取/问答结束，并阻止新的同模型请求在本次调用期间进入。不同模型使用独立门禁，因此备用 Qwen 可以配置自己的上限。
+
+`CHANGE_DRAFT_FALLBACK_MODEL` 留空时禁用模型切换。启用时必须填写当前 DeepSeek-compatible 网关接受的精确 Qwen model ID，而不是界面展示名；第一版备用模型与主模型共用 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_API_KEY`。主模型只有在 HTTP 429、错误包含 `count/limit`、账户限额或等价容量信号时，才会切换备用模型一次。协议解析、内容错误和硬门禁失败不会触发换模型。实际选用模型、是否回退和尝试顺序写入 revision 的 `model_usage.model_routing`。
+
+草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。程序仍允许一次独立协议修复；容量错误不会在同一模型上立即追加修复请求。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
+
+诊断接口：
+
+```text
+GET /api/health
+→ model_requests:
+  process_id
+  max_concurrency
+  active_requests
+  waiting_requests
+  waiting_exclusive_requests
+  exclusive_active
+  peak_active_requests
+  total_requests
+  routes:
+    <model-id>: <该模型的上述门禁状态>
+```
+
+该协调器是进程级而不是跨主机锁。如果网关仍报告 `count > limit`，而对应 model route 显示本进程 `active_requests <= max_concurrency`，应检查是否残留多个平台服务进程、另一台机器或网关尚未释放的旧请求。部署升级时应先正常停止旧服务，再只启动一个新服务实例。
 
 重启 `python run.py serve` 后打开左侧 **真实变更生成 BETA**。页面会同时显示功能开关、活动 Profile 和来源案例；任一条件缺失都会禁止推荐和生成。
 

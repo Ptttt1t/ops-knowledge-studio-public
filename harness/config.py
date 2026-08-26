@@ -146,6 +146,7 @@ class Settings:
     agent_max_steps: int
     host: str
     port: int
+    model_max_concurrency: int = 2
     runtime_database_path: Path | None = None
     runtime_workers: int = 2
     runtime_max_queued_runs: int = 100
@@ -216,6 +217,8 @@ class Settings:
     change_generation_max_context_cards: int = 24
     change_generation_max_output_tokens: int = 8192
     change_draft_model_max_concurrency: int = 1
+    change_draft_fallback_model: str = ""
+    change_draft_fallback_model_max_concurrency: int = 2
     semantic_governance_enabled: bool = False
     semantic_scan_interval_seconds: int = 3600
     semantic_proposal_min_score: float = 0.68
@@ -267,6 +270,7 @@ class Settings:
             "model": self.model,
             "thinking_mode": self.thinking_mode or "provider_default",
             "api_max_retries": self.api_max_retries,
+            "model_max_concurrency": self.model_max_concurrency,
             "database_path": str(self.database_path),
             "source_dir": str(self.source_dir),
             "retrieval_top_k": self.retrieval_top_k,
@@ -311,6 +315,11 @@ class Settings:
                 "max_context_cards": self.change_generation_max_context_cards,
                 "max_output_tokens": self.change_generation_max_output_tokens,
                 "model_max_concurrency": self.change_draft_model_max_concurrency,
+                "fallback_model_configured": bool(self.change_draft_fallback_model),
+                "fallback_model": self.change_draft_fallback_model,
+                "fallback_model_max_concurrency": (
+                    self.change_draft_fallback_model_max_concurrency
+                ),
                 "unauthenticated_pilot": self.demo_mode,
             },
             "semantic_governance": {
@@ -520,6 +529,9 @@ class Settings:
             agent_max_steps=_read_int(values, "AGENT_MAX_STEPS", 4),
             host=_get(values, "PLATFORM_HOST", "127.0.0.1"),
             port=platform_port,
+            model_max_concurrency=_read_int(
+                values, "DEEPSEEK_MODEL_MAX_CONCURRENCY", 2
+            ),
             runtime_database_path=_resolve_path(
                 project_root, _get(values, "HARNESS_RUNTIME_DB_PATH", "data/runtime.db")
             ),
@@ -688,6 +700,12 @@ class Settings:
             change_draft_model_max_concurrency=_read_int(
                 values, "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY", 1
             ),
+            change_draft_fallback_model=_get(
+                values, "CHANGE_DRAFT_FALLBACK_MODEL", ""
+            ).strip(),
+            change_draft_fallback_model_max_concurrency=_read_int(
+                values, "CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY", 2
+            ),
             semantic_governance_enabled=_read_demo_feature(
                 values, "SEMANTIC_GOVERNANCE_ENABLED", demo_mode
             ),
@@ -708,6 +726,10 @@ class Settings:
             raise ConfigurationError(
                 "CHANGE_MAX_ACTIVE_SESSIONS 不能大于 CHANGE_MAX_RETAINED_SESSIONS"
             )
+        if not 1 <= settings.model_max_concurrency <= 32:
+            raise ConfigurationError(
+                "DEEPSEEK_MODEL_MAX_CONCURRENCY 必须在 1 到 32 之间"
+            )
         if settings.mindmemos_min_local_anchors <= 0:
             raise ConfigurationError("MINDMEMOS_MIN_LOCAL_ANCHORS 必须大于 0")
         if settings.trace_retention_days <= 0 or settings.trace_max_files <= 0:
@@ -719,6 +741,18 @@ class Settings:
         if settings.change_draft_model_max_concurrency != 1:
             raise ConfigurationError(
                 "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY 当前必须固定为 1"
+            )
+        if not 1 <= settings.change_draft_fallback_model_max_concurrency <= 32:
+            raise ConfigurationError(
+                "CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY 必须在 1 到 32 之间"
+            )
+        if (
+            settings.change_draft_fallback_model
+            and settings.change_draft_fallback_model.casefold()
+            == settings.model.casefold()
+        ):
+            raise ConfigurationError(
+                "CHANGE_DRAFT_FALLBACK_MODEL 必须与 DEEPSEEK_MODEL 不同"
             )
         if not 0 <= settings.semantic_proposal_min_score <= 1:
             raise ConfigurationError("SEMANTIC_PROPOSAL_MIN_SCORE 必须在 0 到 1 之间")

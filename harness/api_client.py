@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
 import json
+import os
+import threading
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from weakref import WeakValueDictionary
 
 from .config import Settings
 
@@ -41,6 +46,98 @@ class JSONOutputError(APIError):
         super().__init__(
             f"DeepSeek JSON Output 解析失败: {error}; " + ", ".join(diagnostics)
         )
+
+
+class _AccountModelGate:
+    """Coordinate one provider model route across all clients in this process."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self._condition = threading.Condition()
+        self._active = 0
+        self._peak_active = 0
+        self._waiting_normal = 0
+        self._waiting_exclusive = 0
+        self._exclusive_active = False
+        self._total_requests = 0
+        self._exclusive_requests = 0
+
+    @contextmanager
+    def lease(self, *, exclusive: bool = False):
+        with self._condition:
+            if exclusive:
+                self._waiting_exclusive += 1
+                try:
+                    while self._exclusive_active or self._active:
+                        self._condition.wait()
+                    self._exclusive_active = True
+                    self._active = 1
+                    self._exclusive_requests += 1
+                finally:
+                    self._waiting_exclusive -= 1
+            else:
+                self._waiting_normal += 1
+                try:
+                    while (
+                        self._exclusive_active
+                        or self._waiting_exclusive
+                        or self._active >= self.limit
+                    ):
+                        self._condition.wait()
+                    self._active += 1
+                finally:
+                    self._waiting_normal -= 1
+            self._total_requests += 1
+            self._peak_active = max(self._peak_active, self._active)
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._active -= 1
+                if exclusive:
+                    self._exclusive_active = False
+                self._condition.notify_all()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "scope": "process_account_model",
+                "process_id": os.getpid(),
+                "max_concurrency": self.limit,
+                "active_requests": self._active,
+                "peak_active_requests": self._peak_active,
+                "waiting_requests": self._waiting_normal + self._waiting_exclusive,
+                "waiting_exclusive_requests": self._waiting_exclusive,
+                "exclusive_active": self._exclusive_active,
+                "total_requests": self._total_requests,
+                "exclusive_requests": self._exclusive_requests,
+            }
+
+
+_MODEL_GATES_LOCK = threading.Lock()
+_MODEL_GATES: WeakValueDictionary[tuple[str, str, str], _AccountModelGate] = (
+    WeakValueDictionary()
+)
+
+
+def _model_gate(settings: Settings, *, model: str, limit: int) -> _AccountModelGate:
+    # The API key is never stored in the registry key or diagnostics.
+    account_fingerprint = hashlib.sha256(
+        settings.api_key.encode("utf-8")
+    ).hexdigest()
+    key = (settings.base_url.casefold(), model.casefold(), account_fingerprint)
+    with _MODEL_GATES_LOCK:
+        existing = _MODEL_GATES.get(key)
+        if existing is not None:
+            if existing.limit != limit:
+                raise APIError(
+                    f"模型 {model} 在当前进程中配置了不同的并发上限，"
+                    "请统一该模型的并发配置后重启"
+                )
+            return existing
+        created = _AccountModelGate(limit)
+        _MODEL_GATES[key] = created
+        return created
 
 
 def _read_limited(stream: Any, maximum: int, *, label: str) -> bytes:
@@ -86,6 +183,23 @@ class DeepSeekClient:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._route_gates_lock = threading.Lock()
+        self._route_gates: dict[str, _AccountModelGate] = {}
+        self._gate_for(settings.model, settings.model_max_concurrency)
+
+    def _gate_for(self, model: str, limit: int) -> _AccountModelGate:
+        route_key = model.casefold()
+        with self._route_gates_lock:
+            existing = self._route_gates.get(route_key)
+            if existing is not None:
+                if existing.limit != limit:
+                    raise APIError(
+                        f"模型 {model} 在同一客户端中配置了不同的并发上限"
+                    )
+                return existing
+            gate = _model_gate(self.settings, model=model, limit=limit)
+            self._route_gates[route_key] = gate
+            return gate
 
     @property
     def endpoint(self) -> str:
@@ -99,10 +213,25 @@ class DeepSeekClient:
         response_format: dict[str, str] | None = None,
         max_tokens: int | None = None,
         thinking_mode: str | None = None,
+        http_retries: int | None = None,
+        exclusive: bool = False,
+        model: str | None = None,
+        model_max_concurrency: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         self.settings.require_api()
+        selected_model = (model or self.settings.model).strip()
+        if not selected_model:
+            raise APIError("模型名称不能为空")
+        selected_limit = (
+            self.settings.model_max_concurrency
+            if model_max_concurrency is None
+            else int(model_max_concurrency)
+        )
+        if not 1 <= selected_limit <= 32:
+            raise APIError("模型并发上限必须在 1 到 32 之间")
+        route_gate = self._gate_for(selected_model, selected_limit)
         payload: dict[str, Any] = {
-            "model": self.settings.model,
+            "model": selected_model,
             "messages": messages,
             "temperature": self.settings.temperature,
             "max_tokens": max_tokens or self.settings.max_tokens,
@@ -129,47 +258,62 @@ class DeepSeekClient:
             },
         )
 
+        maximum_retries = (
+            self.settings.api_max_retries
+            if http_retries is None
+            else int(http_retries)
+        )
+        if maximum_retries < 0:
+            raise APIError("HTTP 重试次数不能小于 0")
+
         raw = ""
         retryable_http_codes = {408, 429, 500, 502, 503, 504}
-        for attempt in range(self.settings.api_max_retries + 1):
-            try:
-                with urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                    raw = _read_limited(
-                        response,
-                        self.settings.model_max_response_bytes,
-                        label="DeepSeek API 响应",
-                    ).decode("utf-8")
-                break
-            except HTTPError as exc:
+        with route_gate.lease(exclusive=exclusive):
+            for attempt in range(maximum_retries + 1):
                 try:
-                    details = _read_limited(
-                        exc,
-                        self.settings.model_max_response_bytes,
-                        label="DeepSeek API 错误响应",
-                    ).decode("utf-8", errors="replace")
-                except APIError as size_error:
-                    details = str(size_error)
-                should_retry = (
-                    exc.code in retryable_http_codes
-                    and attempt < self.settings.api_max_retries
-                )
-                if not should_retry:
-                    raise APIError(
-                        f"DeepSeek API 返回 HTTP {exc.code}: {details[:1500]}"
-                    ) from exc
-            except URLError as exc:
-                if attempt >= self.settings.api_max_retries:
-                    raise APIError(f"无法连接 DeepSeek API: {exc.reason}") from exc
-            except TimeoutError as exc:
-                if attempt >= self.settings.api_max_retries:
-                    raise APIError("DeepSeek API 请求超时") from exc
+                    with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+                        raw = _read_limited(
+                            response,
+                            self.settings.model_max_response_bytes,
+                            label="DeepSeek API 响应",
+                        ).decode("utf-8")
+                    break
+                except HTTPError as exc:
+                    try:
+                        details = _read_limited(
+                            exc,
+                            self.settings.model_max_response_bytes,
+                            label="DeepSeek API 错误响应",
+                        ).decode("utf-8", errors="replace")
+                    except APIError as size_error:
+                        details = str(size_error)
+                    should_retry = (
+                        exc.code in retryable_http_codes
+                        and attempt < maximum_retries
+                    )
+                    if not should_retry:
+                        gate = route_gate.snapshot()
+                        raise APIError(
+                            f"DeepSeek API 返回 HTTP {exc.code}: {details[:1500]}; "
+                            f"本进程模型门禁 model={selected_model} "
+                            f"active={gate['active_requests']} "
+                            f"limit={gate['max_concurrency']} "
+                            f"exclusive={str(gate['exclusive_active']).lower()} "
+                            f"pid={gate['process_id']}"
+                        ) from exc
+                except URLError as exc:
+                    if attempt >= maximum_retries:
+                        raise APIError(f"无法连接 DeepSeek API: {exc.reason}") from exc
+                except TimeoutError as exc:
+                    if attempt >= maximum_retries:
+                        raise APIError("DeepSeek API 请求超时") from exc
 
-            delay = min(
-                self.settings.api_retry_initial_seconds * (2**attempt),
-                self.settings.api_retry_max_seconds,
-            )
-            if delay > 0:
-                time.sleep(delay)
+                delay = min(
+                    self.settings.api_retry_initial_seconds * (2**attempt),
+                    self.settings.api_retry_max_seconds,
+                )
+                if delay > 0:
+                    time.sleep(delay)
 
         try:
             data = json.loads(raw)
@@ -207,6 +351,10 @@ class DeepSeekClient:
         *,
         retries: int = 2,
         max_tokens: int | None = None,
+        http_retries: int | None = None,
+        exclusive: bool = False,
+        model: str | None = None,
+        model_max_concurrency: int | None = None,
     ) -> tuple[Any, dict[str, Any] | None]:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -221,6 +369,10 @@ class DeepSeekClient:
                 response_format={"type": "json_object"},
                 max_tokens=max_tokens,
                 thinking_mode="disabled",
+                http_retries=http_retries,
+                exclusive=exclusive,
+                model=model,
+                model_max_concurrency=model_max_concurrency,
             )
             content = message.get("content")
             if isinstance(content, str) and content.strip():
@@ -247,6 +399,17 @@ class DeepSeekClient:
             last_error or APIError("未知 JSON 解析错误"),
             raw_output=last_content,
         )
+
+    def model_activity(self) -> dict[str, Any]:
+        with self._route_gates_lock:
+            routes = {
+                model: gate.snapshot()
+                for model, gate in sorted(self._route_gates.items())
+            }
+        primary = dict(routes[self.settings.model.casefold()])
+        primary["model"] = self.settings.model
+        primary["routes"] = routes
+        return primary
 
 
 # Backward-compatible name for code that imported the original harness client.

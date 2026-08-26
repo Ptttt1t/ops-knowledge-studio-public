@@ -2239,5 +2239,15 @@ class KnowledgeService:
     def stats(self) -> dict[str, Any]:
         result = self.store.stats()
         result["config"] = self.settings.public_config()
+        result["model_requests"] = self.model_request_activity()
         result["long_term_memory"] = self.long_term_memory_status(probe=False)
         return result
+
+    def model_request_activity(self) -> dict[str, Any]:
+        diagnostics = getattr(self.client, "model_activity", None)
+        if callable(diagnostics):
+            return diagnostics()
+        return {
+            "scope": "unavailable_for_custom_client",
+            "max_concurrency": self.settings.model_max_concurrency,
+        }
