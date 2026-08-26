@@ -47,7 +47,7 @@
 
 ## Work In Progress
 
-None. 功能分支已通过本地验证，尚未合并到 GitHub `main`。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
@@ -56,7 +56,7 @@ None. 功能分支已通过本地验证，尚未合并到 GitHub `main`。
 ## Last Updated
 
 - Date: 2026-08-26 (Asia/Shanghai)
-- Current branch: `codex/account-model-concurrency-gate`
-- Base published `main`: `e4ec7d0a0584214897a0dcaebb2ec25770d3dc1e`
-- Publication status: local validated, not yet merged/pushed to `github/main`
+- Current branch: `main`
+- Published feature commit: `e1b756241bec1493081d74e813f5fd44334aa69d`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
