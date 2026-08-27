@@ -154,4 +154,4 @@ git diff --check
 - `python run.py init` 只补齐 schema/migration，不应清空数据库。普通 ingest 保持幂等，只有显式 case rebuild 才 purge 当前案例并强制重跑。
 - 新配置写入 `harness/config.py` 和 `.env.example`，并在相关文档说明默认值、安全边界和作用范围。
 - 一轮有意义的工作结束时更新 `CODEX_HANDOFF.md`；只有长期事实改变时更新本文件，只有重要设计选择改变时更新 `DECISIONS.md`。
-- 有实质修改且测试、完整 diff 和敏感信息检查通过后，默认直接发布，不再等待用户重复要求“合并”；用户明确要求保留分支/暂不发布，或验证与远端状态不安全时例外。发布时基于最新 `github/main` 快进本地 `main`，push 后比较本地与远端 SHA。
+- 发布前审查完整 diff 和敏感信息，基于最新 `github/main` 快进本地 `main`，push 后比较本地与远端 SHA。
