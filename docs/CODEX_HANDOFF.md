@@ -39,7 +39,7 @@
 
 ## Work In Progress
 
-None. 代码和文档已完成并通过外网 synthetic 回归，待发布到 GitHub `main`。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
@@ -48,6 +48,7 @@ None. 代码和文档已完成并通过外网 synthetic 回归，待发布到 Gi
 ## Last Updated
 
 - Date: 2026-08-27 (Asia/Shanghai)
-- Current branch: `codex/change-draft-timeout-diagnostics`
-- Publication status: validated; pending fast-forward merge and push to `github/main`
+- Current branch: `main`
+- Published feature commit: `330c28277ec04f56d6c21c4bc825303dce80d97d`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
