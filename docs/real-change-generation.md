@@ -55,6 +55,7 @@ CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
 CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+CHANGE_DRAFT_TIMEOUT_SECONDS=240
 DEEPSEEK_MODEL_MAX_CONCURRENCY=2
 CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1
 CHANGE_DRAFT_FALLBACK_MODEL=
@@ -65,7 +66,11 @@ CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=2
 
 `CHANGE_DRAFT_FALLBACK_MODEL` 留空时禁用模型切换。启用时必须填写当前 DeepSeek-compatible 网关接受的精确 Qwen model ID，而不是界面展示名；第一版备用模型与主模型共用 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_API_KEY`。主模型只有在 HTTP 429、错误包含 `count/limit`、账户限额或等价容量信号时，才会切换备用模型一次。协议解析、内容错误和硬门禁失败不会触发换模型。实际选用模型、是否回退和尝试顺序写入 revision 的 `model_usage.model_routing`。
 
+`CHANGE_DRAFT_TIMEOUT_SECONDS` 是真实草案专用的客户端等待上限，代码默认 `240`，也可在部署环境的 `.env` 中覆盖；修改后需要重启服务。普通抽取、问答和其他 DeepSeek 请求仍使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 `120`）。该时间包含客户端等待网关排队和生成完成的总时间，客户端无法据此拆分 queue 与 inference 耗时。
+
 草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。只有供应商已经返回正文但 JSON 无法解析，或者 JSON 可解析但草案结构未通过确定性装配时，程序才允许一次独立协议修复。超时、连接失败和非容量 HTTP 错误立即失败，不得作为协议修复再次请求；超时也不自动切换备用模型，因为客户端超时不能证明供应商侧原推理已经结束。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
+
+每个草案根记录和当前 revision 的 `model_usage` 会保存 `generation_budget` / `generation_performance`。字段包含模型、timeout、案例和上下文卡计数、Prompt 字符/字节数、最大输出 token、模型请求次数、起止时间、客户端等待耗时和响应大小；只有供应商可靠返回 usage 时才保存 token 计数。Runtime 成功或失败 checkpoint 也保留同一组统计，但不保存 Prompt 或完整 payload。达到草案等待上限时错误码为 `MODEL_TIMEOUT`，页面显示“真实变更草案生成超过当前 N 秒等待上限，本次未自动重试”。
 
 诊断接口：
 

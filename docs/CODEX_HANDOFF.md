@@ -2,53 +2,52 @@
 
 ## Current Objective
 
-修复真实 ChangeOrder 草案在模型请求超时后被错误当作协议失败重试，导致单次点击产生两个连续远程推理、总耗时约 `2 × DEEPSEEK_TIMEOUT_SECONDS` 并可能叠加供应商并发占用的问题。
+为真实 ChangeOrder 草案生成增加独立、可通过 `.env` 调整的客户端等待上限，保留已经验证正确的单请求、并发 1 和超时不重试边界，并补齐不含 Prompt 正文的生成预算与性能诊断。
 
 ## Completed
 
-- 根据内网脱敏诊断确认：单个草案 run 约 240 秒、模型路由 `total_requests +2`，而最小主/备模型探测均约 3 秒成功；本地门禁和单进程部署正常。
-- 将协议修复门禁收窄到两类“模型已经返回内容”的错误：`JSONOutputError` 和确定性 `_assemble` 草案结构失败。
-- 超时、连接失败、非容量 HTTP 错误及其他模型调用异常现在立即结束生成，不再进入第二轮协议修复。
-- 超时仍不自动切换备用模型，因为客户端超时不能证明供应商已经结束原推理；立即切换可能再次占用远程并发槽位。
-- 保留现有容量回退：明确的 HTTP 429、`count/limit` 等错误仍可从主模型切换到配置的 Qwen 一次。
-- 新增 synthetic 超时回归：即使配置了备用模型，单次草案也只调用主模型一次，并持久化 `GENERATION_FAILED` 与原始脱敏错误。
-- README、真实草案说明、长期上下文和技术决策已同步到新的失败分类。
-- 检查 PID 诊断：公开仓库启动脚本只管理 `artifacts/server.pid`，没有 `serve.pid`；内网报告的失效 `serve.pid` 属于其部署包装器，本轮未对未知文件路径增加删除逻辑。
+- 新增 `CHANGE_DRAFT_TIMEOUT_SECONDS`，代码和 `.env.example` 默认均为 `240`；部署者可在实际 `.env` 覆盖并通过重启生效。
+- 普通 DeepSeek 调用继续使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 120）；真实草案把专用 timeout 显式传至 `DeepSeekClient.chat_json -> chat -> urlopen`。
+- 新增类型化 `APITimeoutError`。真实草案超时转为稳定错误码 `MODEL_TIMEOUT`，页面错误明确说明当前上限且本次未自动重试。
+- 保留上一轮安全边界：草案并发固定为 1、HTTP retry 为 0；timeout 不重试、不切 Qwen、不进入 protocol repair。只有已收到响应后的 JSON/装配协议失败允许一次修复，修复请求也使用同一专用 timeout。
+- 草案根记录、revision `model_usage` 和 Runtime checkpoint 新增 `generation_budget` / `generation_performance`，记录模型、timeout、案例/卡片计数、Prompt 大小、输出预算、请求起止时间、客户端等待耗时、请求数、响应大小和供应商实际返回的 token usage；不保存 Prompt 正文。
+- 旧 `change_drafts.db` 启动时会增量增加错误码和诊断 JSON 列，无需删除既有草案数据库。
+- 模型调用前控制台打印 `[CHANGE DRAFT MODEL] model=<id> timeout_seconds=<N>`，便于内网核对实际配置是否传到底层。
 
 ## Files Changed
 
-- `knowledge_platform/change_drafts.py`：只有 `JSONOutputError` 可从模型调用阶段进入一次协议修复；传输异常直接失败。
-- `tests/test_real_change_drafts.py`：新增超时不重试、不回退、只产生一次模型请求的回归。
-- `README.md`, `docs/real-change-generation.md`：澄清协议修复、传输失败和备用模型边界。
-- `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：沉淀“客户端超时不得自动重试/切换模型”的长期安全约束。
+- `harness/config.py`, `.env.example`：新增草案专用 timeout 默认值、环境变量读取、正数校验和公开配置。
+- `harness/model.py`, `harness/api_client.py`：增加单次请求 timeout override，并传递到实际 HTTP 调用；新增类型化超时错误。
+- `knowledge_platform/change_drafts.py`：应用专用 timeout，持久化错误码、生成预算与性能统计，保持 timeout 单请求失败语义。
+- `knowledge_platform/runtime_tasks.py`：成功/失败 checkpoint 保存非敏感生成诊断，Runtime step/run 保留 `MODEL_TIMEOUT`。
+- `tests/test_platform.py`, `tests/test_demo_mode_and_card_delete.py`, `tests/test_real_change_drafts.py`：覆盖全局/草案 timeout 分离、env 覆盖、timeout 单请求、protocol repair 和诊断字段。
+- `README.md`, `docs/real-change-generation.md`, `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：同步运行配置、诊断和安全边界。
 
 ## Validation
 
-- 专项真实草案回归 6 项：通过。覆盖超时单请求、Malformed JSON 修复、可解析但结构不合规修复、429 不重复、容量切换 Qwen 和协议失败无部分草案。
-- `python -m unittest discover -s tests -t .`：158 tests，全部通过。
-- 真实内网大草案：本轮代码尚未在内网重新部署验证；不得声称 120 秒以内能够生成成功。
-- 网关侧 queue/inference 时间和客户端超时后的远端任务状态：仍待内网管理员确认。
+- 草案/配置/API 专项回归：49 tests，全部通过。
+- `python -m unittest discover -s tests -t .`：162 tests，全部通过。
+- `python -m compileall -q harness knowledge_platform`：通过。
+- 真实内网 ChangeOrder：外网未运行、未声称成功；仍需人工部署后验证实际等待时间和生成结果。
+- 网关 `queue_seconds` / `inference_seconds`：客户端仍不可见，诊断只报告 client wait elapsed。
 
 ## Known Issues
 
-- 本次修复消除了第二次错误请求，但没有解决大草案本身可能超过 120 秒的 Layer 5 根因；若仍超时，新版本应约 120 秒失败且路由 `total_requests` 只增加 1。
-- `DEEPSEEK_TIMEOUT_SECONDS` 当前是全局模型调用超时，不是只针对真实草案的独立配置。是否增加草案专用有界超时，需要先取得网关 queue/inference 时间。
-- urllib 非流式调用无法可靠取消供应商侧已经开始的推理；即使本地只请求一次，超时后仍应通过安全退出和网关计数确认远程请求释放。
-- 超时不触发 Qwen fallback 是有意安全行为。若未来支持超时切换，必须先有可证明原请求终止的网关取消/幂等协议。
-- 内网失效 `serve.pid` 不属于公开仓库当前命名；应由创建该文件的部署脚本按 PID 匹配安全清理。
+- 如果真实大草案仍稳定达到约 240 秒后 timeout，不应继续盲目提高上限；应结合新增的 Prompt/上下文/响应统计和网关侧 queue/inference 证据，再评估 context pruning、输出预算、streaming 或更快模型。
+- urllib 非流式请求仍无法可靠取消供应商侧已经开始的推理；本地 timeout 只保证不再发送第二次草案请求，不能证明远端工作已立即结束。
+- 超时不触发 Qwen fallback 是有意的安全行为；只有明确容量错误仍允许现有的一次备用路由。
 
 ## Work In Progress
 
-None. 功能已合并并发布到 GitHub `main`。
+None. 代码和文档已完成并通过外网 synthetic 回归，待发布到 GitHub `main`。
 
 ## Recommended Next Step
 
-内网先使用页面“安全退出”停止旧服务并确认网关并发归零，再升级且只启动一个平台进程。只触发一次真实草案并比较 `/api/health.model_requests.routes`：如果仍超时，应看到 run 约 120 秒且 `total_requests +1`。随后由网关管理员提供脱敏的 queue/inference 时间，再决定采用草案专用有界超时、流式读取、缩减上下文/输出预算或更快模型；不要恢复自动超时重试。
+内网更新后保持 `CHANGE_DRAFT_TIMEOUT_SECONDS=240`，重启并对同类真实草案只触发一次生成。核对控制台 timeout、路由 `total_requests +1`、`generation_budget` 与 `generation_performance`：若在 120～240 秒内成功，基于实际统计再做性能优化；若约 240 秒仍 timeout，则先取得网关 queue/inference 时间，不继续直接增大 timeout。
 
 ## Last Updated
 
 - Date: 2026-08-27 (Asia/Shanghai)
-- Current branch: `main`
-- Published feature commit: `636d8eee680efdc6b76efb44b5937d54c06aa207`
-- Publication status: merged and pushed to `github/main`
+- Current branch: `codex/change-draft-timeout-diagnostics`
+- Publication status: validated; pending fast-forward merge and push to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。

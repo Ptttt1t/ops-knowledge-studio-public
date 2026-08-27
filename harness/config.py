@@ -217,6 +217,7 @@ class Settings:
     change_generation_max_case_bundles: int = 3
     change_generation_max_context_cards: int = 24
     change_generation_max_output_tokens: int = 8192
+    change_draft_timeout_seconds: int = 240
     change_draft_model_max_concurrency: int = 1
     change_draft_fallback_model: str = ""
     change_draft_fallback_model_max_concurrency: int = 2
@@ -315,6 +316,7 @@ class Settings:
                 "max_case_bundles": self.change_generation_max_case_bundles,
                 "max_context_cards": self.change_generation_max_context_cards,
                 "max_output_tokens": self.change_generation_max_output_tokens,
+                "timeout_seconds": self.change_draft_timeout_seconds,
                 "model_max_concurrency": self.change_draft_model_max_concurrency,
                 "fallback_model_configured": bool(self.change_draft_fallback_model),
                 "fallback_model": self.change_draft_fallback_model,
@@ -704,6 +706,9 @@ class Settings:
             change_generation_max_output_tokens=_read_int(
                 values, "CHANGE_GENERATION_MAX_OUTPUT_TOKENS", 8192
             ),
+            change_draft_timeout_seconds=_read_int(
+                values, "CHANGE_DRAFT_TIMEOUT_SECONDS", 240
+            ),
             change_draft_model_max_concurrency=_read_int(
                 values, "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY", 1
             ),
@@ -745,6 +750,8 @@ class Settings:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CASE_BUNDLES 必须在 1 到 3 之间")
         if settings.change_generation_max_context_cards <= 0:
             raise ConfigurationError("CHANGE_GENERATION_MAX_CONTEXT_CARDS 必须大于 0")
+        if settings.change_draft_timeout_seconds <= 0:
+            raise ConfigurationError("CHANGE_DRAFT_TIMEOUT_SECONDS 必须大于 0")
         if settings.change_draft_model_max_concurrency != 1:
             raise ConfigurationError(
                 "CHANGE_DRAFT_MODEL_MAX_CONCURRENCY 当前必须固定为 1"

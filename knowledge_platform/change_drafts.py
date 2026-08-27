@@ -9,11 +9,13 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import time
 import unicodedata
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
-from harness.api_client import JSONOutputError
+from harness.api_client import APITimeoutError, JSONOutputError
+from harness.runtime import HarnessRuntimeError
 
 from .change_order_adapter import build_change_order_extraction_plan
 from .schema import CardStatus
@@ -162,7 +164,7 @@ def compact_tokens(value: Any) -> set[str]:
     }
 
 
-class ChangeDraftError(RuntimeError):
+class ChangeDraftError(HarnessRuntimeError):
     def __init__(
         self,
         message: str,
@@ -288,6 +290,8 @@ class ChangeDraftStore:
                     profile_id TEXT NOT NULL,
                     current_revision INTEGER NOT NULL DEFAULT 0,
                     model_error TEXT NOT NULL DEFAULT '',
+                    model_error_code TEXT NOT NULL DEFAULT '',
+                    generation_diagnostics_json TEXT NOT NULL DEFAULT '{}',
                     created_by TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -323,6 +327,20 @@ class ChangeDraftStore:
                 );
                 """
             )
+            draft_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(change_drafts)")
+            }
+            if "model_error_code" not in draft_columns:
+                connection.execute(
+                    "ALTER TABLE change_drafts "
+                    "ADD COLUMN model_error_code TEXT NOT NULL DEFAULT ''"
+                )
+            if "generation_diagnostics_json" not in draft_columns:
+                connection.execute(
+                    "ALTER TABLE change_drafts "
+                    "ADD COLUMN generation_diagnostics_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     @staticmethod
     def _decode(row: sqlite3.Row | None, json_fields: tuple[str, ...]) -> dict[str, Any] | None:
@@ -412,12 +430,46 @@ class ChangeDraftStore:
                 (run_id, utc_now(), draft_id),
             )
 
-    def set_draft_failure(self, draft_id: str, error: str) -> None:
+    def set_generation_diagnostics(
+        self, draft_id: str, diagnostics: dict[str, Any]
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
-                "UPDATE change_drafts SET status = 'GENERATION_FAILED', model_error = ?, updated_at = ? WHERE draft_id = ?",
-                (error[:4000], utc_now(), draft_id),
+                "UPDATE change_drafts SET generation_diagnostics_json = ?, "
+                "updated_at = ? WHERE draft_id = ?",
+                (stable_json(diagnostics), utc_now(), draft_id),
             )
+
+    def set_draft_failure(
+        self,
+        draft_id: str,
+        error: str,
+        *,
+        code: str = "",
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            if diagnostics is None:
+                connection.execute(
+                    "UPDATE change_drafts SET status = 'GENERATION_FAILED', "
+                    "model_error = ?, model_error_code = ?, updated_at = ? "
+                    "WHERE draft_id = ?",
+                    (error[:4000], code[:100], utc_now(), draft_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE change_drafts SET status = 'GENERATION_FAILED', "
+                    "model_error = ?, model_error_code = ?, "
+                    "generation_diagnostics_json = ?, updated_at = ? "
+                    "WHERE draft_id = ?",
+                    (
+                        error[:4000],
+                        code[:100],
+                        stable_json(diagnostics),
+                        utc_now(),
+                        draft_id,
+                    ),
+                )
 
     def save_revision(
         self,
@@ -465,7 +517,8 @@ class ChangeDraftStore:
             connection.execute(
                 """
                 UPDATE change_drafts
-                SET current_revision = ?, status = ?, model_error = '', updated_at = ?
+                SET current_revision = ?, status = ?, model_error = '',
+                    model_error_code = '', updated_at = ?
                 WHERE draft_id = ?
                 """,
                 (revision, status, now, draft_id),
@@ -493,7 +546,10 @@ class ChangeDraftStore:
                 """,
                 (draft_id, int(row["current_revision"])),
             ).fetchone()
-        result = self._decode(row, ("request_json", "selected_case_ids")) or {}
+        result = self._decode(
+            row,
+            ("request_json", "selected_case_ids", "generation_diagnostics_json"),
+        ) or {}
         if revision is not None:
             result["revision"] = self._decode(
                 revision,
@@ -515,7 +571,14 @@ class ChangeDraftStore:
                 "SELECT * FROM change_drafts ORDER BY updated_at DESC LIMIT ?",
                 (max(1, min(limit, 200)),),
             ).fetchall()
-        return [self._decode(row, ("request_json", "selected_case_ids")) or {} for row in rows]
+        return [
+            self._decode(
+                row,
+                ("request_json", "selected_case_ids", "generation_diagnostics_json"),
+            )
+            or {}
+            for row in rows
+        ]
 
     def invalidate_case_references(self, case_id: str) -> int:
         """Invalidate temporary drafts/evaluations derived from a rebuilt case."""
@@ -664,7 +727,11 @@ class RealChangeDraftService:
         )
 
     def _call_generation_model(
-        self, system_prompt: str, user_prompt: str
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        request_attempts: list[dict[str, Any]],
     ) -> tuple[Any, dict[str, Any]]:
         # The web runtime may execute multiple draft jobs concurrently. Only the
         # personal-model call is serialized here, leaving retrieval, validation,
@@ -686,6 +753,21 @@ class RealChangeDraftService:
         with self._model_slots:
             for model, model_limit, fallback_used in routes:
                 attempted_models.append(model)
+                attempt_diagnostics: dict[str, Any] = {
+                    "model": model,
+                    "timeout_seconds": settings.change_draft_timeout_seconds,
+                    "prompt_chars": len(user_prompt),
+                    "prompt_bytes": len(user_prompt.encode("utf-8")),
+                    "model_request_started_at": utc_now(),
+                    "fallback_route": fallback_used,
+                }
+                request_attempts.append(attempt_diagnostics)
+                started = time.monotonic()
+                print(
+                    "[CHANGE DRAFT MODEL] "
+                    f"model={model} "
+                    f"timeout_seconds={settings.change_draft_timeout_seconds}"
+                )
                 try:
                     payload, usage = self.knowledge.client.chat_json(
                         system_prompt,
@@ -696,17 +778,58 @@ class RealChangeDraftService:
                         # retry. Hidden HTTP retries can otherwise turn one
                         # attempt into three provider requests.
                         http_retries=0,
+                        timeout_seconds=settings.change_draft_timeout_seconds,
                         # Exclusivity is scoped to the selected model route, so
                         # the fallback model keeps its independent capacity.
                         exclusive=True,
                         model=model,
                         model_max_concurrency=model_limit,
                     )
+                except JSONOutputError as exc:
+                    attempt_diagnostics["provider_response_received"] = True
+                    attempt_diagnostics["response_chars"] = exc.output_chars
+                    attempt_diagnostics["response_bytes"] = len(
+                        exc.raw_output.encode("utf-8")
+                    )
+                    attempt_diagnostics["error_code"] = "MODEL_PROTOCOL_INVALID_JSON"
+                    raise
+                except APITimeoutError:
+                    attempt_diagnostics["provider_response_received"] = False
+                    attempt_diagnostics["error_code"] = "MODEL_TIMEOUT"
+                    raise
                 except Exception as exc:
+                    attempt_diagnostics["provider_response_received"] = False
+                    attempt_diagnostics["error_code"] = type(exc).__name__
                     if not fallback_used and len(routes) > 1 and self._is_capacity_error(exc):
                         primary_capacity_failure = True
                         continue
                     raise
+                else:
+                    serialized_response = stable_json(payload)
+                    attempt_diagnostics["provider_response_received"] = True
+                    attempt_diagnostics["response_chars"] = len(serialized_response)
+                    attempt_diagnostics["response_bytes"] = len(
+                        serialized_response.encode("utf-8")
+                    )
+                    provider_tokens = {
+                        key: int(usage[key])
+                        for key in (
+                            "prompt_tokens",
+                            "completion_tokens",
+                            "total_tokens",
+                        )
+                        if isinstance(usage, dict)
+                        and isinstance(usage.get(key), int)
+                        and not isinstance(usage.get(key), bool)
+                        and int(usage[key]) >= 0
+                    }
+                    if provider_tokens:
+                        attempt_diagnostics["provider_token_usage"] = provider_tokens
+                finally:
+                    attempt_diagnostics["model_request_finished_at"] = utc_now()
+                    attempt_diagnostics["model_elapsed_seconds"] = round(
+                        time.monotonic() - started, 3
+                    )
                 routed_usage = dict(usage or {})
                 routed_usage["model_routing"] = {
                     "selected_model": model,
@@ -716,6 +839,67 @@ class RealChangeDraftService:
                 }
                 return payload, routed_usage
         raise ChangeDraftError("没有可用的真实变更草案模型路由")
+
+    @staticmethod
+    def _generation_performance(
+        request_attempts: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        performance: dict[str, Any] = {
+            "model_request_count": len(request_attempts),
+            "model_elapsed_seconds": round(
+                sum(
+                    float(item.get("model_elapsed_seconds") or 0.0)
+                    for item in request_attempts
+                ),
+                3,
+            ),
+        }
+        performance["elapsed_seconds"] = performance["model_elapsed_seconds"]
+        if not request_attempts:
+            return performance
+        performance.update(
+            {
+                "model": request_attempts[-1].get("model"),
+                "timeout_seconds": request_attempts[-1].get("timeout_seconds"),
+                "model_request_started_at": request_attempts[0].get(
+                    "model_request_started_at"
+                ),
+                "model_request_finished_at": request_attempts[-1].get(
+                    "model_request_finished_at"
+                ),
+            }
+        )
+        for item in reversed(request_attempts):
+            if "response_chars" in item:
+                performance["response_chars"] = item["response_chars"]
+                performance["response_bytes"] = item["response_bytes"]
+                break
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            values = [
+                item["provider_token_usage"][key]
+                for item in request_attempts
+                if key in (item.get("provider_token_usage") or {})
+            ]
+            if values:
+                performance[key] = sum(values)
+        performance["requests"] = request_attempts
+        return performance
+
+    @staticmethod
+    def _generation_diagnostics(
+        budget: dict[str, Any], request_attempts: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        performance = RealChangeDraftService._generation_performance(request_attempts)
+        return {
+            **budget,
+            **{
+                key: value
+                for key, value in performance.items()
+                if key != "requests"
+            },
+            "generation_budget": budget,
+            "generation_performance": performance,
+        }
 
     @staticmethod
     def _is_capacity_error(error: Exception) -> bool:
@@ -1805,6 +1989,8 @@ class RealChangeDraftService:
             error = "生成期间 SchemaProfile 已变化"
             self.store.set_draft_failure(draft_id, error)
             raise ChangeDraftError(error)
+        request_attempts: list[dict[str, Any]] = []
+        generation_budget: dict[str, Any] = {}
         try:
             bundles, cards = self._selected_context(draft)
             context = [self._prompt_card(card) for card in cards.values()]
@@ -1834,6 +2020,25 @@ class RealChangeDraftService:
                     "approved_cards": context,
                 }
             )
+            settings = self.knowledge.settings
+            generation_budget = {
+                "model": settings.model,
+                "timeout_seconds": settings.change_draft_timeout_seconds,
+                "selected_case_count": len(bundles),
+                "available_context_card_count": sum(
+                    len(bundle.get("cards") or []) for bundle in bundles
+                ),
+                "selected_context_card_count": len(context),
+                "selected_context_cards": len(context),
+                "max_context_cards": settings.change_generation_max_context_cards,
+                "prompt_chars": len(prompt),
+                "prompt_bytes": len(prompt.encode("utf-8")),
+                "max_output_tokens": settings.change_generation_max_output_tokens,
+            }
+            self.store.set_generation_diagnostics(
+                draft_id,
+                self._generation_diagnostics(generation_budget, request_attempts),
+            )
             validation_error = ""
             previous_protocol_output: Any = None
             usage: dict[str, Any] | None = None
@@ -1858,7 +2063,15 @@ class RealChangeDraftService:
                     payload, usage = self._call_generation_model(
                         GENERATION_SYSTEM_PROMPT,
                         user_prompt,
+                        request_attempts=request_attempts,
                     )
+                except APITimeoutError as exc:
+                    raise ChangeDraftError(
+                        "真实变更草案生成超过当前 "
+                        f"{settings.change_draft_timeout_seconds} 秒等待上限，"
+                        "本次未自动重试。",
+                        code="MODEL_TIMEOUT",
+                    ) from exc
                 except JSONOutputError as exc:
                     # A protocol repair is safe only after the provider returned
                     # a response body that could not be parsed as JSON. Transport
@@ -1883,6 +2096,17 @@ class RealChangeDraftService:
                     previous_protocol_output = payload
                     if attempt:
                         raise
+            generation_diagnostics = self._generation_diagnostics(
+                generation_budget, request_attempts
+            )
+            self.store.set_generation_diagnostics(draft_id, generation_diagnostics)
+            model_usage = dict(usage or {})
+            model_usage["generation_budget"] = generation_diagnostics[
+                "generation_budget"
+            ]
+            model_usage["generation_performance"] = generation_diagnostics[
+                "generation_performance"
+            ]
             assert normalized is not None and change_json is not None and provenance is not None
             validation = self._validate_assembled(
                 change_json, normalized=normalized, provenance=provenance
@@ -1893,11 +2117,22 @@ class RealChangeDraftService:
                 change_json=change_json,
                 provenance=provenance,
                 validation=validation,
-                usage=usage,
+                usage=model_usage,
                 actor=actor,
             )
         except Exception as exc:
-            self.store.set_draft_failure(draft_id, str(exc))
+            diagnostics = self._generation_diagnostics(
+                generation_budget, request_attempts
+            )
+            error_code = str(getattr(exc, "code", "") or "")
+            if error_code:
+                diagnostics["error_code"] = error_code
+            self.store.set_draft_failure(
+                draft_id,
+                str(exc),
+                code=error_code,
+                diagnostics=diagnostics,
+            )
             raise
 
     def update_draft(self, draft_id: str, normalized: Any, *, actor: str) -> dict[str, Any]:

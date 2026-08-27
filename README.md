@@ -317,6 +317,8 @@ CHANGE_DRAFT_DB_PATH=data/change_drafts.db
 CHANGE_GENERATION_MAX_CASE_BUNDLES=3
 CHANGE_GENERATION_MAX_CONTEXT_CARDS=24
 CHANGE_GENERATION_MAX_OUTPUT_TOKENS=8192
+# 真实草案专用等待上限；可按内网实测调整，不影响普通模型请求。
+CHANGE_DRAFT_TIMEOUT_SECONDS=240
 DEEPSEEK_MODEL_MAX_CONCURRENCY=2
 CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1
 # 可选；填写网关实际接受的 Qwen model ID，不要照抄展示名称。
@@ -344,9 +346,11 @@ RealChangeRequest
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
 - 只有已收到响应正文但 JSON 或草案结构不合规时才允许一次协议修复；超时、连接失败和 HTTP 错误立即停止，不再发送第二个远程请求，也不生成规则 fallback 草案。
+- 普通模型请求继续使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 120）；真实草案单独使用 `CHANGE_DRAFT_TIMEOUT_SECONDS`（默认 240）。修改实际 `.env` 后重启服务即可调整草案上限，不会同时放宽知识抽取和问答。
 - 同一进程按 base URL、API Key 指纹和实际模型建立共享门禁；主模型普通路径最多并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实草案在所选模型路由上申请独占槽位，不与本进程内同模型的抽取、问答或其他 Runtime Worker 请求重叠。
 - 真实草案任务之间的最大并发固定为 `CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1`，且关闭底层隐藏 HTTP 重试。若主模型返回 HTTP 429、`count/limit` 或等价容量错误，并且配置了 `CHANGE_DRAFT_FALLBACK_MODEL`，程序才用同一端点和凭据尝试备用模型一次；超时不会自动重试或切换模型，因为供应商侧原推理可能仍未结束。
 - 每个 revision 的 `model_usage.model_routing` 记录实际模型、是否回退和尝试顺序；全库模式与盲测报告因此可按模型区分。`/api/health.model_requests.routes` 显示各模型路由的活动/等待请求、峰值和独占状态。
+- 草案及 Runtime checkpoint 只保存非敏感生成统计：模型、等待上限、案例/卡片计数、Prompt 字符/字节数、输出预算、请求起止时间、耗时、请求数、响应大小，以及供应商确实返回时的 token usage；不保存真实 Prompt 正文。超时使用 `MODEL_TIMEOUT`，并明确提示本次未自动重试。
 - 只有当前 `REVIEW_APPROVED` revision 可以导出。
 - 留一案例盲测会在生成期间隔离目标及内容近重复案例。
 
@@ -461,7 +465,7 @@ python -m compileall -q harness knowledge_platform tests
 node --check knowledge_platform/static/app.js
 ```
 
-当前分支回归结果：`158 tests passed`。
+当前分支回归结果：`162 tests passed`。
 
 测试覆盖：
 

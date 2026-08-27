@@ -6,6 +6,7 @@ from typing import Any
 from harness.run_store import RunStore
 from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunContext
 
+from .change_drafts import ChangeDraftError
 from .service import KnowledgeService
 
 
@@ -76,13 +77,29 @@ def register_knowledge_tasks(runtime: HarnessRuntime, service: KnowledgeService)
     def generate_real_change_draft(context: RunContext) -> dict[str, Any]:
         draft_id = _text(context.input, "draft_id")
         actor = _text(context.input, "actor", required=False) or "shared-operator"
-        with context.step("change", "generate_real_change_draft", payload={"draft_id": draft_id}):
-            result = service.change_drafts.generate(draft_id, actor=actor)
+        try:
+            with context.step(
+                "change",
+                "generate_real_change_draft",
+                payload={"draft_id": draft_id},
+            ):
+                result = service.change_drafts.generate(draft_id, actor=actor)
+        except ChangeDraftError as exc:
+            failed = service.change_drafts.store.get_draft(draft_id) or {}
+            context.save_checkpoint(
+                phase="real_change_draft_generation_failed",
+                draft_id=draft_id,
+                status=failed.get("status"),
+                error_code=getattr(exc, "code", "change_draft_error"),
+                generation_diagnostics=failed.get("generation_diagnostics") or {},
+            )
+            raise
         context.save_checkpoint(
             phase="real_change_draft_generated",
             draft_id=draft_id,
             status=result.get("status"),
             revision=result.get("current_revision"),
+            generation_diagnostics=result.get("generation_diagnostics") or {},
         )
         return result
 

@@ -234,6 +234,43 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(captured["payload"]["response_format"], {"type": "json_object"})
             self.assertEqual(captured["payload"]["thinking"], {"type": "disabled"})
             self.assertEqual(captured["authorization"], "Bearer test-key")
+            self.assertEqual(captured["timeout"], settings.timeout_seconds)
+
+    def test_deepseek_request_timeout_can_be_overridden_per_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = replace(
+                make_settings(Path(directory)),
+                timeout_seconds=120,
+                change_draft_timeout_seconds=240,
+            )
+            captured_timeouts: list[int] = []
+
+            def fake_urlopen(_request, timeout):
+                captured_timeouts.append(timeout)
+                return FakeHTTPResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": '{"ok":true}',
+                                }
+                            }
+                        ],
+                        "usage": {"total_tokens": 8},
+                    }
+                )
+
+            client = DeepSeekClient(settings)
+            with patch("harness.api_client.urlopen", fake_urlopen):
+                client.chat_json("system", "ordinary")
+                client.chat_json(
+                    "system",
+                    "change draft",
+                    timeout_seconds=settings.change_draft_timeout_seconds,
+                )
+
+            self.assertEqual(captured_timeouts, [120, 240])
 
     def test_deepseek_json_error_keeps_raw_output_out_of_message(self):
         with tempfile.TemporaryDirectory() as directory:

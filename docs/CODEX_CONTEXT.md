@@ -85,8 +85,10 @@ RealChangeRequest
 - 真实业务数据只能在批准的内网运行。公开 GitHub 只允许虚构 service、region、cluster、workload、人员、工单号和 URL。
 - `.env`、SQLite 数据库、上传源文件、模型缓存和 `artifacts/` 不进入 Git；GitHub 不是数据备份介质。
 - 模型端点通过 `.env` 使用 DeepSeek-compatible API。只有模型已返回正文后的 JSON/草案协议失败可有一次修复；超时、连接或 HTTP 传输失败必须立即停止，不能重试、自动切换模型或输出 deterministic fallback 冒充模型结果。
+- 普通模型请求使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 120）；真实草案通过实际 HTTP 调用参数覆盖为 `CHANGE_DRAFT_TIMEOUT_SECONDS`（默认 240，可在 `.env` 调整）。草案超时错误码是 `MODEL_TIMEOUT`，只表示客户端等待超过上限，不能区分网关排队和推理耗时。
 - 同一进程、同一 base URL/API Key/实际 model ID 的调用共享模型路由门禁；主模型普通路径默认最大并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实变更草案任务之间固定并发 `1`，且请求取得所选模型路由的独占槽位，因此不会与本进程内同模型的抽取、问答或其他 Runtime Worker 重叠。不同 model ID 的门禁和上限相互独立。
 - 真实草案关闭底层隐藏 HTTP retry；草案服务只对已收到响应正文后的 JSON/装配协议失败进行一次显式修复。可通过 `CHANGE_DRAFT_FALLBACK_MODEL` 配置同一兼容端点上的备用模型；只有 429、`count/limit` 等明确容量错误才从主模型切换一次。超时不能证明远端推理已结束，因此既不重试也不切换备用模型。实际路由写入 revision，避免混淆不同模型的能力结果。`/api/health.model_requests.routes` 提供各路由的进程级活动/等待/峰值诊断，但不能约束其他进程或其他主机。
+- 真实草案根记录、revision `model_usage` 和 Runtime checkpoint 保存非敏感 `generation_budget` / `generation_performance`，包括案例/卡片计数、Prompt 大小、输出预算、请求次数、起止时间、客户端等待耗时和响应大小；没有供应商 usage 时不得估算 token，也不得写入 Prompt 正文。
 - `DEMO_MODE=true` 时，安全且可逆的 Demo 子功能默认启用。破坏性或敏感例外仍默认关闭，当前包括 `DEMO_FULL_RESET_ENABLED=false` 和 `REAL_CHANGE_GENERATION_ENABLED=false`。
 - 真实草案生成必须有已激活且结构一致的 SchemaProfile，且第一版只生成/审核/导出，不注册真实执行工具。
 - Web 当前使用共享 token 而非组织级身份。公网暴露、多租户、正式审计和职责分离均不在当前实现能力内。

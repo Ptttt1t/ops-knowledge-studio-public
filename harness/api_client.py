@@ -18,6 +18,14 @@ class APIError(RuntimeError):
     """Raised when a DeepSeek API request fails or is malformed."""
 
 
+class APITimeoutError(APIError):
+    """Raised when the client-side wait limit for one provider request expires."""
+
+    def __init__(self, timeout_seconds: int):
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"DeepSeek API 请求超时（等待上限 {timeout_seconds} 秒）")
+
+
 class JSONOutputError(APIError):
     """Raised when a model response contains text that is not valid JSON.
 
@@ -214,6 +222,7 @@ class DeepSeekClient:
         max_tokens: int | None = None,
         thinking_mode: str | None = None,
         http_retries: int | None = None,
+        timeout_seconds: int | None = None,
         exclusive: bool = False,
         model: str | None = None,
         model_max_concurrency: int | None = None,
@@ -265,13 +274,20 @@ class DeepSeekClient:
         )
         if maximum_retries < 0:
             raise APIError("HTTP 重试次数不能小于 0")
+        request_timeout_seconds = (
+            self.settings.timeout_seconds
+            if timeout_seconds is None
+            else int(timeout_seconds)
+        )
+        if request_timeout_seconds <= 0:
+            raise APIError("模型请求等待上限必须大于 0")
 
         raw = ""
         retryable_http_codes = {408, 429, 500, 502, 503, 504}
         with route_gate.lease(exclusive=exclusive):
             for attempt in range(maximum_retries + 1):
                 try:
-                    with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+                    with urlopen(request, timeout=request_timeout_seconds) as response:
                         raw = _read_limited(
                             response,
                             self.settings.model_max_response_bytes,
@@ -306,7 +322,7 @@ class DeepSeekClient:
                         raise APIError(f"无法连接 DeepSeek API: {exc.reason}") from exc
                 except TimeoutError as exc:
                     if attempt >= maximum_retries:
-                        raise APIError("DeepSeek API 请求超时") from exc
+                        raise APITimeoutError(request_timeout_seconds) from exc
 
                 delay = min(
                     self.settings.api_retry_initial_seconds * (2**attempt),
@@ -352,6 +368,7 @@ class DeepSeekClient:
         retries: int = 2,
         max_tokens: int | None = None,
         http_retries: int | None = None,
+        timeout_seconds: int | None = None,
         exclusive: bool = False,
         model: str | None = None,
         model_max_concurrency: int | None = None,
@@ -370,6 +387,7 @@ class DeepSeekClient:
                 max_tokens=max_tokens,
                 thinking_mode="disabled",
                 http_retries=http_retries,
+                timeout_seconds=timeout_seconds,
                 exclusive=exclusive,
                 model=model,
                 model_max_concurrency=model_max_concurrency,

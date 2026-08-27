@@ -4,15 +4,21 @@ from dataclasses import replace
 from copy import deepcopy
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import time
 import unittest
 from urllib.request import Request, urlopen
 
-from harness.api_client import APIError, JSONOutputError
-from knowledge_platform.change_drafts import ChangeDraftError, GENERATION_SYSTEM_PROMPT
+from harness.api_client import APIError, APITimeoutError, JSONOutputError
+from knowledge_platform.change_drafts import (
+    ChangeDraftError,
+    ChangeDraftStore,
+    GENERATION_SYSTEM_PROMPT,
+)
 from knowledge_platform.retrieval import SearchHit
+from knowledge_platform.runtime_tasks import create_knowledge_runtime
 from knowledge_platform.service import KnowledgeService
 from knowledge_platform.web import create_server
 from tests.test_change_order_extraction import (
@@ -200,7 +206,7 @@ class TimeoutRealDraftClient(RealDraftClient):
             return super().chat_json(system_prompt, user_prompt, **kwargs)
         self.generation_calls.append((system_prompt, user_prompt))
         self.generation_kwargs.append(dict(kwargs))
-        raise APIError("DeepSeek API 请求超时")
+        raise APITimeoutError(int(kwargs["timeout_seconds"]))
 
 
 class CapacityFailoverRealDraftClient(RealDraftClient):
@@ -233,6 +239,47 @@ def real_request() -> dict:
 
 
 class RealChangeDraftTests(unittest.TestCase):
+    def test_existing_draft_database_gets_diagnostics_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "legacy-change-drafts.db"
+            connection = sqlite3.connect(database_path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE change_drafts (
+                        draft_id TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL DEFAULT '',
+                        mode TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        request_json TEXT NOT NULL,
+                        selected_case_ids TEXT NOT NULL,
+                        held_out_case_id TEXT NOT NULL DEFAULT '',
+                        profile_id TEXT NOT NULL,
+                        current_revision INTEGER NOT NULL DEFAULT 0,
+                        model_error TEXT NOT NULL DEFAULT '',
+                        created_by TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = ChangeDraftStore(database_path)
+            connection = store.connect()
+            try:
+                columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(change_drafts)")
+                }
+            finally:
+                connection.close()
+
+            self.assertIn("model_error_code", columns)
+            self.assertIn("generation_diagnostics_json", columns)
+
     def make_service(
         self, root: Path, client: RealDraftClient, **setting_overrides
     ) -> KnowledgeService:
@@ -305,6 +352,12 @@ class RealChangeDraftTests(unittest.TestCase):
             generated = service.change_drafts.generate(draft["draft_id"])
 
             self.assertEqual(len(client.generation_calls), 2)
+            self.assertTrue(
+                all(
+                    call["timeout_seconds"] == 240
+                    for call in client.generation_kwargs
+                )
+            )
             self.assertEqual(generated["status"], "READY_FOR_REVIEW")
             self.assertTrue(generated["revision"]["validation"]["passed"])
             self.assertTrue(
@@ -327,6 +380,31 @@ class RealChangeDraftTests(unittest.TestCase):
                     "sample" in spec
                     for spec in prompt_payload["schema_profile"]["task_fields"].values()
                 )
+            )
+            diagnostics = generated["generation_diagnostics"]
+            budget = diagnostics["generation_budget"]
+            performance = diagnostics["generation_performance"]
+            self.assertEqual(budget["timeout_seconds"], 240)
+            self.assertEqual(budget["max_output_tokens"], 8192)
+            self.assertEqual(budget["max_context_cards"], 24)
+            self.assertEqual(budget["selected_case_count"], 1)
+            self.assertGreater(budget["prompt_chars"], 0)
+            self.assertGreaterEqual(budget["prompt_bytes"], budget["prompt_chars"])
+            self.assertGreaterEqual(
+                budget["available_context_card_count"],
+                budget["selected_context_card_count"],
+            )
+            self.assertEqual(performance["model_request_count"], 2)
+            self.assertEqual(performance["timeout_seconds"], 240)
+            self.assertGreaterEqual(performance["elapsed_seconds"], 0)
+            self.assertGreater(performance["response_chars"], 0)
+            self.assertEqual(performance["total_tokens"], 125)
+            self.assertEqual(
+                generated["revision"]["model_usage"]["generation_budget"], budget
+            )
+            self.assertEqual(
+                generated["revision"]["model_usage"]["generation_performance"],
+                performance,
             )
 
             approved = service.change_drafts.review_draft(
@@ -448,11 +526,16 @@ class RealChangeDraftTests(unittest.TestCase):
                 actor="pilot-operator",
             )
 
-            with self.assertRaisesRegex(APIError, "请求超时"):
+            with self.assertRaisesRegex(
+                ChangeDraftError,
+                "超过当前 240 秒等待上限，本次未自动重试",
+            ) as raised:
                 service.change_drafts.generate(draft["draft_id"])
 
+            self.assertEqual(raised.exception.code, "MODEL_TIMEOUT")
             self.assertEqual(len(client.generation_calls), 1)
             self.assertEqual(client.generation_kwargs[0]["http_retries"], 0)
+            self.assertEqual(client.generation_kwargs[0]["timeout_seconds"], 240)
             self.assertEqual(
                 client.generation_kwargs[0]["model"], "deepseek-v4-flash"
             )
@@ -460,7 +543,58 @@ class RealChangeDraftTests(unittest.TestCase):
             failed = service.change_drafts.store.get_draft(draft["draft_id"])
             assert failed is not None
             self.assertEqual(failed["status"], "GENERATION_FAILED")
-            self.assertEqual(failed["model_error"], "DeepSeek API 请求超时")
+            self.assertEqual(failed["model_error_code"], "MODEL_TIMEOUT")
+            self.assertEqual(
+                failed["model_error"],
+                "真实变更草案生成超过当前 240 秒等待上限，本次未自动重试。",
+            )
+            diagnostics = failed["generation_diagnostics"]
+            self.assertEqual(diagnostics["error_code"], "MODEL_TIMEOUT")
+            self.assertEqual(
+                diagnostics["generation_performance"]["model_request_count"], 1
+            )
+            self.assertEqual(
+                diagnostics["generation_budget"]["selected_context_cards"],
+                diagnostics["generation_budget"]["selected_context_card_count"],
+            )
+
+    def test_timeout_diagnostics_are_preserved_in_runtime_step_and_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = TimeoutRealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+            runtime = create_knowledge_runtime(service, worker_count=1)
+            try:
+                submitted, created = runtime.submit(
+                    "change.generate_real_draft",
+                    {"draft_id": draft["draft_id"], "actor": "pilot-operator"},
+                )
+                completed = runtime.wait(submitted["id"], timeout_seconds=5)
+            finally:
+                runtime.stop()
+
+            self.assertTrue(created)
+            assert completed is not None
+            self.assertEqual(completed["status"], "FAILED")
+            self.assertEqual(completed["error_code"], "MODEL_TIMEOUT")
+            checkpoint = runtime.store.latest_checkpoint(submitted["id"])
+            assert checkpoint is not None
+            state = checkpoint["state"]
+            self.assertEqual(state["phase"], "real_change_draft_generation_failed")
+            self.assertEqual(state["error_code"], "MODEL_TIMEOUT")
+            self.assertEqual(
+                state["generation_diagnostics"]["model_request_count"], 1
+            )
+            steps = runtime.store.list_steps(submitted["id"])
+            self.assertEqual(steps[-1]["error_code"], "MODEL_TIMEOUT")
 
     def test_capacity_error_automatically_uses_configured_fallback_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -553,6 +687,12 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertEqual(len(client.generation_calls), 2)
             self.assertTrue(
                 all(call.get("retries") == 0 for call in client.generation_kwargs)
+            )
+            self.assertTrue(
+                all(
+                    call.get("timeout_seconds") == 240
+                    for call in client.generation_kwargs
+                )
             )
             self.assertTrue(
                 all(

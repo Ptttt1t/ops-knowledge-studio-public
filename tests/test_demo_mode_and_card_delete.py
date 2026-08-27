@@ -37,6 +37,24 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, "固定为 1"):
                 Settings.load(env_file)
 
+    def test_change_draft_timeout_defaults_to_240_and_supports_env_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text("DEMO_MODE=true\n", encoding="utf-8")
+            defaults = Settings.load(env_file)
+            self.assertEqual(defaults.change_draft_timeout_seconds, 240)
+            self.assertEqual(
+                defaults.public_config()["real_change_generation"]["timeout_seconds"],
+                240,
+            )
+
+            env_file.write_text(
+                "DEMO_MODE=true\nCHANGE_DRAFT_TIMEOUT_SECONDS=315\n",
+                encoding="utf-8",
+            )
+            overridden = Settings.load(env_file)
+            self.assertEqual(overridden.change_draft_timeout_seconds, 315)
+
     def test_change_draft_fallback_model_configuration_is_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             env_file = Path(directory) / ".env"
