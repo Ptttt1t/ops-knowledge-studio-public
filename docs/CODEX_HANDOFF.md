@@ -39,16 +39,16 @@
 
 ## Work In Progress
 
-None. 代码、文档和本地回归已完成，当前位于功能分支，尚未合并或推送到 GitHub `main`。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
-合并发布后，内网先使用页面“安全退出”停止旧服务并确认网关并发归零，再升级且只启动一个平台进程。只触发一次真实草案并比较 `/api/health.model_requests.routes`：如果仍超时，应看到 run 约 120 秒且 `total_requests +1`。随后由网关管理员提供脱敏的 queue/inference 时间，再决定采用草案专用有界超时、流式读取、缩减上下文/输出预算或更快模型；不要恢复自动超时重试。
+内网先使用页面“安全退出”停止旧服务并确认网关并发归零，再升级且只启动一个平台进程。只触发一次真实草案并比较 `/api/health.model_requests.routes`：如果仍超时，应看到 run 约 120 秒且 `total_requests +1`。随后由网关管理员提供脱敏的 queue/inference 时间，再决定采用草案专用有界超时、流式读取、缩减上下文/输出预算或更快模型；不要恢复自动超时重试。
 
 ## Last Updated
 
 - Date: 2026-08-27 (Asia/Shanghai)
-- Current branch: `codex/fix-change-draft-timeout-retry`
-- Base commit: `78a7f426be598fbc06928a32b580689c10ba3ad6`
-- Publication status: not merged or pushed to `github/main`
+- Current branch: `main`
+- Published feature commit: `636d8eee680efdc6b76efb44b5937d54c06aa207`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
