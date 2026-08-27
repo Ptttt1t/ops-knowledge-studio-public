@@ -42,16 +42,16 @@
 
 ## Work In Progress
 
-None. 代码和回归已完成，当前位于功能分支，尚未合并或推送到 GitHub `main`。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
-复核并将该功能分支合并发布到 `github/main`；随后由内网人工升级，在无任务、单个长模型请求和模型请求加队列任务三种情况下分别点击“安全退出”，确认页面计数归零、Python 进程退出、供应商并发槽位释放。只反馈脱敏后的计数和错误类型，不反馈真实 ChangeOrder、知识卡或内部地址。
+由内网人工升级，在无任务、单个长模型请求和模型请求加队列任务三种情况下分别点击“安全退出”，确认页面计数归零、Python 进程退出、供应商并发槽位释放。只反馈脱敏后的计数和错误类型，不反馈真实 ChangeOrder、知识卡或内部地址。
 
 ## Last Updated
 
-- Date: 2026-08-26 (Asia/Shanghai)
-- Current branch: `codex/demo-safe-shutdown`
-- Base commit: `a904093`
-- Publication status: not merged or pushed to `github/main`
+- Date: 2026-08-27 (Asia/Shanghai)
+- Current branch: `main`
+- Published feature commit: `352c375e2efe93c8431dd8e90efd6c8db623efed`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
