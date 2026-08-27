@@ -194,6 +194,15 @@ class AccountLimitRealDraftClient(RealDraftClient):
         )
 
 
+class TimeoutRealDraftClient(RealDraftClient):
+    def chat_json(self, system_prompt, user_prompt, **kwargs):
+        if system_prompt != GENERATION_SYSTEM_PROMPT:
+            return super().chat_json(system_prompt, user_prompt, **kwargs)
+        self.generation_calls.append((system_prompt, user_prompt))
+        self.generation_kwargs.append(dict(kwargs))
+        raise APIError("DeepSeek API 请求超时")
+
+
 class CapacityFailoverRealDraftClient(RealDraftClient):
     def chat_json(self, system_prompt, user_prompt, **kwargs):
         if system_prompt != GENERATION_SYSTEM_PROMPT:
@@ -419,6 +428,39 @@ class RealChangeDraftTests(unittest.TestCase):
             failed = service.change_drafts.store.get_draft(draft["draft_id"])
             assert failed is not None
             self.assertEqual(failed["status"], "GENERATION_FAILED")
+
+    def test_timeout_stops_after_one_request_without_protocol_retry_or_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = TimeoutRealDraftClient()
+            service = self.make_service(
+                root,
+                client,
+                change_draft_fallback_model="synthetic-qwen-27b",
+                change_draft_fallback_model_max_concurrency=6,
+            )
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+
+            with self.assertRaisesRegex(APIError, "请求超时"):
+                service.change_drafts.generate(draft["draft_id"])
+
+            self.assertEqual(len(client.generation_calls), 1)
+            self.assertEqual(client.generation_kwargs[0]["http_retries"], 0)
+            self.assertEqual(
+                client.generation_kwargs[0]["model"], "deepseek-v4-flash"
+            )
+            self.assertTrue(client.generation_kwargs[0]["exclusive"])
+            failed = service.change_drafts.store.get_draft(draft["draft_id"])
+            assert failed is not None
+            self.assertEqual(failed["status"], "GENERATION_FAILED")
+            self.assertEqual(failed["model_error"], "DeepSeek API 请求超时")
 
     def test_capacity_error_automatically_uses_configured_fallback_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

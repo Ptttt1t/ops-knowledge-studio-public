@@ -343,9 +343,9 @@ RealChangeRequest
 - 所有具体值必须来自表单；无来源参数直接失败。
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
-- 模型协议失败只允许一次协议修复；仍失败则保留诊断并停止，不生成规则 fallback 草案。
+- 只有已收到响应正文但 JSON 或草案结构不合规时才允许一次协议修复；超时、连接失败和 HTTP 错误立即停止，不再发送第二个远程请求，也不生成规则 fallback 草案。
 - 同一进程按 base URL、API Key 指纹和实际模型建立共享门禁；主模型普通路径最多并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实草案在所选模型路由上申请独占槽位，不与本进程内同模型的抽取、问答或其他 Runtime Worker 请求重叠。
-- 真实草案任务之间的最大并发固定为 `CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1`，且关闭底层隐藏 HTTP 重试。若主模型返回 HTTP 429、`count/limit` 或等价容量错误，并且配置了 `CHANGE_DRAFT_FALLBACK_MODEL`，程序才用同一端点和凭据尝试备用模型一次；协议、内容或硬校验失败不会触发换模型。
+- 真实草案任务之间的最大并发固定为 `CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1`，且关闭底层隐藏 HTTP 重试。若主模型返回 HTTP 429、`count/limit` 或等价容量错误，并且配置了 `CHANGE_DRAFT_FALLBACK_MODEL`，程序才用同一端点和凭据尝试备用模型一次；超时不会自动重试或切换模型，因为供应商侧原推理可能仍未结束。
 - 每个 revision 的 `model_usage.model_routing` 记录实际模型、是否回退和尝试顺序；全库模式与盲测报告因此可按模型区分。`/api/health.model_requests.routes` 显示各模型路由的活动/等待请求、峰值和独占状态。
 - 只有当前 `REVIEW_APPROVED` revision 可以导出。
 - 留一案例盲测会在生成期间隔离目标及内容近重复案例。
@@ -461,7 +461,7 @@ python -m compileall -q harness knowledge_platform tests
 node --check knowledge_platform/static/app.js
 ```
 
-当前分支回归结果：`157 tests passed`。
+当前分支回归结果：`158 tests passed`。
 
 测试覆盖：
 

@@ -13,6 +13,8 @@ import unicodedata
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
+from harness.api_client import JSONOutputError
+
 from .change_order_adapter import build_change_order_extraction_plan
 from .schema import CardStatus
 
@@ -1857,11 +1859,14 @@ class RealChangeDraftService:
                         GENERATION_SYSTEM_PROMPT,
                         user_prompt,
                     )
-                except Exception as exc:
-                    validation_error = f"模型请求失败：{exc}"
-                    previous_protocol_output = getattr(exc, "raw_output", None)
-                    if self._is_capacity_error(exc):
-                        raise
+                except JSONOutputError as exc:
+                    # A protocol repair is safe only after the provider returned
+                    # a response body that could not be parsed as JSON. Transport
+                    # failures (including timeouts) may leave remote inference
+                    # running, so retrying them can create a second provider job
+                    # and consume another account-concurrency slot.
+                    validation_error = f"模型 JSON 协议失败：{exc}"
+                    previous_protocol_output = exc.raw_output
                     if attempt:
                         raise
                     continue

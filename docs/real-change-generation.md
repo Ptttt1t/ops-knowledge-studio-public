@@ -65,7 +65,7 @@ CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=2
 
 `CHANGE_DRAFT_FALLBACK_MODEL` 留空时禁用模型切换。启用时必须填写当前 DeepSeek-compatible 网关接受的精确 Qwen model ID，而不是界面展示名；第一版备用模型与主模型共用 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_API_KEY`。主模型只有在 HTTP 429、错误包含 `count/limit`、账户限额或等价容量信号时，才会切换备用模型一次。协议解析、内容错误和硬门禁失败不会触发换模型。实际选用模型、是否回退和尝试顺序写入 revision 的 `model_usage.model_routing`。
 
-草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。程序仍允许一次独立协议修复；容量错误不会在同一模型上立即追加修复请求。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
+草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。只有供应商已经返回正文但 JSON 无法解析，或者 JSON 可解析但草案结构未通过确定性装配时，程序才允许一次独立协议修复。超时、连接失败和非容量 HTTP 错误立即失败，不得作为协议修复再次请求；超时也不自动切换备用模型，因为客户端超时不能证明供应商侧原推理已经结束。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
 
 诊断接口：
 
@@ -111,7 +111,7 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
   --编辑--> 新 revision -> READY_FOR_REVIEW 或 BLOCKED
 ```
 
-模型请求失败或输出不符合协议时最多进行一次修复重试。第二次仍失败会保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。
+模型已经返回内容但输出不符合 JSON/草案协议时，最多进行一次修复重试。模型传输失败不重试；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。
 
 ## 硬门禁
 
