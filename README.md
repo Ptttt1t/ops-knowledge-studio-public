@@ -330,6 +330,7 @@ CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=2
 
 ```text
 RealChangeRequest
+→ 输入/Profile 确定性绑定预检
 → 推荐并人工确认 1–3 个完整 APPROVED 案例包
 → GeneratedChangeDraft
 → 程序确定性装配真实 JSON
@@ -341,11 +342,13 @@ RealChangeRequest
 主要门禁：
 
 - 没有激活且结构一致的 Profile 时禁止生成。
+- 当 Profile 将 `change_scene` 定义为对象时，页面分别收集场景中文名、英文名和唯一标识，并按 Profile `sample` 的键和子字段类型确定性装配；`sample` 只用于描述结构，绝不复制其中的历史值。旧 API 客户端也可通过 `parameters.change_scene` 传入同一对象。
+- 场景英文名、唯一标识等 Profile 样例中原本非空而本次未提供的字段会写类型安全空值并进入缺失项硬门禁，不会从历史案例补值。
 - 案例包必须完整读取；超出上下文预算时要求减少案例，不静默截断。
 - 所有具体值必须来自表单；无来源参数直接失败。
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
-- 只有已收到响应正文但 JSON 或草案结构不合规时才允许一次协议修复；超时、连接失败和 HTTP 错误立即停止，不再发送第二个远程请求，也不生成规则 fallback 草案。
+- 只有已收到响应正文且模型负责的 JSON 或 `GeneratedChangeDraft` 协议不合规时才允许一次协议修复。请求/Profile 输入绑定会在模型调用前预检，错误码为 `REQUEST_PROFILE_BINDING_ERROR`；这类确定性错误即使在装配阶段暴露也立即停止，绝不发送第二个远程请求。超时、连接失败和 HTTP 错误同样立即停止，也不生成规则 fallback 草案。
 - 普通模型请求继续使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 120）；真实草案单独使用 `CHANGE_DRAFT_TIMEOUT_SECONDS`（默认 240）。修改实际 `.env` 后重启服务即可调整草案上限，不会同时放宽知识抽取和问答。
 - 同一进程按 base URL、API Key 指纹和实际模型建立共享门禁；主模型普通路径最多并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实草案在所选模型路由上申请独占槽位，不与本进程内同模型的抽取、问答或其他 Runtime Worker 请求重叠。
 - 真实草案任务之间的最大并发固定为 `CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1`，且关闭底层隐藏 HTTP 重试。若主模型返回 HTTP 429、`count/limit` 或等价容量错误，并且配置了 `CHANGE_DRAFT_FALLBACK_MODEL`，程序才用同一端点和凭据尝试备用模型一次；超时不会自动重试或切换模型，因为供应商侧原推理可能仍未结束。

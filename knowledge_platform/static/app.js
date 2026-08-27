@@ -1519,9 +1519,15 @@ function realChangeRequest() {
   if (!parameters || Array.isArray(parameters) || typeof parameters !== "object") {
     throw new Error("已知参数必须是 JSON 对象");
   }
+  const scenario = document.getElementById("real-change-scenario").value.trim();
   return {
     goal: document.getElementById("real-change-goal").value.trim(),
-    scenario: document.getElementById("real-change-scenario").value.trim(),
+    scenario,
+    scenario_reference: {
+      name_cn: scenario,
+      name_en: document.getElementById("real-change-scenario-name-en").value.trim(),
+      unique_id: document.getElementById("real-change-scenario-unique-id").value.trim(),
+    },
     region: document.getElementById("real-change-region").value.trim(),
     services: realChangeLines("real-change-services"),
     objects: realChangeLines("real-change-objects"),

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 from harness.api_client import APIError, APITimeoutError, JSONOutputError
 from knowledge_platform.change_drafts import (
+    ChangeDraftBindingError,
     ChangeDraftError,
     ChangeDraftStore,
     GENERATION_SYSTEM_PROMPT,
@@ -238,6 +239,21 @@ def real_request() -> dict:
     }
 
 
+def synthetic_scene_reference() -> dict:
+    return {
+        "abbrev": None,
+        "change_target_type": None,
+        "coa_auto_auth": None,
+        "deleted": None,
+        "index": None,
+        "name_cn": "虚构容量调整",
+        "name_en": "synthetic capacity adjustment",
+        "need_customer_review": None,
+        "type": None,
+        "unique_id": "SYNTH000001",
+    }
+
+
 class RealChangeDraftTests(unittest.TestCase):
     def test_existing_draft_database_gets_diagnostics_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -292,9 +308,18 @@ class RealChangeDraftTests(unittest.TestCase):
         )
         return KnowledgeService(settings, client=client)
 
-    def prepare_case(self, service: KnowledgeService, root: Path, name: str = "case") -> dict:
+    def prepare_case(
+        self,
+        service: KnowledgeService,
+        root: Path,
+        name: str = "case",
+        *,
+        payload: dict | None = None,
+    ) -> dict:
         source_path = root / f"{name}.json"
-        source_path.write_text(source_json(make_semantic_payload()), encoding="utf-8")
+        source_path.write_text(
+            source_json(payload or make_semantic_payload()), encoding="utf-8"
+        )
         result = service.ingest_file(source_path)
         service.review_case_bundle(
             result["case_id"], action="approve", reviewer="schema-admin"
@@ -329,6 +354,13 @@ class RealChangeDraftTests(unittest.TestCase):
         return service.change_drafts.activate_schema_profile(
             profile, actor="schema-admin"
         )
+
+    def prepare_object_scene_case(
+        self, service: KnowledgeService, root: Path, name: str = "object-scene"
+    ) -> dict:
+        payload = make_semantic_payload()
+        payload["data"]["change_scene"] = synthetic_scene_reference()
+        return self.prepare_case(service, root, name=name, payload=payload)
 
     def test_generate_review_export_and_edit_invalidates_approval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -427,6 +459,166 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertEqual(edited["status"], "READY_FOR_REVIEW")
             with self.assertRaisesRegex(ChangeDraftError, "只有人工审核通过"):
                 service.change_drafts.export_draft(draft["draft_id"])
+
+    def test_object_change_scene_is_built_from_input_with_profile_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_object_scene_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            request = real_request()
+            request["scenario"] = "虚构链路切换"
+            request["scenario_reference"] = {
+                "name_cn": "虚构链路切换",
+                "name_en": "synthetic route cutover",
+                "unique_id": "SCENE000001",
+            }
+
+            draft = service.change_drafts.create_draft(
+                request,
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            scene = generated["revision"]["change"]["data"]["change_scene"]
+            self.assertEqual(set(scene), set(synthetic_scene_reference()))
+            self.assertEqual(scene["name_cn"], "虚构链路切换")
+            self.assertEqual(scene["name_en"], "synthetic route cutover")
+            self.assertEqual(scene["unique_id"], "SCENE000001")
+            self.assertTrue(
+                all(
+                    scene[name] is None
+                    for name in set(scene)
+                    - {"name_cn", "name_en", "unique_id"}
+                )
+            )
+            self.assertNotEqual(
+                scene["unique_id"], synthetic_scene_reference()["unique_id"]
+            )
+            self.assertEqual(len(client.generation_calls), 1)
+
+    def test_missing_scene_reference_values_block_without_copying_profile_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_object_scene_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            scene = generated["revision"]["change"]["data"]["change_scene"]
+            missing = generated["revision"]["normalized"]["missing_fields"]
+            self.assertEqual(scene["name_cn"], real_request()["scenario"])
+            self.assertEqual(scene["name_en"], "")
+            self.assertEqual(scene["unique_id"], "")
+            self.assertIn("context.change_scene.name_en", missing)
+            self.assertIn("context.change_scene.unique_id", missing)
+            self.assertEqual(generated["status"], "BLOCKED")
+            self.assertEqual(len(client.generation_calls), 1)
+            self.assertEqual(
+                generated["generation_diagnostics"]["generation_budget"][
+                    "preflight_missing_field_count"
+                ],
+                2,
+            )
+
+    def test_invalid_scene_binding_fails_before_model_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_object_scene_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            request = real_request()
+            request["parameters"] = {"change_scene": "not-an-object"}
+
+            with self.assertRaisesRegex(
+                ChangeDraftError, "parameters.change_scene 类型错误"
+            ) as raised:
+                service.change_drafts.create_draft(
+                    request,
+                    selected_case_ids=[case["case_id"]],
+                    actor="pilot-operator",
+                )
+
+            self.assertEqual(
+                raised.exception.code, "REQUEST_PROFILE_BINDING_ERROR"
+            )
+            self.assertEqual(len(client.generation_calls), 0)
+
+    def test_late_deterministic_binding_error_does_not_protocol_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+
+            def fail_assembly(_normalized, **_kwargs):
+                raise ChangeDraftBindingError("synthetic deterministic binding")
+
+            service.change_drafts._assemble = fail_assembly  # type: ignore[method-assign]
+            with self.assertRaisesRegex(
+                ChangeDraftBindingError, "synthetic deterministic binding"
+            ):
+                service.change_drafts.generate(draft["draft_id"])
+
+            self.assertEqual(len(client.generation_calls), 1)
+            failed = service.change_drafts.store.get_draft(draft["draft_id"])
+            assert failed is not None
+            self.assertEqual(
+                failed["model_error_code"], "REQUEST_PROFILE_BINDING_ERROR"
+            )
+            self.assertEqual(
+                failed["generation_diagnostics"]["model_request_count"], 1
+            )
+
+    def test_parameters_change_scene_remains_supported_for_api_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_object_scene_case(service, root)
+            self.activate_profile(service, case["case_id"])
+            self.force_bundle_hits(service, case["case_id"])
+            request = real_request()
+            request["parameters"] = {
+                "change_scene": {
+                    "name_cn": "虚构参数切换",
+                    "name_en": "synthetic parameter cutover",
+                    "unique_id": "SCENE000002",
+                }
+            }
+
+            draft = service.change_drafts.create_draft(
+                request,
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            scene = generated["revision"]["change"]["data"]["change_scene"]
+            self.assertEqual(scene["name_cn"], "虚构参数切换")
+            self.assertEqual(scene["name_en"], "synthetic parameter cutover")
+            self.assertEqual(scene["unique_id"], "SCENE000002")
+            self.assertEqual(generated["status"], "READY_FOR_REVIEW")
+            self.assertEqual(len(client.generation_calls), 1)
 
     def test_real_change_generation_model_calls_are_serialized(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -66,9 +66,9 @@ CHANGE_DRAFT_FALLBACK_MODEL_MAX_CONCURRENCY=2
 
 `CHANGE_DRAFT_FALLBACK_MODEL` 留空时禁用模型切换。启用时必须填写当前 DeepSeek-compatible 网关接受的精确 Qwen model ID，而不是界面展示名；第一版备用模型与主模型共用 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_API_KEY`。主模型只有在 HTTP 429、错误包含 `count/limit`、账户限额或等价容量信号时，才会切换备用模型一次。协议解析、内容错误和硬门禁失败不会触发换模型。实际选用模型、是否回退和尝试顺序写入 revision 的 `model_usage.model_routing`。
 
-`CHANGE_DRAFT_TIMEOUT_SECONDS` 是真实草案专用的客户端等待上限，代码默认 `240`，也可在部署环境的 `.env` 中覆盖；修改后需要重启服务。普通抽取、问答和其他 DeepSeek 请求仍使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 `120`）。该时间包含客户端等待网关排队和生成完成的总时间，客户端无法据此拆分 queue 与 inference 耗时。
+`CHANGE_DRAFT_TIMEOUT_SECONDS` 是真实草案专用的客户端等待上限，代码默认 `240`，也可直接在部署环境的 `.env` 中覆盖，例如 `CHANGE_DRAFT_TIMEOUT_SECONDS=360`；修改后需要重启服务。普通抽取、问答和其他 DeepSeek 请求仍使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 `120`）。该时间包含客户端等待网关排队和生成完成的总时间，客户端无法据此拆分 queue 与 inference 耗时。
 
-草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。只有供应商已经返回正文但 JSON 无法解析，或者 JSON 可解析但草案结构未通过确定性装配时，程序才允许一次独立协议修复。超时、连接失败和非容量 HTTP 错误立即失败，不得作为协议修复再次请求；超时也不自动切换备用模型，因为客户端超时不能证明供应商侧原推理已经结束。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
+草案调用显式设置 HTTP retry 为 `0`，避免全局 `DEEPSEEK_MAX_RETRIES=2` 将一次草案尝试放大为三次网关请求。只有供应商已经返回正文但 JSON 无法解析，或者 JSON 可解析但模型负责的 `GeneratedChangeDraft` 协议不合规时，程序才允许一次独立协议修复。`RealChangeRequest` 与 Profile 的字段/类型绑定属于确定性输入错误，会在模型调用前预检；它即使在装配阶段暴露也立即失败，错误码为 `REQUEST_PROFILE_BINDING_ERROR`，不会进入协议修复。超时、连接失败和非容量 HTTP 错误同样不得作为协议修复再次请求；超时也不自动切换备用模型，因为客户端超时不能证明供应商侧原推理已经结束。若主、备模型都不可用，则保留错误并停止，不输出部分草案或规则兜底。
 
 每个草案根记录和当前 revision 的 `model_usage` 会保存 `generation_budget` / `generation_performance`。字段包含模型、timeout、案例和上下文卡计数、Prompt 字符/字节数、最大输出 token、模型请求次数、起止时间、客户端等待耗时和响应大小；只有供应商可靠返回 usage 时才保存 token 计数。Runtime 成功或失败 checkpoint 也保留同一组统计，但不保存 Prompt 或完整 payload。达到草案等待上限时错误码为 `MODEL_TIMEOUT`，页面显示“真实变更草案生成超过当前 N 秒等待上限，本次未自动重试”。
 
@@ -95,7 +95,7 @@ GET /api/health
 
 ## 正常生成流程
 
-1. 填写目标、场景、区域、服务、对象、当前/目标状态、窗口、影响范围、约束、参数和验证要求。
+1. 填写目标、场景中文名、场景英文名、场景唯一标识、区域、服务、对象、当前/目标状态、窗口、影响范围、约束、参数和验证要求。API 请求使用 `scenario_reference={name_cn,name_en,unique_id}`；兼容旧客户端的高级方式是 `parameters.change_scene` 对象。
 2. 点击“推荐完整案例包”。系统只从完整且为 `APPROVED` 的案例包中推荐最多三个，并检查字段集合与活动 Profile 一致。
 3. 人工确认 1～3 个案例包。系统按原顺序读取上下文、任务、前检、实施、验证和回退卡，排除 `EXECUTION_RESULT`；超出上下文预算时要求减少案例，不会静默截断。
 4. 异步生成 `GeneratedChangeDraft`。模型只生成规范化任务、四阶段步骤、风险、缺失项和引用。
@@ -116,13 +116,14 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
   --编辑--> 新 revision -> READY_FOR_REVIEW 或 BLOCKED
 ```
 
-模型已经返回内容但输出不符合 JSON/草案协议时，最多进行一次修复重试。模型传输失败不重试；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。
+模型已经返回内容但输出不符合 JSON/`GeneratedChangeDraft` 协议时，最多进行一次修复重试。输入/Profile 类型冲突不是模型协议问题：程序会在远程调用前阻断；缺失的结构化场景值进入 revision 的 `missing_fields` 并阻断审核；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。
 
 ## 硬门禁
 
 导出前必须全部满足：
 
 - ChangeOrder Adapter 与活动 SchemaProfile 结构一致；
+- Profile 为对象的 `change_scene` 按 `sample` 的键和子类型确定性装配；样例值不复制。样例中非空但本次未输入的子字段必须出现在缺失项中；
 - 必填字段和 `input:<path>` 参数齐全；
 - 前检、实施、验证、回退四阶段均非空；
 - 扁平任务与程序派生分组视图完全对账；

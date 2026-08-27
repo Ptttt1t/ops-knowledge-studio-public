@@ -177,6 +177,13 @@ class ChangeDraftError(HarnessRuntimeError):
         self.code = code
 
 
+class ChangeDraftBindingError(ChangeDraftError):
+    """Deterministic request/Profile binding failure that a model cannot repair."""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="REQUEST_PROFILE_BINDING_ERROR")
+
+
 @dataclass(frozen=True)
 class RealChangeRequest:
     goal: str
@@ -188,6 +195,7 @@ class RealChangeRequest:
     target_state: str
     window: dict[str, str]
     impact_scope: str = ""
+    scenario_reference: dict[str, Any] = field(default_factory=dict)
     constraints: list[str] = field(default_factory=list)
     parameters: dict[str, Any] = field(default_factory=dict)
     validation_requirements: list[str] = field(default_factory=list)
@@ -214,8 +222,14 @@ class RealChangeRequest:
 
         window = payload.get("window") or {}
         parameters = payload.get("parameters") or {}
+        raw_scenario_reference = payload.get("scenario_reference")
+        scenario_reference = (
+            {} if raw_scenario_reference is None else raw_scenario_reference
+        )
         if not isinstance(window, dict) or not isinstance(parameters, dict):
             raise ChangeDraftError("window 和 parameters 必须是 JSON 对象")
+        if not isinstance(scenario_reference, dict):
+            raise ChangeDraftBindingError("scenario_reference 必须是 JSON 对象")
         return cls(
             goal=text("goal", required=True),
             scenario=text("scenario", required=True),
@@ -226,6 +240,9 @@ class RealChangeRequest:
             target_state=text("target_state", required=True),
             window={str(key): str(value) for key, value in window.items()},
             impact_scope=text("impact_scope"),
+            scenario_reference={
+                str(key): value for key, value in scenario_reference.items()
+            },
             constraints=strings("constraints"),
             parameters=dict(parameters),
             validation_requirements=strings("validation_requirements"),
@@ -244,6 +261,10 @@ class RealChangeRequest:
                 self.current_state,
                 self.target_state,
                 self.impact_scope,
+                *[
+                    f"{key} {value}"
+                    for key, value in self.scenario_reference.items()
+                ],
                 *self.constraints,
                 *self.validation_requirements,
                 *[f"{key} {value}" for key, value in self.parameters.items()],
@@ -1382,15 +1403,17 @@ class RealChangeDraftService:
         profile = self.store.active_profile()
         if profile is None:
             raise ChangeDraftError("没有已激活的 SchemaProfile")
+        request_dict = asdict(request)
+        self._validate_request_profile_bindings(request_dict, profile)
         selected = list(dict.fromkeys(str(item).strip() for item in selected_case_ids if str(item).strip()))
         if not 1 <= len(selected) <= self.knowledge.settings.change_generation_max_case_bundles:
             raise ChangeDraftError("必须确认 1 到 3 个推荐案例包")
-        recommendations = self.recommend(asdict(request), held_out_case_id=held_out_case_id, limit=3)
+        recommendations = self.recommend(request_dict, held_out_case_id=held_out_case_id, limit=3)
         allowed = {str(item["case_id"]) for item in recommendations["candidates"]}
         if not set(selected) <= allowed:
             raise ChangeDraftError("所选案例包不在当前推荐结果中，或已不再满足硬条件")
         return self.store.create_draft(
-            request=asdict(request),
+            request=request_dict,
             selected_case_ids=selected,
             profile_id=str(profile["profile_id"]),
             actor=actor.strip() or request.requester,
@@ -1632,7 +1655,12 @@ class RealChangeDraftService:
                 else:
                     value = raw_record[name]
             if not value_matches_type(value, expected_type):
-                raise ChangeDraftError(
+                error_type = (
+                    ChangeDraftError
+                    if policy == "generated"
+                    else ChangeDraftBindingError
+                )
+                raise error_type(
                     f"{location}.{name} 类型错误，期望 {expected_type}，实际 {json_type(value)}"
                 )
             result[name] = value
@@ -1696,10 +1724,89 @@ class RealChangeDraftService:
             except (OverflowError, ValueError):
                 pass
         if not value_matches_type(value, expected_type):
-            raise ChangeDraftError(
+            raise ChangeDraftBindingError(
                 f"{location}.{name} 类型错误，期望 {expected_type}，实际 {json_type(value)}"
             )
         return value
+
+    @staticmethod
+    def _structured_change_scene(
+        spec: dict[str, Any],
+        request: dict[str, Any],
+        *,
+        missing: list[str],
+    ) -> dict[str, Any]:
+        """Bind a Profile-shaped scene reference without copying sample values."""
+
+        parameters = request.get("parameters") or {}
+        parameter_value = parameters.get("change_scene")
+        if parameter_value in (None, ""):
+            parameter_value = {}
+        if not isinstance(parameter_value, dict):
+            raise ChangeDraftBindingError(
+                "parameters.change_scene 类型错误，期望 object，实际 "
+                f"{json_type(parameter_value)}"
+            )
+
+        reference_value = request.get("scenario_reference") or {}
+        if not isinstance(reference_value, dict):
+            raise ChangeDraftBindingError(
+                "scenario_reference 类型错误，期望 object，实际 "
+                f"{json_type(reference_value)}"
+            )
+
+        supplied: dict[str, Any] = dict(parameter_value)
+        for name, value in reference_value.items():
+            existing = supplied.get(name)
+            if (
+                existing not in (None, "", [], {})
+                and value not in (None, "", [], {})
+                and existing != value
+            ):
+                raise ChangeDraftBindingError(
+                    f"change_scene.{name} 在 scenario_reference 与 "
+                    "parameters.change_scene 中存在冲突"
+                )
+            if value not in (None, "", [], {}) or name not in supplied:
+                supplied[name] = value
+
+        scenario_text = str(request.get("scenario") or "").strip()
+        if supplied.get("name_cn") in (None, "") and scenario_text:
+            supplied["name_cn"] = scenario_text
+
+        sample = spec.get("sample")
+        if not isinstance(sample, dict):
+            return supplied
+
+        extra = sorted(set(supplied) - set(sample))
+        if extra:
+            raise ChangeDraftBindingError(
+                f"context.change_scene 包含 Profile 外字段: {extra}"
+            )
+
+        result: dict[str, Any] = {}
+        for name, sample_value in sample.items():
+            expected_type = json_type(sample_value)
+            supplied_value = supplied.get(name)
+            if supplied_value in (None, "", [], {}) and sample_value not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                missing.append(f"context.change_scene.{name}")
+                value = empty_value(expected_type, field_name=name)
+            elif name in supplied:
+                value = supplied_value
+            else:
+                value = empty_value(expected_type, field_name=name)
+            if not value_matches_type(value, expected_type):
+                raise ChangeDraftBindingError(
+                    f"context.change_scene.{name} 类型错误，期望 "
+                    f"{expected_type}，实际 {json_type(value)}"
+                )
+            result[name] = value
+        return result
 
     @classmethod
     def _context_value(
@@ -1710,6 +1817,21 @@ class RealChangeDraftService:
         *,
         missing: list[str],
     ) -> Any:
+        expected_type = str(spec.get("type") or "string")
+        if name == "change_scene" and expected_type == "object":
+            suggested = cls._structured_change_scene(
+                spec,
+                request,
+                missing=missing,
+            )
+            return cls._profile_owned_value(
+                name,
+                spec,
+                request,
+                location="context",
+                missing=missing,
+                suggested=suggested,
+            )
         mapping: dict[str, Any] = {
             "ticket_id": "DRAFT",
             "title": request.get("goal"),
@@ -1730,6 +1852,27 @@ class RealChangeDraftService:
             missing=missing,
             suggested=mapping.get(name),
         )
+
+    @classmethod
+    def _validate_request_profile_bindings(
+        cls,
+        request: dict[str, Any],
+        profile: dict[str, Any],
+    ) -> list[str]:
+        """Preflight deterministic input bindings before any model request."""
+
+        missing: list[str] = []
+        for name, spec in profile.get("context_fields", {}).items():
+            cls._context_value(name, spec, request, missing=missing)
+        for name, spec in profile.get("envelope_fields", {}).items():
+            cls._profile_owned_value(
+                name,
+                spec,
+                request,
+                location="envelope",
+                missing=missing,
+            )
+        return list(dict.fromkeys(item for item in missing if item))
 
     def _assemble(
         self,
@@ -1992,6 +2135,9 @@ class RealChangeDraftService:
         request_attempts: list[dict[str, Any]] = []
         generation_budget: dict[str, Any] = {}
         try:
+            preflight_missing = self._validate_request_profile_bindings(
+                draft["request"], profile
+            )
             bundles, cards = self._selected_context(draft)
             context = [self._prompt_card(card) for card in cards.values()]
             prompt = stable_json(
@@ -2034,6 +2180,8 @@ class RealChangeDraftService:
                 "prompt_chars": len(prompt),
                 "prompt_bytes": len(prompt.encode("utf-8")),
                 "max_output_tokens": settings.change_generation_max_output_tokens,
+                "preflight_missing_field_count": len(preflight_missing),
+                "preflight_missing_fields": preflight_missing,
             }
             self.store.set_generation_diagnostics(
                 draft_id,
@@ -2091,6 +2239,11 @@ class RealChangeDraftService:
                         cards=cards,
                     )
                     break
+                except ChangeDraftBindingError:
+                    # Input/Profile bindings are deterministic. A second model
+                    # response cannot change them and would only waste a remote
+                    # inference request and an account-concurrency slot.
+                    raise
                 except ChangeDraftError as exc:
                     validation_error = str(exc)
                     previous_protocol_output = payload
