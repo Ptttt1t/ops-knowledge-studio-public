@@ -39,7 +39,7 @@
 
 ## Work In Progress
 
-None. 代码和文档已完成并通过外网合成回归，等待本轮 commit / merge / push。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
@@ -48,6 +48,7 @@ None. 代码和文档已完成并通过外网合成回归，等待本轮 commit 
 ## Last Updated
 
 - Date: 2026-08-27 (Asia/Shanghai)
-- Current branch: `codex/change-scene-profile-binding`
-- Publication status: validated locally; pending commit and push to `github/main`
+- Current branch: `main`
+- Published feature commit: `f5666db58f9186d248fa93571cba92845bf86fc0`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
