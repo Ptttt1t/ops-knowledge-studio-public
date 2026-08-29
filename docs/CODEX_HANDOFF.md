@@ -39,7 +39,7 @@
 
 ## Work In Progress
 
-None. 代码、文档和合成回归已完成，等待本轮 commit / merge / push。
+None. 功能已合并并发布到 GitHub `main`。
 
 ## Recommended Next Step
 
@@ -48,6 +48,7 @@ None. 代码、文档和合成回归已完成，等待本轮 commit / merge / pu
 ## Last Updated
 
 - Date: 2026-08-29 (Asia/Shanghai)
-- Current branch: `codex/nullable-profile-and-parameter-priority`
-- Publication status: validated locally; pending commit and push to `github/main`
+- Current branch: `main`
+- Published feature commit: `6b96e8f986a19ea4bf473c124e6ec3d9629fe081`
+- Publication status: merged and pushed to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。
