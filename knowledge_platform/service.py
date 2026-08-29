@@ -1919,6 +1919,11 @@ class KnowledgeService:
             )
             self._demo_rebuild_log(
                 normalized_case_id,
+                "invalidate semantic clusters="
+                f"{purge['invalidated_semantic_cluster_count']}",
+            )
+            self._demo_rebuild_log(
+                normalized_case_id,
                 "invalidate canonical cards="
                 f"{purge['invalidated_canonical_count']}",
             )
@@ -1985,6 +1990,9 @@ class KnowledgeService:
                 "purged_long_term_memory_count": queued_memories,
                 "invalidated_semantic_proposal_count": int(
                     purge["invalidated_semantic_proposal_count"]
+                ),
+                "invalidated_semantic_cluster_count": int(
+                    purge["invalidated_semantic_cluster_count"]
                 ),
                 "invalidated_canonical_count": int(
                     purge["invalidated_canonical_count"]

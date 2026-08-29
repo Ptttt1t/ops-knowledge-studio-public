@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.5.0-b88924)
+![Version](https://img.shields.io/badge/version-1.6.0-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
@@ -37,7 +37,7 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 | Knowledge Card Builder | `CASE_CONTEXT`、`PROCEDURE_STEP`、`EXECUTION_OUTCOME` | Extraction Unit 不等于 Knowledge Card；正文禁止 raw JSON |
 | 案例包 | 一个 ChangeOrder 对应一个 `ChangeCaseBundle`，包内保存有序卡片 | 支持整包原子审核和当前案例精确重建 |
 | 知识治理 | 质量 QA、证据复核、批准、驳回、替代、重复状态 | 只有 `APPROVED + INDEXED + retrieval_enabled` 可进入可信检索 |
-| 相似知识治理 | 后台增量发现、同阶段人工合并/排除/暂缓、canonical 卡 | 跨阶段只建关系，不合并 semantic identity；不调用模型 |
+| 相似知识治理 | 同案例隔离、跨案例 complete-link 知识簇、人工完整合并或共享核心 | 跨阶段只建关系；同案例不进入合并队列；不调用模型 |
 | 知识关系图 | 案例、卡片、对象、来源、版本、验证、回退、相似和合并关系 | 当前是 SQLite 关系投影与可视化，不是独立图数据库 |
 | 可信问答 | 本地混合检索、字段级引用、可选只读 Agent | 无强相关已审核证据时拒绝输出“可信方案” |
 | 合成变更 Demo | 风险评估、计划生成、人工审批、灰度模拟、失败回退、反馈 | 只修改隔离模拟器，不操作真实基础设施 |
@@ -61,15 +61,15 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 
 ### 2. 相似知识由系统发现、由人决定
 
-后台会持续比较已批准 Procedure 卡，推送可能重复或高度复用的候选。操作者可以并排查看来源、适用阶段、通用化操作和验证内容，再确认合并、排除或暂缓。
+后台会持续比较已批准 Procedure 卡，把不同案例包中的相似知识整理成 N 成员候选簇。同一案例包内的卡片不会互相进入合并队列。操作者可以查看簇代表、全部成员、最低/平均相似度和关键差异，再选择完整合并、建立共享核心、排除或暂缓。
 
 ![相似知识人工治理](docs/images/semantic-governance.png)
 
-确认同阶段知识可以合并后，系统创建新的 canonical 卡；原卡保留审计证据但退出所有普通检索。图谱关系由待确认的 `SIMILAR_TO` 变为确定的 `MERGED_INTO`。不同阶段即使文本一致，也只建立 `CROSS_PHASE_SIMILAR`，两张卡继续独立检索。
+完整等价合并会创建 canonical 卡并建立 `MERGED_INTO`；共享核心治理会保留各案例卡作为 `CASE_EVIDENCE`，并建立 `INSTANCE_OF`。两种方式都避免 canonical 与来源成员同时进入普通检索。不同阶段即使文本一致，也只建立 `CROSS_PHASE_SIMILAR`。
 
 ### 3. 用关系图检查知识结构
 
-三维关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`CROSS_PHASE_SIMILAR`、`MERGED_INTO` 等显式关系。布局采用类型质心与局部力导向：Context、前检、实施、验证、回退和执行结果形成不同空间簇，关系边仍参与位置调整。拖动可旋转视角，Shift + 拖动可平移，滚轮可缩放；节点只常驻显示短标识，完整名称在悬停浮层和右侧详情中查看。
+三维关系图展示案例包、知识卡、业务对象、来源文档，以及 `VALIDATES`、`ROLLBACK_OF`、`DUPLICATE_OF`、`SIMILAR_TO`、`CROSS_PHASE_SIMILAR`、`MERGED_INTO`、`INSTANCE_OF` 等显式关系。布局采用类型质心与局部力导向：Context、前检、实施、验证、回退和执行结果形成不同空间簇，关系边仍参与位置调整。拖动可旋转视角，Shift + 拖动可平移，滚轮可缩放；节点只常驻显示短标识，完整名称在悬停浮层和右侧详情中查看。
 
 ![知识资产关系图](docs/images/knowledge-graph.png)
 
@@ -176,7 +176,7 @@ ChangeOrder JSON
 
 这意味着“已批准”不等于“一定进入检索”，“重复”也不会再与质量分或审核状态混为一谈。
 
-## 相似知识人工合并
+## 跨案例相似知识簇治理
 
 启用后，Web Server 会启动有界后台扫描器：
 
@@ -192,10 +192,12 @@ SEMANTIC_SCAN_MAX_PROPOSALS=100
 
 ```text
 APPROVED + INDEXED Procedure Cards
-→ 本地确定性相似度
-→ 同 procedure_group: PENDING_REVIEW + SIMILAR_TO
-→ 人工 ACCEPT / REJECT / DEFER
-→ canonical card + MERGED_INTO
+→ 读取 card_lineage.case_id
+→ 同案例 pair: SKIP
+→ 跨案例、同 procedure_group: 本地确定性相似度
+→ complete-link 知识簇 + PENDING_REVIEW + SIMILAR_TO
+→ 人工 FULL_EQUIVALENT / SHARED_CORE / REJECT / DEFER
+→ canonical + MERGED_INTO / INSTANCE_OF
 
 跨 procedure_group
 → CROSS_PHASE_SIMILAR（保留两张阶段卡，不进入合并队列）
@@ -203,11 +205,13 @@ APPROVED + INDEXED Procedure Cards
 
 - 扫描不调用 LLM，也不会把正文发送给外部模型。
 - 分数只是候选门槛，不是合并结论。
+- `case_id` 是硬隔离边界；一个知识簇中每个案例最多一张卡。
 - `procedure_group` 是硬约束；PRECHECK、IMPLEMENTATION、VALIDATION、ROLLBACK 之间禁止直接合并。
+- complete-link 要求簇内任意两张成员卡均达到阈值，避免传递相似导致过度合并。
 - 页面共享锚点来自结构化字段和完整业务短语，不展示中文字符滑窗片段。
-- `REJECTED` 与来源 fingerprint 绑定；内容不变时不重复推送。
+- `REJECTED` 与成员 case/card/fingerprint 组合绑定；内容不变时不重复推送。
 - 内容或审批状态变化后旧候选自动 `STALE`。
-- 合并在一个 SQLite 事务中完成，来源卡立即退出本地检索和长期记忆映射。
+- 完整合并与共享核心都在单个 SQLite 事务中完成，来源成员立即退出普通检索和长期记忆映射。
 - 重建任一来源案例会链式下架派生 canonical，恢复仍有效的其他来源卡。
 
 完整说明见 [相似知识人工合并治理](docs/semantic-governance.md)。

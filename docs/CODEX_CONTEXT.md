@@ -29,7 +29,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 | `knowledge_platform/service.py` | 知识采集、模型预算、审核、检索/问答、案例包、case-scoped rebuild 的应用服务。 |
 | `knowledge_platform/store.py` | SQLite 知识库、状态事务、证据、关系、案例包、相似治理及图谱投影。 |
 | `knowledge_platform/retrieval.py`, `agent.py` | 本地可信检索、回答契约和只读 Agent 辅助。 |
-| `knowledge_platform/semantic_governance.py` | 后台相似扫描、同阶段候选、跨阶段关系和人工 canonical 合并。 |
+| `knowledge_platform/semantic_governance.py` | case-aware 相似扫描、跨案例 complete-link 知识簇、跨阶段关系及人工完整合并/共享核心治理。 |
 | `knowledge_platform/change_drafts.py` | SchemaProfile、案例推荐、真实草案 revision、硬门禁、审核、导出和留一盲测。 |
 | `knowledge_platform/graph_layout.py`, `static/` | 关系图类型簇提示和 Web UI；浏览器执行 type-centroid + local force 的 3D 布局。 |
 | `knowledge_platform/long_term_memory.py` | 可选 MindMemOS 映射、白名单同步、回读后本地重新验证和降级。 |
@@ -55,9 +55,11 @@ source document
 
 ```text
 approved retrievable Procedure cards
-→ local deterministic scan
-→ same phase: human-reviewed merge proposal
-→ atomic canonical card + MERGED_INTO
+→ case-aware local deterministic scan
+→ same case: excluded from merge governance
+→ cross-case + same phase: complete-link knowledge cluster
+→ human FULL_EQUIVALENT / SHARED_CORE decision
+→ atomic canonical + MERGED_INTO / INSTANCE_OF
 
 cross phase
 → CROSS_PHASE_SIMILAR relation only; semantic identities remain separate
@@ -115,8 +117,9 @@ RealChangeRequest
 
 - `review_status`、`dedup_status`、`content_quality`、`publish_status`、`retrieval_enabled`、`planning_rag_enabled` 是独立维度。
 - `APPROVED` 本身不代表能检索；普通可信检索还要求已发布、允许检索、证据未漂移并通过语义相关性门禁。
-- 同一 procedure group 的高度相似 Procedure 可以进入人工合并候选。不同 group 无论文本或 fingerprint 多相似都不得 MERGE，只能建立 `CROSS_PHASE_SIMILAR`、复用或业务关系。
-- 自动扫描只提出候选，不自动合并。人工接受时事务性创建 canonical 卡，并使来源卡退出检索；拒绝与来源 fingerprint 绑定。
+- 相似治理同时以 `case_id` 和 `procedure_group` 为硬边界：同案例卡不得进入合并队列；不同 group 无论文本或 fingerprint 多相似都不得 MERGE，只能建立 `CROSS_PHASE_SIMILAR`、复用或业务关系。
+- 自动扫描只提出跨案例 complete-link 知识簇，不自动合并。一个簇中每个案例最多一张卡，任意两成员都必须满足阈值，避免传递相似过度扩簇。
+- 人工可选择 `FULL_EQUIVALENT` 或 `SHARED_CORE`。前者产生 `MERGED_INTO`；后者把来源卡保留为 `CASE_EVIDENCE + INSTANCE_OF`。两种方式都使来源成员退出普通检索；拒绝与成员 card/case/fingerprint 组合绑定。
 - `VALIDATES` 和 `ROLLBACK_OF` 只在 operation target 和参数方向证据足够时建立；证据不足时为空，不猜测。
 - K 编号是展示 ID，不是稳定语义身份。案例重建使用新的单调递增 ID；稳定定位依赖 case ID、source pointer、semantic fingerprint 和 card type。
 
@@ -124,7 +127,7 @@ RealChangeRequest
 
 - ChangeOrder 结构层使用 `change_order_shape_v2`；动态 task group 不设上限，只约束每组为 TaskRecord 数组且与 flat view 完全对账。
 - 语义层使用 `change_order_semantic_builder_v2` / card model v2；rich text、时间、section、QA 和报告主要为确定性 Python 逻辑。
-- 相似治理使用 `semantic_candidate_v2` 和 `semantic_merge_v2`。共享锚点来自结构化字段、技术标识符和完整业务短语，不向用户展示中文字符滑窗片段。
+- 相似治理使用 `semantic_cluster_v3`。pair 只作为本地聚类证据，新治理单位是跨案例 complete-link 知识簇；历史 pair API/记录保留兼容。共享锚点来自结构化字段、技术标识符和完整业务短语，不向用户展示中文字符滑窗片段。
 - 相似治理后台扫描只执行本地 SQLite/确定性相似度计算，不调用模型；不要把扫描 Worker 存活误判为 API 并发占用。
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。结构化上下文对象（当前包括 `change_scene`）只使用 Profile `sample` 的键/类型，并从 `scenario_reference` 或兼容的 `parameters.change_scene` 取实例值；不得把 Profile 的历史样例值复制进新草案。

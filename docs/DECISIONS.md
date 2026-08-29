@@ -65,26 +65,29 @@ section 是内容结构，不天然是独立知识。Parent 和全部 Child 同�
 
 Card Builder 必须输出 lineage、skip reason 和 `parent_child_retrieval_collision` QA；索引、长期记忆同步和审批都要过滤 Container。
 
-## Decision: 相似治理由系统提议、人工合并，phase 是强约束
+## Decision: 相似治理使用跨案例 complete-link 知识簇，case 和 phase 都是强约束
 
 Status: Active
 
 ### Decision
 
-后台仅用本地确定性信息发现候选。只有相同 `procedure_group` 的 Procedure 卡允许进入人工合并；跨 PRECHECK/IMPLEMENTATION/VALIDATION/ROLLBACK 的高相似卡保留独立 semantic identity，只建立 `CROSS_PHASE_SIMILAR` 等关系。接受同阶段候选时用单个 SQLite 事务建立 canonical 卡、关系和索引状态变化。
+后台仅用本地确定性信息发现候选。同一案例包内的卡片不得进入合并队列；只有 case 不同且 `procedure_group` 相同的 Procedure 卡才能形成 complete-link 知识簇，每个案例在一个簇中最多贡献一张卡。跨阶段高相似卡保留独立 semantic identity，只建立 `CROSS_PHASE_SIMILAR`。人工可以确认整卡等价合并，或建立共享核心并把来源卡保留为 `CASE_EVIDENCE + INSTANCE_OF`。两种确认都使用单个 SQLite 事务建立 canonical、关系和检索状态变化。
 
 ### Reason
 
-相同文本在不同执行阶段具有不同业务上下文和检索用途；自动合并也可能抹掉例外条件或错误继承审核状态。
+相同文本在不同执行阶段或同一案例的不同步骤中具有不同业务上下文和检索用途。pair-by-pair 审核会让高频模板产生组合爆炸，连续 pair 合并还会形成顺序敏感的 canonical 链。complete-link 避免把传递相似误当作全簇等价；共享核心模式避免抹掉案例差异。
 
 ### Alternatives considered
 
 - 只按 fingerprint/cosine 阈值跨阶段自动合并。
+- 把同一案例中相似卡也作为普通 merge proposal。
+- 保留纯 pair 队列，通过多次两两确认逐步形成 canonical。
+- 使用普通连通分量，把 `A≈B`、`B≈C` 直接扩展为三成员簇。
 - 完全不做相似治理，让重复卡无限进入索引。
 
 ### Consequences
 
-扫描器、服务入口和 Store 事务均必须重复执行 phase 门禁，不能只依赖前端。共享锚点以可解释性为先；人工拒绝、来源漂移和 case rebuild 都会影响候选生命周期。
+扫描器、候选写入和 Store 确认事务均必须重复执行 case/phase 门禁，不能只依赖前端。新扫描只生成知识簇，历史 pair 保持兼容读取。簇 identity 绑定成员 card/case/fingerprint 和算法版本；人工拒绝、成员漂移和 case rebuild 都会影响簇生命周期。来源卡退出普通检索，但证据和图谱 lineage 必须保留。
 
 ## Decision: 真实 ChangeOrder 生成是隔离、默认关闭、不可执行的 BETA
 

@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from .service import KnowledgeService
 
 
-ALGORITHM_VERSION = "semantic_candidate_v2"
-CANONICAL_CARD_MODEL_VERSION = "semantic_merge_v2"
+ALGORITHM_VERSION = "semantic_cluster_v3"
+CANONICAL_CARD_MODEL_VERSION = "semantic_cluster_v3"
 PROPOSAL_STATUSES = {
     "PENDING_REVIEW",
     "ACCEPTED",
@@ -457,6 +457,108 @@ def proposed_canonical_merge(
     }
 
 
+def proposed_canonical_cluster(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(cards) < 2:
+        raise SemanticGovernanceError("canonical 知识簇至少需要两张来源卡片")
+    groups = {procedure_group(card) for card in cards}
+    if "" in groups or len(groups) != 1:
+        raise SemanticGovernanceError("不同执行阶段的 Procedure Knowledge 不允许合并")
+    group = next(iter(groups))
+    operation = _prefer_text(
+        [
+            card.get("generalized_operation")
+            or card.get("operation")
+            or card.get("procedure_steps")
+            for card in cards
+        ]
+    )
+    return {
+        "title": _prefer_text(
+            [_phase_neutral_title(card.get("title")) for card in cards], limit=200
+        )
+        or "跨案例通用操作知识",
+        "summary": _prefer_text([card.get("summary") for card in cards]),
+        "generalized_operation": operation,
+        "validation": _prefer_text(
+            [card.get("validation") or card.get("validation_steps") for card in cards]
+        ),
+        "rollback": _prefer_text(
+            [card.get("rollback") or card.get("rollback_steps") for card in cards]
+        ),
+        "impact_analysis": _prefer_text(
+            [card.get("impact_analysis") for card in cards]
+        ),
+        "risk_level": _prefer_text(
+            [card.get("risk_level") for card in cards], limit=100
+        ),
+        "risk_control": _prefer_text([card.get("risk_control") for card in cards]),
+        "scenario": _prefer_text([card.get("scenario") for card in cards], limit=1000),
+        "object_type": _prefer_text(
+            [card.get("object_type") for card in cards], limit=200
+        ),
+        "object_name": _prefer_text(
+            [card.get("object_name") for card in cards], limit=300
+        ),
+        "applicable_versions": _unique(
+            [item for card in cards for item in (card.get("applicable_versions") or [])]
+        ),
+        "prerequisites": _unique(
+            [item for card in cards for item in (card.get("prerequisites") or [])]
+        ),
+        "keywords": _unique(
+            [item for card in cards for item in (card.get("keywords") or [])]
+        ),
+        "applicable_phases": [group],
+        "procedure_group": group,
+        "source_card_ids": sorted(int(card["id"]) for card in cards),
+    }
+
+
+def _member_differences(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    fields = {
+        "title": lambda card: _phase_neutral_title(card.get("title")),
+        "generalized_operation": lambda card: _clean_text(
+            card.get("generalized_operation")
+            or card.get("operation")
+            or card.get("procedure_steps"),
+            limit=1200,
+        ),
+        "validation": lambda card: _clean_text(
+            card.get("validation") or card.get("validation_steps"), limit=800
+        ),
+        "rollback": lambda card: _clean_text(
+            card.get("rollback") or card.get("rollback_steps"), limit=800
+        ),
+        "impact_analysis": lambda card: _clean_text(
+            card.get("impact_analysis"), limit=800
+        ),
+        "object": lambda card: " / ".join(
+            value
+            for value in (
+                _clean_text(card.get("object_type"), limit=120),
+                _clean_text(card.get("object_name"), limit=160),
+            )
+            if value
+        ),
+    }
+    differences: dict[str, Any] = {}
+    for field, getter in fields.items():
+        values = [getter(card) for card in cards]
+        identities = {_identity(value) for value in values if value}
+        if len(identities) <= 1:
+            continue
+        differences[field] = [
+            {
+                "card_id": int(card["id"]),
+                "case_id": str(card.get("case_id") or ""),
+                "value": value,
+            }
+            for card, value in zip(cards, values)
+            if value
+        ]
+    return differences
+
+
 class SemanticGovernanceError(RuntimeError):
     pass
 
@@ -485,6 +587,109 @@ class SemanticGovernanceService:
         left_pointer = str(left.get("source_procedure_pointer") or "")
         right_pointer = str(right.get("source_procedure_pointer") or "")
         return bool(left_pointer and left_pointer == right_pointer)
+
+    @staticmethod
+    def _case_id(card: dict[str, Any]) -> str:
+        return str(card.get("case_id") or "").strip()
+
+    @classmethod
+    def _same_case(cls, left: dict[str, Any], right: dict[str, Any]) -> bool:
+        left_case = cls._case_id(left)
+        right_case = cls._case_id(right)
+        return bool(left_case and left_case == right_case)
+
+    @staticmethod
+    def _structured_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        left_parts = _semantic_parts(left)
+        right_parts = _semantic_parts(right)
+        left_objects = left_parts["object_tokens"]
+        right_objects = right_parts["object_tokens"]
+        if left_objects and right_objects and not (left_objects & right_objects):
+            left_type = _identity(left.get("object_type"))
+            right_type = _identity(right.get("object_type"))
+            if left_type and right_type and left_type != right_type:
+                return False
+        left_actions = left_parts["action_tokens"]
+        right_actions = right_parts["action_tokens"]
+        if left_actions and right_actions and not (left_actions & right_actions):
+            return False
+        return True
+
+    @classmethod
+    def _build_complete_link_clusters(
+        cls,
+        candidates: list[
+            tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]]
+        ],
+    ) -> tuple[list[list[dict[str, Any]]], dict[tuple[int, int], tuple[float, dict[str, Any]]]]:
+        edge_map: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
+        cards_by_id: dict[int, dict[str, Any]] = {}
+        for score, left, right, signals in candidates:
+            left_id, right_id = sorted((int(left["id"]), int(right["id"])))
+            edge_map[(left_id, right_id)] = (score, signals)
+            cards_by_id[left_id] = left if int(left["id"]) == left_id else right
+            cards_by_id[right_id] = right if int(right["id"]) == right_id else left
+
+        clusters: list[set[int]] = []
+
+        def cluster_index(card_id: int) -> int | None:
+            return next(
+                (index for index, members in enumerate(clusters) if card_id in members),
+                None,
+            )
+
+        def complete_link(member_ids: set[int]) -> bool:
+            ordered = sorted(member_ids)
+            cases = [cls._case_id(cards_by_id[card_id]) for card_id in ordered]
+            if any(not case_id for case_id in cases) or len(cases) != len(set(cases)):
+                return False
+            return all(
+                (left_id, right_id) in edge_map
+                for left_index, left_id in enumerate(ordered)
+                for right_id in ordered[left_index + 1 :]
+            )
+
+        for _score, left, right, _signals in sorted(
+            candidates,
+            key=lambda item: (item[0], -int(item[1]["id"]), -int(item[2]["id"])),
+            reverse=True,
+        ):
+            left_id = int(left["id"])
+            right_id = int(right["id"])
+            left_cluster = cluster_index(left_id)
+            right_cluster = cluster_index(right_id)
+            if left_cluster is None and right_cluster is None:
+                proposed = {left_id, right_id}
+                if complete_link(proposed):
+                    clusters.append(proposed)
+                continue
+            if left_cluster is not None and right_cluster is None:
+                proposed = clusters[left_cluster] | {right_id}
+                if complete_link(proposed):
+                    clusters[left_cluster] = proposed
+                continue
+            if left_cluster is None and right_cluster is not None:
+                proposed = clusters[right_cluster] | {left_id}
+                if complete_link(proposed):
+                    clusters[right_cluster] = proposed
+                continue
+            if left_cluster == right_cluster:
+                continue
+            assert left_cluster is not None and right_cluster is not None
+            proposed = clusters[left_cluster] | clusters[right_cluster]
+            if complete_link(proposed):
+                keep, remove = sorted((left_cluster, right_cluster))
+                clusters[keep] = proposed
+                clusters.pop(remove)
+
+        return (
+            [
+                [cards_by_id[card_id] for card_id in sorted(member_ids)]
+                for member_ids in clusters
+                if len(member_ids) >= 2
+            ],
+            edge_map,
+        )
 
     @staticmethod
     def _pair_key(left: dict[str, Any], right: dict[str, Any]) -> str:
@@ -520,11 +725,10 @@ class SemanticGovernanceService:
         try:
             cards = [
                 card
-                for card in self.knowledge.store.list_cards(
-                    CardStatus.APPROVED,
-                    limit=self.knowledge.settings.semantic_scan_max_cards,
+                for card in self.knowledge.store.list_semantic_governance_cards(
+                    limit=self.knowledge.settings.semantic_scan_max_cards
                 )
-                if self._eligible(card)
+                if self._eligible(card) and self._case_id(card)
             ]
             eligible_fingerprints = {
                 int(card["id"]): str(card["semantic_fingerprint"]) for card in cards
@@ -532,18 +736,29 @@ class SemanticGovernanceService:
             eligible_groups = {
                 int(card["id"]): procedure_group(card) for card in cards
             }
-            stale_count = self.knowledge.store.stale_semantic_merge_proposals(
+            eligible_case_ids = {
+                int(card["id"]): self._case_id(card) for card in cards
+            }
+            stale_legacy_count = self.knowledge.store.stale_semantic_merge_proposals(
                 eligible_fingerprints,
                 eligible_groups=eligible_groups,
+                eligible_case_ids=eligible_case_ids,
                 algorithm_version=ALGORITHM_VERSION,
             )
-            candidates: list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+            candidates: list[
+                tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]]
+            ] = []
             cross_phase_relations: list[
                 tuple[int, int, float, str]
             ] = []
             comparisons = 0
+            same_case_skipped = 0
+            structured_conflict_skipped = 0
             for left_index, left in enumerate(cards):
                 for right in cards[left_index + 1 :]:
+                    if self._same_case(left, right):
+                        same_case_skipped += 1
+                        continue
                     if self._same_lineage(left, right):
                         continue
                     comparisons += 1
@@ -576,57 +791,155 @@ class SemanticGovernanceService:
                             )
                             continue
                         if left_group and left_group == right_group:
+                            if not self._structured_compatible(left, right):
+                                structured_conflict_skipped += 1
+                                continue
                             candidates.append((score, left, right, signals))
             self.knowledge.store.replace_semantic_governance_relations(
                 "CROSS_PHASE_SIMILAR",
                 cross_phase_relations,
                 scope_card_ids=[int(card["id"]) for card in cards],
             )
-            candidates.sort(
-                key=lambda item: (item[0], int(item[1]["id"]), int(item[2]["id"])),
+            raw_clusters, edge_map = self._build_complete_link_clusters(candidates)
+            cluster_specs: list[dict[str, Any]] = []
+            for cluster_cards in raw_clusters:
+                member_ids = sorted(int(card["id"]) for card in cluster_cards)
+                pair_scores = [
+                    edge_map[(left_id, right_id)][0]
+                    for left_index, left_id in enumerate(member_ids)
+                    for right_id in member_ids[left_index + 1 :]
+                ]
+                average_by_member = {
+                    card_id: sum(
+                        edge_map[tuple(sorted((card_id, other_id)))][0]
+                        for other_id in member_ids
+                        if other_id != card_id
+                    )
+                    / (len(member_ids) - 1)
+                    for card_id in member_ids
+                }
+                representative_id = max(
+                    member_ids,
+                    key=lambda card_id: (average_by_member[card_id], -card_id),
+                )
+                cards_by_id = {int(card["id"]): card for card in cluster_cards}
+                anchor_sets = [set(explainable_anchors(card)) for card in cluster_cards]
+                shared_anchors = sorted(
+                    set.intersection(*anchor_sets) if anchor_sets else set(),
+                    key=lambda item: (-len(item), item.casefold()),
+                )[:30]
+                fingerprints = {
+                    str(card.get("semantic_fingerprint") or "")
+                    for card in cluster_cards
+                }
+                recommended_mode = (
+                    "FULL_EQUIVALENT" if len(fingerprints) == 1 else "SHARED_CORE"
+                )
+                cluster_key = content_hash(
+                    {
+                        "algorithm_version": ALGORITHM_VERSION,
+                        "card_type": "PROCEDURE_STEP",
+                        "procedure_group": procedure_group(cluster_cards[0]),
+                        "members": [
+                            {
+                                "card_id": card_id,
+                                "case_id": self._case_id(cards_by_id[card_id]),
+                                "semantic_fingerprint": str(
+                                    cards_by_id[card_id]["semantic_fingerprint"]
+                                ),
+                            }
+                            for card_id in member_ids
+                        ],
+                    }
+                )
+                reason = (
+                    f"跨 {len(member_ids)} 个案例包的同阶段 Procedure Knowledge 形成"
+                    " complete-link 知识簇"
+                )
+                if shared_anchors:
+                    reason += f"；共享锚点：{'、'.join(shared_anchors)}"
+                cluster_specs.append(
+                    {
+                        "cluster_id": f"SMC-{cluster_key[:16].upper()}",
+                        "cluster_key": cluster_key,
+                        "cards": cluster_cards,
+                        "representative_card_id": representative_id,
+                        "minimum_score": min(pair_scores),
+                        "average_score": sum(pair_scores) / len(pair_scores),
+                        "maximum_score": max(pair_scores),
+                        "shared_anchors": shared_anchors,
+                        "member_differences": _member_differences(cluster_cards),
+                        "reason": reason,
+                        "proposed_merge": proposed_canonical_cluster(cluster_cards),
+                        "recommended_merge_mode": recommended_mode,
+                        "average_by_member": average_by_member,
+                    }
+                )
+            active_cluster_keys = {
+                str(spec["cluster_key"]) for spec in cluster_specs
+            }
+            stale_cluster_count = self.knowledge.store.stale_semantic_merge_clusters(
+                active_cluster_keys,
+                eligible_fingerprints,
+                eligible_case_ids,
+                algorithm_version=ALGORITHM_VERSION,
+            )
+            cluster_specs.sort(
+                key=lambda item: (
+                    float(item["average_score"]),
+                    len(item["cards"]),
+                    str(item["cluster_id"]),
+                ),
                 reverse=True,
             )
-            selected = candidates[
-                : self.knowledge.settings.semantic_scan_max_proposals
-            ]
+            selected = cluster_specs[: self.knowledge.settings.semantic_scan_max_proposals]
             created_count = 0
             refreshed_count = 0
             pending_ids: list[str] = []
-            for score, first, second, signals in selected:
-                left, right = (
-                    (first, second)
-                    if int(first["id"]) < int(second["id"])
-                    else (second, first)
-                )
-                pair_key = self._pair_key(left, right)
-                reason = (
-                    "canonical semantic fingerprint 完全一致"
-                    if signals.get("exact_fingerprint")
-                    else (
-                        "同阶段通用操作内容高度相似；共享锚点："
-                        + (
-                            "、".join(signals.get("shared_anchors") or [])
-                            or "结构化操作与规范化正文"
-                        )
-                    )
-                )
-                proposal, created = self.knowledge.store.upsert_semantic_merge_proposal(
-                    proposal_id=f"SMP-{pair_key[:16].upper()}",
-                    pair_key=pair_key,
-                    left_card_id=int(left["id"]),
-                    right_card_id=int(right["id"]),
-                    left_fingerprint=str(left["semantic_fingerprint"]),
-                    right_fingerprint=str(right["semantic_fingerprint"]),
+            for spec in selected:
+                representative_id = int(spec["representative_card_id"])
+                proposal, created = self.knowledge.store.upsert_semantic_merge_cluster(
+                    cluster_id=str(spec["cluster_id"]),
+                    cluster_key=str(spec["cluster_key"]),
+                    card_type="PROCEDURE_STEP",
+                    procedure_group=procedure_group(spec["cards"][0]),
                     algorithm_version=ALGORITHM_VERSION,
-                    similarity_score=score,
-                    signals=signals,
-                    reason=reason,
-                    proposed_merge=proposed_canonical_merge(left, right),
+                    representative_card_id=representative_id,
+                    minimum_score=float(spec["minimum_score"]),
+                    average_score=float(spec["average_score"]),
+                    maximum_score=float(spec["maximum_score"]),
+                    shared_anchors=list(spec["shared_anchors"]),
+                    member_differences=dict(spec["member_differences"]),
+                    reason=str(spec["reason"]),
+                    proposed_merge=dict(spec["proposed_merge"]),
+                    recommended_merge_mode=str(spec["recommended_merge_mode"]),
+                    members=[
+                        {
+                            "card_id": int(card["id"]),
+                            "case_id": self._case_id(card),
+                            "semantic_fingerprint": str(card["semantic_fingerprint"]),
+                            "representative_score": (
+                                1.0
+                                if int(card["id"]) == representative_id
+                                else edge_map[
+                                    tuple(sorted((int(card["id"]), representative_id)))
+                                ][0]
+                            ),
+                            "signals": (
+                                {"representative": True}
+                                if int(card["id"]) == representative_id
+                                else edge_map[
+                                    tuple(sorted((int(card["id"]), representative_id)))
+                                ][1]
+                            ),
+                        }
+                        for card in spec["cards"]
+                    ],
                 )
                 created_count += int(created)
                 refreshed_count += int(not created)
                 if proposal["status"] in {"PENDING_REVIEW", "DEFERRED"}:
-                    pending_ids.append(str(proposal["proposal_id"]))
+                    pending_ids.append(str(proposal["cluster_id"]))
             report = {
                 "status": "COMPLETED",
                 "algorithm_version": ALGORITHM_VERSION,
@@ -636,12 +949,20 @@ class SemanticGovernanceService:
                 "duration_ms": round((time.monotonic() - started) * 1000, 3),
                 "eligible_card_count": len(cards),
                 "pair_comparison_count": comparisons,
-                "candidate_count": len(candidates),
+                "same_case_pair_skipped_count": same_case_skipped,
+                "structured_conflict_skipped_count": structured_conflict_skipped,
+                "pair_candidate_count": len(candidates),
+                "candidate_count": len(cluster_specs),
+                "cluster_candidate_count": len(cluster_specs),
                 "cross_phase_relation_count": len(cross_phase_relations),
                 "selected_candidate_count": len(selected),
                 "created_proposal_count": created_count,
+                "created_cluster_count": created_count,
                 "refreshed_proposal_count": refreshed_count,
-                "stale_proposal_count": stale_count,
+                "refreshed_cluster_count": refreshed_count,
+                "stale_proposal_count": stale_legacy_count + stale_cluster_count,
+                "stale_legacy_proposal_count": stale_legacy_count,
+                "stale_cluster_count": stale_cluster_count,
                 "pending_proposal_ids": pending_ids,
                 "minimum_score": self.knowledge.settings.semantic_proposal_min_score,
                 "model_content_export": False,
@@ -702,11 +1023,14 @@ class SemanticGovernanceService:
             "procedure_group",
             "semantic_fingerprint",
             "source_procedure_pointer",
+            "case_id",
+            "case_title",
         )
         return {field: card.get(field) for field in fields}
 
     def _enrich(self, proposal: dict[str, Any]) -> dict[str, Any]:
         result = dict(proposal)
+        result["proposal_type"] = "PAIR"
         result["left_card"] = self._card_projection(
             self.knowledge.store.get_card(int(proposal["left_card_id"]))
         )
@@ -721,24 +1045,94 @@ class SemanticGovernanceService:
         )
         return result
 
+    def _enrich_cluster(self, cluster: dict[str, Any]) -> dict[str, Any]:
+        result = dict(cluster)
+        result["proposal_id"] = str(cluster["cluster_id"])
+        result["proposal_type"] = "CLUSTER"
+        result["similarity_score"] = float(cluster.get("average_score") or 0.0)
+        result["signals"] = {
+            "shared_anchors": list(cluster.get("shared_anchors") or []),
+            "shared_core_tokens": list(cluster.get("shared_anchors") or []),
+            "minimum_score": cluster.get("minimum_score"),
+            "average_score": cluster.get("average_score"),
+            "maximum_score": cluster.get("maximum_score"),
+            "complete_link": True,
+        }
+        member_cards: list[dict[str, Any]] = []
+        for member in cluster.get("members") or []:
+            projection = self._card_projection(
+                self.knowledge.store.get_card(int(member["card_id"]))
+            )
+            if projection is not None:
+                projection["case_id"] = str(member.get("case_id") or "")
+                projection["representative_score"] = member.get(
+                    "representative_score"
+                )
+                projection["is_representative"] = int(member["card_id"]) == int(
+                    cluster["representative_card_id"]
+                )
+            member_cards.append(projection or {"id": int(member["card_id"]), "missing": True})
+        result["member_cards"] = member_cards
+        result["left_card"] = member_cards[0] if member_cards else None
+        result["right_card"] = member_cards[1] if len(member_cards) > 1 else None
+        result["left_card_id"] = (
+            int(member_cards[0]["id"]) if member_cards else None
+        )
+        result["right_card_id"] = (
+            int(member_cards[1]["id"]) if len(member_cards) > 1 else None
+        )
+        canonical_id = cluster.get("canonical_card_id")
+        result["canonical_card"] = self._card_projection(
+            self.knowledge.store.get_card(int(canonical_id))
+            if canonical_id is not None
+            else None
+        )
+        return result
+
     def list_proposals(
         self, *, status: str = "PENDING_REVIEW", limit: int = 100
     ) -> dict[str, Any]:
         normalized = status.strip().upper() or "PENDING_REVIEW"
         if normalized != "ALL" and normalized not in PROPOSAL_STATUSES:
             raise SemanticGovernanceError("未知的相似知识候选状态")
-        proposals = self.knowledge.store.list_semantic_merge_proposals(
+        clusters = self.knowledge.store.list_semantic_merge_clusters(
             status=normalized, limit=limit
         )
+        legacy = self.knowledge.store.list_semantic_merge_proposals(
+            status=normalized, limit=limit
+        )
+        proposals = [self._enrich_cluster(item) for item in clusters]
+        proposals.extend(self._enrich(item) for item in legacy)
+        proposals.sort(
+            key=lambda item: (
+                {"PENDING_REVIEW": 0, "DEFERRED": 1}.get(
+                    str(item.get("status") or ""), 2
+                ),
+                -float(item.get("similarity_score") or 0.0),
+                str(item.get("updated_at") or ""),
+            ),
+        )
+        proposals = proposals[: max(1, min(int(limit), 500))]
+        cluster_counts = self.knowledge.store.semantic_merge_cluster_counts()
+        legacy_counts = self.knowledge.store.semantic_merge_proposal_counts()
+        counts = {
+            status_name: cluster_counts.get(status_name, 0)
+            + legacy_counts.get(status_name, 0)
+            for status_name in set(cluster_counts) | set(legacy_counts)
+        }
         return {
             "enabled": self.enabled,
-            "proposals": [self._enrich(item) for item in proposals],
-            "counts": self.knowledge.store.semantic_merge_proposal_counts(),
+            "proposals": proposals,
+            "clusters": [self._enrich_cluster(item) for item in clusters],
+            "counts": counts,
             "last_scan": self.knowledge.store.get_semantic_scan_report(),
             "policy": {
                 "automatic_merge": False,
+                "same_case_merge": False,
                 "cross_phase_merge": False,
                 "cross_phase_relation": "CROSS_PHASE_SIMILAR",
+                "governance_unit": "CASE_AWARE_COMPLETE_LINK_CLUSTER",
+                "merge_modes": ["FULL_EQUIVALENT", "SHARED_CORE"],
                 "model_content_export": False,
                 "minimum_score": self.knowledge.settings.semantic_proposal_min_score,
                 "algorithm_version": ALGORITHM_VERSION,
@@ -746,6 +1140,9 @@ class SemanticGovernanceService:
         }
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        cluster = self.knowledge.store.get_semantic_merge_cluster(proposal_id)
+        if cluster is not None:
+            return self._enrich_cluster(cluster)
         proposal = self.knowledge.store.get_semantic_merge_proposal(proposal_id)
         return self._enrich(proposal) if proposal is not None else None
 
@@ -832,10 +1229,160 @@ class SemanticGovernanceService:
                 raise SemanticGovernanceError(f"canonical 卡字段 {field} 含 raw JSON")
         if not base["summary"]:
             base["summary"] = base["generalized_operation"][:600]
-        base["source_card_ids"] = sorted(
-            (int(proposal["left_card_id"]), int(proposal["right_card_id"]))
-        )
+        source_card_ids = proposal.get("member_card_ids")
+        if not source_card_ids:
+            source_card_ids = (proposal["left_card_id"], proposal["right_card_id"])
+        base["source_card_ids"] = sorted(int(card_id) for card_id in source_card_ids)
         return base
+
+    def _accept_cluster(
+        self,
+        cluster: dict[str, Any],
+        *,
+        actor: str,
+        comment: str,
+        merged_card: Any,
+        merge_mode: str,
+    ) -> dict[str, Any]:
+        # Existing API callers did not send merge_mode and historically meant a
+        # full merge. The new UI always sends an explicit mode.
+        normalized_mode = str(merge_mode or "FULL_EQUIVALENT").strip().upper()
+        if normalized_mode not in {"FULL_EQUIVALENT", "SHARED_CORE"}:
+            raise SemanticGovernanceError(
+                "知识簇确认方式必须是 FULL_EQUIVALENT 或 SHARED_CORE"
+            )
+        member_cards: list[dict[str, Any]] = []
+        source_case_ids: list[str] = []
+        for member in cluster.get("members") or []:
+            card = self.knowledge.store.get_card(int(member["card_id"]))
+            if card is None:
+                raise SemanticGovernanceError("知识簇来源卡片已不存在")
+            card["case_id"] = str(member.get("case_id") or "")
+            member_cards.append(card)
+            source_case_ids.append(str(member.get("case_id") or ""))
+        if len(member_cards) < 2:
+            raise SemanticGovernanceError("知识簇至少需要两张来源卡片")
+        if any(not case_id for case_id in source_case_ids) or len(source_case_ids) != len(
+            set(source_case_ids)
+        ):
+            raise SemanticGovernanceError("同一案例包最多只能贡献一张知识簇成员卡")
+        groups = {procedure_group(card) for card in member_cards}
+        if "" in groups or len(groups) != 1:
+            raise SemanticGovernanceError(
+                "不同或未知执行阶段的 Procedure Knowledge 不允许合并"
+            )
+        payload = self._canonical_payload(cluster, merged_card)
+        group = next(iter(groups))
+        if payload["procedure_group"] != group:
+            raise SemanticGovernanceError("canonical 卡不得改变来源知识的执行阶段")
+        source_card_ids = payload["source_card_ids"]
+        source_content = "\n".join(
+            [
+                f"跨案例相似知识簇：{cluster['cluster_id']}",
+                f"治理方式：{normalized_mode}",
+                f"来源案例数：{len(source_case_ids)}",
+                f"来源卡片：{', '.join('K' + str(item) for item in source_card_ids)}",
+                f"标题：{payload['title']}",
+                f"摘要：{payload['summary']}",
+                f"通用化操作：{payload['generalized_operation']}",
+                f"验证：{payload['validation']}",
+                f"回退：{payload['rollback']}",
+                f"影响分析：{payload['impact_analysis']}",
+            ]
+        )
+        fingerprint = content_hash(
+            {
+                "card_type": "PROCEDURE_STEP",
+                "title": _identity(payload["title"]),
+                "generalized_operation": _identity(payload["generalized_operation"]),
+                "validation": _identity(payload["validation"]),
+                "rollback": _identity(payload["rollback"]),
+                "impact_analysis": _identity(payload["impact_analysis"]),
+                "procedure_group": payload["procedure_group"],
+            }
+        )
+        draft = KnowledgeCardDraft(
+            title=payload["title"],
+            summary=payload["summary"],
+            knowledge_type="procedure",
+            scenario=payload["scenario"],
+            object_type=payload["object_type"],
+            object_name=payload["object_name"],
+            applicable_versions=payload["applicable_versions"],
+            prerequisites=payload["prerequisites"],
+            procedure_steps=[payload["generalized_operation"]],
+            risks=_unique([payload["impact_analysis"], payload["risk_control"]]),
+            rollback_steps=_text_list(payload["rollback"]),
+            validation_steps=_text_list(payload["validation"]),
+            keywords=payload["keywords"],
+            evidence_quote=payload["summary"],
+        )
+        semantic_payload = {
+            **payload,
+            "canonical": True,
+            "merge_cluster_id": str(cluster["cluster_id"]),
+            "merge_mode": normalized_mode,
+            "case_evidence_card_ids": source_card_ids,
+            "source_case_ids": source_case_ids,
+            "instance_parameters": {},
+            "inferred_facts": [],
+        }
+        result = self.knowledge.store.accept_semantic_merge_cluster(
+            str(cluster["cluster_id"]),
+            actor=actor,
+            comment=comment,
+            merge_mode=normalized_mode,
+            draft=draft,
+            semantic_metadata={
+                "card_type": "PROCEDURE_STEP",
+                "card_model_version": CANONICAL_CARD_MODEL_VERSION,
+                "dedup_status": "CANONICAL",
+                "publish_status": "INDEXED",
+                "content_quality": 95.0,
+                "semantic_fingerprint": fingerprint,
+                "semantic_payload": semantic_payload,
+            },
+            source_content=source_content,
+            source_checksum=content_hash(
+                {
+                    "cluster_id": cluster["cluster_id"],
+                    "merge_mode": normalized_mode,
+                    "canonical_payload": payload,
+                    "source_fingerprints": [
+                        str(member["semantic_fingerprint"])
+                        for member in cluster.get("members") or []
+                    ],
+                }
+            ),
+        )
+        canonical = self.knowledge.store.get_card(int(result["canonical_card_id"]))
+        memory_sync: dict[str, Any] | None = None
+        cleanup: dict[str, Any] | None = None
+        if canonical is not None:
+            try:
+                memory_sync = self.knowledge.memory.sync_card(canonical)
+            except Exception as exc:
+                memory_sync = {"status": "FAILED", "error": str(exc)}
+        if result.get("retired_memory_ids") and self.knowledge.memory.configured:
+            try:
+                cleanup = self.knowledge.memory.cleanup_retired_memories(
+                    limit=len(result["retired_memory_ids"])
+                )
+            except Exception as exc:
+                cleanup = {"status": "FAILED", "error": str(exc)}
+        enriched = self._enrich_cluster(result)
+        enriched["memory_sync"] = memory_sync
+        enriched["memory_retirement_cleanup"] = cleanup
+        self.knowledge.trace.log(
+            "semantic_governance_cluster_accepted",
+            cluster_id=cluster["cluster_id"],
+            actor=actor,
+            merge_mode=normalized_mode,
+            canonical_card_id=result["canonical_card_id"],
+            source_card_ids=source_card_ids,
+            source_case_ids=source_case_ids,
+        )
+        return enriched
 
     def accept(
         self,
@@ -844,7 +1391,17 @@ class SemanticGovernanceService:
         actor: str,
         comment: str,
         merged_card: Any = None,
+        merge_mode: str = "",
     ) -> dict[str, Any]:
+        cluster = self.knowledge.store.get_semantic_merge_cluster(proposal_id)
+        if cluster is not None:
+            return self._accept_cluster(
+                cluster,
+                actor=actor,
+                comment=comment,
+                merged_card=merged_card,
+                merge_mode=merge_mode,
+            )
         proposal = self.knowledge.store.get_semantic_merge_proposal(proposal_id)
         if proposal is None:
             raise SemanticGovernanceError("相似知识候选不存在")
@@ -970,6 +1527,7 @@ class SemanticGovernanceService:
         actor: str,
         comment: str = "",
         merged_card: Any = None,
+        merge_mode: str = "",
     ) -> dict[str, Any]:
         normalized = decision.strip().upper()
         if normalized == "ACCEPT":
@@ -978,22 +1536,34 @@ class SemanticGovernanceService:
                 actor=actor,
                 comment=comment,
                 merged_card=merged_card,
+                merge_mode=merge_mode,
             )
         if normalized not in {"REJECT", "DEFER"}:
             raise SemanticGovernanceError("决策必须是 ACCEPT、REJECT 或 DEFER")
-        result = self.knowledge.store.decide_semantic_merge_proposal(
-            proposal_id,
-            decision=normalized,
-            actor=actor,
-            comment=comment,
-        )
+        cluster = self.knowledge.store.get_semantic_merge_cluster(proposal_id)
+        if cluster is not None:
+            result = self.knowledge.store.decide_semantic_merge_cluster(
+                proposal_id,
+                decision=normalized,
+                actor=actor,
+                comment=comment,
+            )
+            enriched = self._enrich_cluster(result)
+        else:
+            result = self.knowledge.store.decide_semantic_merge_proposal(
+                proposal_id,
+                decision=normalized,
+                actor=actor,
+                comment=comment,
+            )
+            enriched = self._enrich(result)
         self.knowledge.trace.log(
             "semantic_governance_proposal_decided",
             proposal_id=proposal_id,
             actor=actor,
             decision=normalized,
         )
-        return self._enrich(result)
+        return enriched
 
 
 class SemanticGovernanceWorker:
@@ -1043,7 +1613,8 @@ class SemanticGovernanceWorker:
                 print(
                     "[SEMANTIC GOVERNANCE] scan completed "
                     f"eligible={report['eligible_card_count']} "
-                    f"proposals={report['created_proposal_count']}"
+                    f"clusters={report['created_cluster_count']} "
+                    f"same_case_skipped={report['same_case_pair_skipped_count']}"
                 )
             except Exception as exc:
                 print(f"[SEMANTIC GOVERNANCE] scan failed error={exc}")

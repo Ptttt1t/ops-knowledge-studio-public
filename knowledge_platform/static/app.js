@@ -607,6 +607,7 @@ function semanticCardComparisonHtml(card, side) {
     <div class="semantic-source-head"><span>${side}</span><strong>K${card.id} · ${escapeHtml(card.title)}</strong></div>
     <p>${escapeHtml(card.summary || "无摘要")}</p>
     <dl>
+      <dt>案例包</dt><dd>${escapeHtml(card.case_id || "—")}${card.is_representative ? " · 簇代表" : ""}</dd>
       <dt>通用化操作</dt><dd>${escapeHtml(operation || "—")}</dd>
       <dt>验证</dt><dd>${escapeHtml(validation || "—")}</dd>
       <dt>适用阶段</dt><dd>${escapeHtml((card.applicable_phases || []).join("、") || "—")}</dd>
@@ -616,13 +617,33 @@ function semanticCardComparisonHtml(card, side) {
   </div>`;
 }
 
+function semanticDifferencesHtml(proposal) {
+  const differences = proposal.member_differences || {};
+  const labels = {
+    title: "标题", generalized_operation: "通用化操作", validation: "验证",
+    rollback: "回退", impact_analysis: "影响分析", object: "操作对象",
+  };
+  const entries = Object.entries(differences);
+  if (!entries.length) return `<p class="semantic-difference-empty">成员关键字段未发现结构化差异。</p>`;
+  return `<details class="semantic-differences"><summary>查看成员差异（${entries.length} 类）</summary>
+    ${entries.map(([field, values]) => `<div><strong>${escapeHtml(labels[field] || field)}</strong><ul>${(values || []).map(item =>
+      `<li><span>K${item.card_id} · ${escapeHtml(item.case_id || "—")}</span>${escapeHtml(item.value || "—")}</li>`).join("")}</ul></div>`).join("")}
+  </details>`;
+}
+
 function semanticProposalHtml(proposal) {
   const merge = proposal.proposed_merge || {};
   const editable = ["PENDING_REVIEW", "DEFERRED"].includes(proposal.status);
   const signals = proposal.signals || {};
   const shared = (signals.shared_core_tokens || []).slice(0, 12).join("、") || "无稳定共享锚点";
   const canonical = proposal.canonical_card;
+  const isCluster = proposal.proposal_type === "CLUSTER";
+  const members = isCluster ? (proposal.member_cards || []) : [proposal.left_card, proposal.right_card].filter(Boolean);
+  const memberCount = Number(proposal.member_count || members.length);
+  const caseCount = Number(proposal.case_count || memberCount);
+  const recommended = proposal.recommended_merge_mode || "FULL_EQUIVALENT";
   const editor = editable ? `<div class="semantic-merge-editor">
+    ${isCluster ? `<div class="semantic-mode-guidance"><strong>推荐：${recommended === "FULL_EQUIVALENT" ? "完整等价合并" : "建立共享核心"}</strong><span>完整合并适用于整张卡语义等价；共享核心保留各案例差异证据。</span></div>` : ""}
     <div class="semantic-editor-grid">
       <label>canonical 标题<input data-merge-field="title" value="${escapeHtml(merge.title || "")}"></label>
       <label>适用阶段<input data-merge-field="applicable_phases" value="${escapeHtml((merge.applicable_phases || []).join("、"))}"></label>
@@ -634,7 +655,9 @@ function semanticProposalHtml(proposal) {
       <label class="span-2">人工意见<input data-merge-comment placeholder="说明合并或排除依据"></label>
     </div>
     <div class="semantic-proposal-actions">
-      <button class="button primary" type="button" data-semantic-action="ACCEPT">确认合并</button>
+      ${isCluster ? `<button class="button primary" type="button" data-semantic-action="ACCEPT" data-merge-mode="SHARED_CORE">建立共享核心</button>
+      <button class="button secondary" type="button" data-semantic-action="ACCEPT" data-merge-mode="FULL_EQUIVALENT">确认完全等价合并</button>`
+      : `<button class="button primary" type="button" data-semantic-action="ACCEPT" data-merge-mode="FULL_EQUIVALENT">确认合并</button>`}
       <button class="button danger" type="button" data-semantic-action="REJECT">不是同一知识</button>
       <button class="button secondary" type="button" data-semantic-action="DEFER">暂缓</button>
     </div>
@@ -642,17 +665,19 @@ function semanticProposalHtml(proposal) {
     <strong>已生成 canonical 卡 K${canonical.id}：${escapeHtml(canonical.title)}</strong>
     <button class="button small secondary" type="button" data-open-card="${canonical.id}">查看 canonical 卡</button>
   </div>` : `<p class="muted-copy">该候选已结束，不再改变检索状态。</p>`;
-  return `<article class="panel semantic-proposal" data-proposal-id="${escapeHtml(proposal.proposal_id)}">
+  return `<article class="panel semantic-proposal" data-proposal-id="${escapeHtml(proposal.proposal_id)}" data-proposal-type="${escapeHtml(proposal.proposal_type || "PAIR")}">
     <div class="semantic-proposal-head">
-      <div><p class="eyebrow">${escapeHtml(proposal.proposal_id)}</p><h2>${semanticProposalStatusLabels[proposal.status] || escapeHtml(proposal.status)}</h2></div>
-      <div class="semantic-score"><strong>${Math.round(Number(proposal.similarity_score || 0) * 100)}%</strong><small>候选相似度</small></div>
+      <div><p class="eyebrow">${escapeHtml(proposal.proposal_id)}</p><h2>${semanticProposalStatusLabels[proposal.status] || escapeHtml(proposal.status)}${isCluster ? ` · ${memberCount} 张卡 / ${caseCount} 个案例` : ""}</h2></div>
+      <div class="semantic-score"><strong>${Math.round(Number(proposal.similarity_score || 0) * 100)}%</strong><small>${isCluster ? "簇平均相似度" : "候选相似度"}</small></div>
     </div>
     <p class="semantic-reason">${escapeHtml(proposal.reason || "")}</p>
-    <div class="semantic-signal-strip"><span>共享锚点：${escapeHtml(shared)}</span><span>包含度 ${escapeHtml(signals.token_containment ?? "—")}</span><span>文本顺序 ${escapeHtml(signals.sequence_similarity ?? "—")}</span></div>
+    <div class="semantic-signal-strip"><span>共享锚点：${escapeHtml(shared)}</span>${isCluster
+      ? `<span>最低 ${Math.round(Number(proposal.minimum_score || 0) * 100)}%</span><span>平均 ${Math.round(Number(proposal.average_score || 0) * 100)}%</span><span>最高 ${Math.round(Number(proposal.maximum_score || 0) * 100)}%</span><span>complete-link</span>`
+      : `<span>包含度 ${escapeHtml(signals.token_containment ?? "—")}</span><span>文本顺序 ${escapeHtml(signals.sequence_similarity ?? "—")}</span>`}</div>
     <div class="semantic-source-grid">
-      ${semanticCardComparisonHtml(proposal.left_card, "来源 A")}
-      ${semanticCardComparisonHtml(proposal.right_card, "来源 B")}
+      ${members.map((card, index) => semanticCardComparisonHtml(card, card?.is_representative ? "簇代表" : `成员 ${index + 1}`)).join("")}
     </div>
+    ${isCluster ? semanticDifferencesHtml(proposal) : ""}
     ${editor}
   </article>`;
 }
@@ -738,6 +763,7 @@ const graphRelationLabels = {
   SIMILAR_TO: "待确认相似",
   CROSS_PHASE_SIMILAR: "跨阶段相似",
   MERGED_INTO: "已合并到",
+  INSTANCE_OF: "案例实例属于",
 };
 
 const graphClusterLabels = {
@@ -967,6 +993,7 @@ function graphNodeColors(node) {
 function graphEdgeColor(edge, active) {
   if (active) return "#1f6b4f";
   if (edge.relation_type === "MERGED_INTO") return "#1f6b4f";
+  if (edge.relation_type === "INSTANCE_OF") return "#2f7b78";
   if (edge.relation_type === "CROSS_PHASE_SIMILAR") return "#70529b";
   if (edge.explicit) return "#b88924";
   return "#aeb8b1";
@@ -1782,7 +1809,7 @@ document.getElementById("semantic-scan-now").addEventListener("click", async eve
     const report = await api("/api/semantic-merge-proposals/scan", {
       method: "POST", body: JSON.stringify({}),
     });
-    toast(`扫描完成：发现 ${report.candidate_count || 0} 对候选，新增 ${report.created_proposal_count || 0} 对`);
+    toast(`扫描完成：形成 ${report.cluster_candidate_count || report.candidate_count || 0} 个跨案例知识簇，新增 ${report.created_cluster_count || report.created_proposal_count || 0} 个`);
     await loadSemanticGovernance();
   } catch (error) { toast(error.message, true); }
   finally { setBusy(button, false); }
@@ -1797,10 +1824,17 @@ document.getElementById("semantic-proposal-list").addEventListener("click", asyn
   if (!actionButton) return;
   const proposalElement = actionButton.closest("[data-proposal-id]");
   const proposalId = proposalElement?.dataset.proposalId;
+  const proposalType = proposalElement?.dataset.proposalType || "PAIR";
   const decision = actionButton.dataset.semanticAction;
+  const mergeMode = actionButton.dataset.mergeMode || "";
   if (!proposalId || !decision) return;
-  if (decision === "ACCEPT" && !window.confirm("确认后将生成 canonical 卡，两张原卡保留但立即退出所有检索。是否继续？")) return;
-  if (decision === "REJECT" && !window.confirm("确认这两张卡不是同一知识？相同内容版本下不会再次推送。")) return;
+  if (decision === "ACCEPT") {
+    const message = mergeMode === "SHARED_CORE"
+      ? "确认后将建立可检索的共享核心 canonical 卡，各案例成员保留为证据但退出普通检索。是否继续？"
+      : `确认后将生成 canonical 卡，${proposalType === "CLUSTER" ? "知识簇成员" : "两张原卡"}保留审计证据但立即退出所有检索。是否继续？`;
+    if (!window.confirm(message)) return;
+  }
+  if (decision === "REJECT" && !window.confirm(`确认${proposalType === "CLUSTER" ? "该知识簇不应合并" : "这两张卡不是同一知识"}？相同内容版本下不会再次推送。`)) return;
   const mergedCard = {};
   proposalElement.querySelectorAll("[data-merge-field]").forEach(input => {
     const field = input.dataset.mergeField;
@@ -1812,12 +1846,15 @@ document.getElementById("semantic-proposal-list").addEventListener("click", asyn
   setBusy(actionButton, true, "正在提交……");
   try {
     const payload = { decision, comment };
-    if (decision === "ACCEPT") payload.merged_card = mergedCard;
+    if (decision === "ACCEPT") {
+      payload.merged_card = mergedCard;
+      payload.merge_mode = mergeMode;
+    }
     const result = await api(`/api/semantic-merge-proposals/${encodeURIComponent(proposalId)}/decision`, {
       method: "POST", body: JSON.stringify(payload),
     });
     toast(decision === "ACCEPT"
-      ? `合并完成，已生成 canonical 卡 K${result.canonical_card_id}`
+      ? `${mergeMode === "SHARED_CORE" ? "共享核心已建立" : "合并完成"}，已生成 canonical 卡 K${result.canonical_card_id}`
       : decision === "REJECT" ? "已记录为非同一知识" : "候选已暂缓");
     await Promise.all([loadSemanticGovernance(), loadLibrary()]);
     if (document.getElementById("page-graph").classList.contains("active")) await loadKnowledgeGraph();

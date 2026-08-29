@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from knowledge_platform.schema import CardStatus, ComparisonResult, KnowledgeCardDraft
 from knowledge_platform.semantic_governance import (
     SemanticGovernanceError,
+    SemanticGovernanceService,
     SemanticGovernanceWorker,
     explainable_anchors,
 )
@@ -42,6 +43,7 @@ class SemanticGovernanceTests(unittest.TestCase):
         operation: str,
         phase: str,
         fingerprint_seed: str,
+        case_id: str | None = None,
     ) -> int:
         summary = f"{title}：{operation}"
         content = f"标题：{title}\n摘要：{summary}\n通用化操作：{operation}"
@@ -72,7 +74,7 @@ class SemanticGovernanceTests(unittest.TestCase):
             evidence_quote=summary,
         )
         fingerprint = hashlib.sha256(fingerprint_seed.encode("utf-8")).hexdigest()
-        return service.store.add_card(
+        card_id = service.store.add_card(
             draft,
             document_id=document_id,
             chunk_id=chunk_id,
@@ -101,6 +103,23 @@ class SemanticGovernanceTests(unittest.TestCase):
                 },
             },
         )
+        case_id = case_id or f"change-order:{source_name}"
+        service.store.save_case_bundle(
+            case_id=case_id,
+            document_id=document_id,
+            title=source_name,
+            extraction_strategy="synthetic",
+        )
+        service.store.save_card_lineage(
+            card_id,
+            case_id=case_id,
+            extraction_strategy="synthetic",
+            unit_role="PROCEDURE_STEP",
+            unit_pointer=f"/synthetic/{source_name}/{phase}",
+            source_pointers=[f"/synthetic/{source_name}/{phase}"],
+            source_order=0,
+        )
+        return card_id
 
     def prepare_pair(self, service: KnowledgeService) -> tuple[int, int]:
         left_id = self.add_procedure_card(
@@ -253,6 +272,137 @@ class SemanticGovernanceTests(unittest.TestCase):
             {"告警检测", "客户影响", "爆炸半径", "系统参数"}.issubset(anchors)
         )
         self.assertTrue({"下影", "于大", "务方", "和应"}.isdisjoint(anchors))
+
+    def test_same_case_cards_never_enter_merge_governance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            shared_case = "change-order:synthetic-shared-case"
+            operation = "检查活动告警、服务探针和关键业务指标，确认无影响后继续。"
+            self.add_procedure_card(
+                service,
+                source_name="same-case-step-a",
+                title="前检：业务健康检查 A",
+                operation=operation,
+                phase="PRECHECK",
+                fingerprint_seed="same-case-a",
+                case_id=shared_case,
+            )
+            self.add_procedure_card(
+                service,
+                source_name="same-case-step-b",
+                title="前检：业务健康检查 B",
+                operation=operation,
+                phase="PRECHECK",
+                fingerprint_seed="same-case-b",
+                case_id=shared_case,
+            )
+
+            report = service.semantic_governance.scan(actor="test-scanner")
+
+            self.assertEqual(report["eligible_card_count"], 2)
+            self.assertEqual(report["same_case_pair_skipped_count"], 1)
+            self.assertEqual(report["cluster_candidate_count"], 0)
+            self.assertEqual(service.semantic_governance.list_proposals()["proposals"], [])
+
+    def test_repeated_precheck_forms_one_cross_case_cluster(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = (
+                "完成容量分析、版本分析、API依赖分析、监控分析、高危操作分析、"
+                "客户影响分析、配置检查和备份检查；不适用项记录依据。"
+            )
+            card_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"analysis-case-{index}",
+                    title="前检：变更分析",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"analysis-fingerprint-{index}",
+                )
+                for index in range(5)
+            ]
+
+            report = service.semantic_governance.scan(actor="test-scanner")
+            proposals = service.semantic_governance.list_proposals()["proposals"]
+
+            self.assertEqual(report["pair_candidate_count"], 10)
+            self.assertEqual(report["cluster_candidate_count"], 1)
+            self.assertEqual(report["created_cluster_count"], 1)
+            self.assertEqual(len(proposals), 1)
+            cluster = proposals[0]
+            self.assertEqual(cluster["proposal_type"], "CLUSTER")
+            self.assertEqual(cluster["member_count"], 5)
+            self.assertEqual(cluster["case_count"], 5)
+            self.assertEqual(set(cluster["member_card_ids"]), set(card_ids))
+            self.assertEqual(
+                service.store.list_semantic_merge_proposals(
+                    status="PENDING_REVIEW", limit=100
+                ),
+                [],
+            )
+
+    def test_complete_link_does_not_merge_transitive_similarity_chain(self) -> None:
+        cards = [
+            {"id": 1, "case_id": "case-a"},
+            {"id": 2, "case_id": "case-b"},
+            {"id": 3, "case_id": "case-c"},
+        ]
+        clusters, _edge_map = SemanticGovernanceService._build_complete_link_clusters(
+            [
+                (0.95, cards[0], cards[1], {}),
+                (0.94, cards[1], cards[2], {}),
+            ]
+        )
+        self.assertEqual(
+            [[card["id"] for card in cluster] for cluster in clusters], [[1, 2]]
+        )
+
+    def test_shared_core_acceptance_keeps_case_evidence_and_graph_relations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查活动告警、服务探针和关键业务指标，确认系统运行正常。"
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"shared-core-{index}",
+                    title="前检：通用健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"shared-core-fingerprint-{index}",
+                )
+                for index in range(3)
+            ]
+            service.semantic_governance.scan()
+            cluster = service.semantic_governance.list_proposals()["proposals"][0]
+
+            accepted = service.semantic_governance.decide(
+                cluster["proposal_id"],
+                decision="ACCEPT",
+                actor="knowledge-owner",
+                comment="保留案例差异，抽取共享前检核心",
+                merge_mode="SHARED_CORE",
+            )
+
+            canonical_id = int(accepted["canonical_card_id"])
+            self.assertEqual(accepted["accepted_merge_mode"], "SHARED_CORE")
+            for source_id in source_ids:
+                source = service.store.get_card(source_id)
+                assert source is not None
+                self.assertEqual(source["dedup_status"], "INSTANCE")
+                self.assertEqual(source["publish_status"], "CASE_EVIDENCE")
+                self.assertFalse(source["retrieval_enabled"])
+                self.assertTrue(
+                    any(
+                        relation["relation_type"] == "INSTANCE_OF"
+                        and int(relation["related_card_id"]) == canonical_id
+                        for relation in service.store.list_relations(source_id)
+                    )
+                )
+            graph = service.knowledge_graph(status="APPROVED", limit=100)
+            self.assertTrue(
+                any(edge["relation_type"] == "INSTANCE_OF" for edge in graph["edges"])
+            )
 
     def test_rejection_suppresses_same_content_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -407,28 +557,6 @@ class SemanticGovernanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             service = self.make_service(Path(directory))
             left_id, right_id = self.prepare_pair(service)
-            for source_id, case_id in (
-                (left_id, "change-order:synthetic-alpha"),
-                (right_id, "change-order:synthetic-beta"),
-            ):
-                card = service.store.get_card(source_id)
-                assert card is not None
-                service.store.save_case_bundle(
-                    case_id=case_id,
-                    document_id=int(card["source_document_id"]),
-                    title=case_id,
-                    extraction_strategy="synthetic",
-                )
-                service.store.save_card_lineage(
-                    source_id,
-                    case_id=case_id,
-                    extraction_strategy="synthetic",
-                    unit_role="PROCEDURE_STEP",
-                    unit_pointer=f"/synthetic/{source_id}",
-                    source_pointers=[f"/synthetic/{source_id}"],
-                    source_order=0,
-                )
-
             service.semantic_governance.scan()
             proposal = service.semantic_governance.list_proposals()["proposals"][0]
             accepted = service.semantic_governance.decide(
@@ -442,12 +570,12 @@ class SemanticGovernanceTests(unittest.TestCase):
             assert left is not None
 
             purge = service.store.purge_case_for_rebuild(
-                "change-order:synthetic-alpha",
+                "change-order:case-alpha",
                 expected_checksum=str(left["source_checksum"]),
                 actor="synthetic-operator",
             )
 
-            self.assertEqual(purge["invalidated_semantic_proposal_count"], 1)
+            self.assertEqual(purge["invalidated_semantic_cluster_count"], 1)
             self.assertEqual(purge["invalidated_canonical_count"], 1)
             self.assertEqual(purge["reactivated_semantic_source_card_ids"], [right_id])
             self.assertIsNone(service.store.get_card(left_id))
@@ -461,7 +589,7 @@ class SemanticGovernanceTests(unittest.TestCase):
             self.assertEqual(right["dedup_status"], "NEW")
             self.assertEqual(right["publish_status"], "INDEXED")
             self.assertTrue(right["retrieval_enabled"])
-            stale = service.store.get_semantic_merge_proposal(
+            stale = service.store.get_semantic_merge_cluster(
                 proposal["proposal_id"]
             )
             assert stale is not None

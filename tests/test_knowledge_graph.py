@@ -151,6 +151,7 @@ class KnowledgeGraphTests(unittest.TestCase):
                 self.assertIn('return `K${node.entity_id}`', script)
                 self.assertIn("cluster_centroid", script)
                 self.assertIn("CROSS_PHASE_SIMILAR", script)
+                self.assertIn("INSTANCE_OF", script)
             finally:
                 server.shutdown()
                 server.server_close()

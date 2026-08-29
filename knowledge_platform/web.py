@@ -769,6 +769,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     actor=principal,
                     comment=str(payload.get("comment") or ""),
                     merged_card=payload.get("merged_card"),
+                    merge_mode=str(payload.get("merge_mode") or ""),
                 )
                 self._send_json(result)
                 return

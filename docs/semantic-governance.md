@@ -1,59 +1,91 @@
-# 相似知识人工合并治理
+# 跨案例相似知识簇治理
 
 ## 目标与边界
 
-该模块持续发现“语义可能相同但名称或表述不同”的已批准 Procedure 卡，并把同阶段的合并判断交给人工知识负责人。`procedure_group` 是硬约束：跨阶段知识只建立相似关系，不能合并 semantic identity。系统不会自动合并，不使用 LLM 生成候选，不把卡片正文发送到外部服务，也不把历史实例参数直接提升为通用规则。
+该模块持续发现“不同案例包中语义相同或共享通用核心”的已批准 Procedure 卡，并把最终治理判断交给人工知识负责人。系统不会自动合并，不调用 LLM 生成候选，不把卡片正文发送到外部服务，也不把历史实例参数直接提升为通用规则。
 
-当前候选范围严格限定为：
+新扫描候选严格限定为：
 
 - `status = APPROVED`；
 - `card_type = PROCEDURE_STEP`；
 - `publish_status = INDEXED`；
 - `retrieval_enabled = true`；
-- 已有稳定 `semantic_fingerprint`；
-- 不属于同一 `source_procedure_pointer` 的 Parent/Child lineage。
+- 已有稳定 `semantic_fingerprint` 和 `card_lineage.case_id`；
+- 每个知识簇中每个 `case_id` 最多一张卡；
+- 不属于相同 source lineage；
+- `procedure_group` 相同且结构化对象/action 不冲突。
 
-后台扫描受 `SEMANTIC_SCAN_MAX_CARDS` 与 `SEMANTIC_SCAN_MAX_PROPOSALS` 限制。算法先清理 phase 标题前缀和 rich text，再比较 generalized operation、validation、rollback、对象与 action；实例参数不参与通用身份。内部相似度可以使用字符特征，但页面“共享锚点”只来自完整业务短语、标题、对象、action、关键词和参数名，不展示无语义的中文 n-gram。分数只负责进入人工队列，不是自动合并结论。
+同一案例包内的卡片不会进入相似合并队列。即使正文高度相似，也只说明案例内部可能存在建模重叠，不代表可以丢失步骤顺序、source pointer 或阶段上下文。扫描、候选写入和最终确认事务都会检查 `case_id`，旧的同案例候选会在下次扫描时变为 `STALE`。
 
-阶段策略：
+## 从 pair 到 complete-link 知识簇
 
-- `PRECHECK`、`IMPLEMENTATION`、`VALIDATION`、`ROLLBACK` 之间禁止 `MERGE`；
-- 同阶段才允许创建 `PENDING_REVIEW + SIMILAR_TO`；
-- 跨阶段达到相似阈值时建立 `CROSS_PHASE_SIMILAR`，两张卡继续保持 `INDEXED`；
-- 扫描时和接受合并时都会校验阶段，历史候选不能绕过约束。
+扫描器仍在本地计算两卡相似度，但 pair 只是聚类证据，不再是主要治理对象。达到阈值的同阶段、跨案例 pair 使用保守的 complete-link 规则形成知识簇：新成员必须与簇内每一个现有成员都达到阈值；不能仅凭 `A≈B`、`B≈C` 推导 `A≈C`。
 
-## 状态与图谱
+同一批反复出现的“前检：变更分析”因此表现为一个 N 成员候选簇，而不是 N×(N-1)/2 个重叠提案。簇保存：
 
-候选状态流：
+- 成员卡和案例 ID；
+- medoid/代表卡；
+- 最低、平均、最高两两相似度；
+- 可解释的共享语义锚点；
+- 标题、操作、验证、回退、影响和对象差异；
+- 推荐治理方式及人工决策。
+
+共享锚点只来自完整业务短语、标题、对象、action、关键词和参数名，不展示无语义的中文字符滑窗。
+
+## 阶段与关系约束
+
+- `PRECHECK`、`IMPLEMENTATION`、`VALIDATION`、`ROLLBACK` 之间禁止合并；
+- 跨阶段达到阈值时只建立 `CROSS_PHASE_SIMILAR`，两张卡继续独立检索；
+- 同案例 pair 不建立合并候选，也不建立治理型 `SIMILAR_TO`；
+- 待审核知识簇只在代表卡与其他成员之间投影 `SIMILAR_TO`；
+- 历史 pair 提案仍可读取和完成，但新扫描只生成知识簇。
+
+## 两种人工确认方式
+
+### FULL_EQUIVALENT
+
+用于整张卡业务语义等价的知识簇。确认后：
+
+- 新建 `dedup_status=CANONICAL`、`publish_status=INDEXED` 的 canonical 卡；
+- 来源卡保留 `APPROVED` 和原始证据，但变为 `MERGED + MERGED`；
+- 来源卡关闭 retrieval 和 planning RAG；
+- 建立 `MERGED_INTO`；
+- 本地检索、向量索引和外部长记忆只保留 canonical 投影。
+
+### SHARED_CORE
+
+用于成员共享通用框架，但各案例结论、参数或特殊限制不同的知识簇。确认后：
+
+- 建立一张可检索的共享核心 canonical 卡；
+- 来源卡保留为 `dedup_status=INSTANCE`、`publish_status=CASE_EVIDENCE`；
+- 来源卡退出普通检索和 planning RAG，但证据、案例归属和内容不删除；
+- 建立 `INSTANCE_OF`，图谱可沿 canonical 回到所有案例证据。
+
+“前检：变更分析”通常优先采用共享核心。标题相同只是候选召回信号，不是完整等价证明。人工仍应检查差异区域，并在提交前编辑 canonical 草案。
+
+## 状态与漂移
 
 ```text
 PENDING_REVIEW -> ACCEPTED
                -> REJECTED
                -> DEFERRED -> ACCEPTED / REJECTED
-内容或来源状态变化 -> STALE
+成员、fingerprint、case identity、阶段或算法变化 -> STALE
 ```
 
-- 待确认时建立 `SIMILAR_TO`，在图谱中显示为虚线候选关系。
-- 跨阶段相似建立 `CROSS_PHASE_SIMILAR`，只用于解释复用或关联，不进入人工合并队列。
-- 确认合并后删除 `SIMILAR_TO`，新建一张独立、单调递增 K ID 的 canonical 卡，并建立两条 `MERGED_INTO`。
-- 来源卡仍保留 `APPROVED` 和原始证据，但变为 `dedup_status=MERGED`、`publish_status=MERGED`、`retrieval_enabled=false`，因此不会与 canonical 卡同时进入本地检索、向量索引或外部长记忆。
-- canonical 卡为 `dedup_status=CANONICAL`、`publish_status=INDEXED`、`retrieval_enabled=true`。
-- 排除决策绑定 source card ID、fingerprint 和算法版本。相同内容不重复推送；内容变化会产生新的 pair identity，旧候选变为 `STALE`。
-
-人工编辑 canonical 草案只允许业务字段白名单。标题和 generalized operation 必填；检测到 raw JSON 时拒绝合并。来源卡 fingerprint 或发布状态在确认前发生漂移时，事务失败并要求重新扫描。
+知识簇 identity 绑定算法版本、成员 card ID、case ID 和 semantic fingerprint。相同内容的已驳回簇不会重复推送；成员或内容变化会产生新的簇 identity。最终事务会重新验证来源卡仍是 `APPROVED + INDEXED + retrieval_enabled`，并再次验证 case 唯一性和 phase 一致性。
 
 ## 案例重建一致性
 
-“重建当前案例”会在删除旧卡前查找所有直接或间接依赖这些卡片的已接受合并：
+“重建当前案例”会精确失效包含该案例成员的待审核、暂缓或已接受知识簇：
 
-1. 把相关待确认、暂缓和已接受候选标为 `STALE`；
-2. 删除对应 `SIMILAR_TO` 与 `MERGED_INTO` 当前关系；
-3. 将受影响 canonical 卡改为 `STALE + SKIPPED` 并关闭检索与 planning RAG；
-4. 若另一来源卡仍存在且没有参加其他有效合并，恢复为 `NEW + INDEXED`；
-5. 回收受影响 canonical 的外部长记忆，随后尝试重新同步恢复的来源卡；
-6. 清空已经过时的最近扫描摘要，等待下次增量扫描。
+1. 知识簇标为 `STALE`；
+2. 删除相关 `SIMILAR_TO`、`MERGED_INTO` 或 `INSTANCE_OF` 当前投影；
+3. 派生 canonical 变为 `STALE + SKIPPED` 并退出检索；
+4. 仍存在且没有参加其他有效治理结果的其他案例成员恢复为 `NEW + INDEXED`；
+5. 回收受影响的长期记忆投影并清空过期扫描摘要；
+6. 重建完成后等待下一轮扫描以新 Card ID 和 fingerprint 重新形成候选。
 
-这种处理支持 canonical 再参与后续合并的链式失效，同时保持重建范围只影响依赖当前案例的知识，不清空其他案例。
+清理始终按 case scope 执行，不影响无关案例。
 
 ## 配置
 
@@ -65,29 +97,32 @@ SEMANTIC_SCAN_MAX_CARDS=500
 SEMANTIC_SCAN_MAX_PROPOSALS=100
 ```
 
-`DEMO_MODE=true` 且未显式配置时默认开启。生产模式默认关闭，但可显式启用。启用后 Web Server 会启动后台 daemon；也可在页面点击“立即扫描”。扫描间隔最小值与候选上限由配置加载器校验。
+`SEMANTIC_PROPOSAL_MIN_SCORE` 现在是 complete-link 每条成员边的最低门槛。`DEMO_MODE=true` 且未显式配置时默认开启；生产模式默认关闭，但可显式启用。
 
 ## API
 
-- `GET /api/semantic-governance`：开关、worker、计数、策略和最近扫描。
-- `GET /api/semantic-merge-proposals?status=PENDING_REVIEW&limit=100`：候选队列。
-- `GET /api/semantic-merge-proposals/{proposal_id}`：单个候选及两侧卡片快照。
-- `POST /api/semantic-merge-proposals/scan`：立即运行一次增量扫描。
-- `POST /api/semantic-merge-proposals/{proposal_id}/decision`：人工决策。
+为兼容现有页面和客户端，API 路径继续使用 `semantic-merge-proposals`，返回对象通过 `proposal_type=CLUSTER|PAIR` 区分：
 
-决策请求示例：
+- `GET /api/semantic-governance`：开关、worker、簇计数、策略和最近扫描；
+- `GET /api/semantic-merge-proposals?status=PENDING_REVIEW&limit=100`：知识簇和历史 pair 队列；
+- `GET /api/semantic-merge-proposals/{id}`：单个知识簇或历史 pair；
+- `POST /api/semantic-merge-proposals/scan`：立即运行一次增量扫描；
+- `POST /api/semantic-merge-proposals/{id}/decision`：人工决策。
+
+共享核心确认示例：
 
 ```json
 {
   "decision": "ACCEPT",
-  "comment": "确认属于同一通用健康检查",
+  "merge_mode": "SHARED_CORE",
+  "comment": "抽取通用前检框架，保留各案例结论作为证据",
   "merged_card": {
-    "title": "通用业务健康检查",
-    "summary": "检查告警、探针和关键业务指标。",
-    "generalized_operation": "检查目标系统的活动告警、服务探针和关键业务指标。",
+    "title": "前检：通用变更分析",
+    "summary": "变更前完成容量、版本、依赖、监控、风险和备份检查。",
+    "generalized_operation": "完成适用于目标变更的分析，不适用项必须记录依据。",
     "applicable_phases": ["PRECHECK"]
   }
 }
 ```
 
-`decision` 也支持 `REJECT` 和 `DEFER`；它们不会创建 canonical 卡。
+`merge_mode` 支持 `FULL_EQUIVALENT` 和 `SHARED_CORE`。旧客户端不传该字段时保持历史兼容，按完整合并处理。

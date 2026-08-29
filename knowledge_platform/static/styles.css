@@ -349,7 +349,7 @@ dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 .semantic-reason { margin: 10px 0; color: #536058; font-size: 11px; line-height: 1.55; }
 .semantic-signal-strip { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
 .semantic-signal-strip span { padding: 5px 8px; border-radius: 4px; color: #667269; background: #eff1ec; font-size: 9px; }
-.semantic-source-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.semantic-source-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap: 12px; }
 .semantic-source-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcf9; }
 .semantic-source-card.missing { color: var(--red); }
 .semantic-source-head { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: start; }
@@ -360,6 +360,15 @@ dialog::backdrop { background: rgba(17,31,25,.55); backdrop-filter: blur(2px); }
 .semantic-source-card dt { color: var(--muted); }
 .semantic-source-card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .semantic-merge-editor { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--line); }
+.semantic-mode-guidance { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 14px; margin-bottom: 12px; padding: 10px 12px; border-radius: 6px; color: #315746; background: var(--green-soft); font-size: 10px; }
+.semantic-mode-guidance span { color: var(--muted); }
+.semantic-differences { margin-top: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f4; font-size: 10px; }
+.semantic-differences summary { cursor: pointer; color: var(--green); font-weight: 700; }
+.semantic-differences > div { margin-top: 10px; }
+.semantic-differences ul { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
+.semantic-differences li { display: grid; grid-template-columns: minmax(130px,.3fr) minmax(0,1fr); gap: 10px; padding-top: 5px; border-top: 1px dashed var(--line); white-space: pre-wrap; }
+.semantic-differences li span { color: var(--muted); }
+.semantic-difference-empty { margin: 12px 0 0; color: var(--muted); font-size: 10px; }
 .semantic-editor-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 11px; }
 .semantic-editor-grid .span-2 { grid-column: 1 / -1; }
 .semantic-proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
