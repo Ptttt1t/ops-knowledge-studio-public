@@ -89,6 +89,7 @@ RealChangeRequest
 - 同一进程、同一 base URL/API Key/实际 model ID 的调用共享模型路由门禁；主模型普通路径默认最大并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实变更草案任务之间固定并发 `1`，且请求取得所选模型路由的独占槽位，因此不会与本进程内同模型的抽取、问答或其他 Runtime Worker 重叠。不同 model ID 的门禁和上限相互独立。
 - 真实草案关闭底层隐藏 HTTP retry；草案服务只对已收到响应正文后、由模型负责的 JSON/`GeneratedChangeDraft` 协议失败进行一次显式修复。请求/Profile 的确定性字段或类型绑定在模型调用前预检，使用 `REQUEST_PROFILE_BINDING_ERROR` 立即失败，不进入协议修复。可通过 `CHANGE_DRAFT_FALLBACK_MODEL` 配置同一兼容端点上的备用模型；只有 429、`count/limit` 等明确容量错误才从主模型切换一次。超时不能证明远端推理已结束，因此既不重试也不切换备用模型。实际路由写入 revision，避免混淆不同模型的能力结果。`/api/health.model_requests.routes` 提供各路由的进程级活动/等待/峰值诊断，但不能约束其他进程或其他主机。
 - 真实草案根记录、revision `model_usage` 和 Runtime checkpoint 保存非敏感 `generation_budget` / `generation_performance`，包括案例/卡片计数、Prompt 大小、输出预算、请求次数、起止时间、客户端等待耗时和响应大小；没有供应商 usage 时不得估算 token，也不得写入 Prompt 正文。
+- `generation_diagnostics.protocol_repairs` 是判断第二次草案调用原因的事实来源，记录 JSON 解析或草案装配阶段的错误码/截断原因。`missing_fields` 本身只形成最终硬门禁，不会触发协议修复。
 - `DEMO_MODE=true` 时，安全且可逆的 Demo 子功能默认启用。破坏性或敏感例外仍默认关闭，当前包括 `DEMO_FULL_RESET_ENABLED=false` 和 `REAL_CHANGE_GENERATION_ENABLED=false`。
 - 真实草案生成必须有已激活且结构一致的 SchemaProfile，且第一版只生成/审核/导出，不注册真实执行工具。
 - Web 当前使用共享 token 而非组织级身份。公网暴露、多租户、正式审计和职责分离均不在当前实现能力内。
@@ -127,6 +128,7 @@ RealChangeRequest
 - 相似治理后台扫描只执行本地 SQLite/确定性相似度计算，不调用模型；不要把扫描 Worker 存活误判为 API 并发占用。
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。结构化上下文对象（当前包括 `change_scene`）只使用 Profile `sample` 的键/类型，并从 `scenario_reference` 或兼容的 `parameters.change_scene` 取实例值；不得把 Profile 的历史样例值复制进新草案。
+- SchemaProfile 的 `type=null` 表示字段必须存在且值为 JSON `null`；该值是完整、合法的结构结果，不是缺失。非 null 字段为空和 nullable 字段缺席仍按缺失处理。真实草案以 `request` 为本次事实源，参考卡只作模板/证据；具体新参数必须进入 `request.parameters`，历史 `instance_parameters` 不得替代本次输入。
 - 可选 MindMemOS 只作语义后备。同步内容有白名单，召回必须映射回本地 card 并重新验证；外部失败退回本地检索。
 
 ## Known Long-term Issues

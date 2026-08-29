@@ -346,6 +346,8 @@ RealChangeRequest
 - 场景英文名、唯一标识等 Profile 样例中原本非空而本次未提供的字段会写类型安全空值并进入缺失项硬门禁，不会从历史案例补值。
 - 案例包必须完整读取；超出上下文预算时要求减少案例，不静默截断。
 - 所有具体值必须来自表单；无来源参数直接失败。
+- `Profile.type=null` 的字段必须存在并保持 JSON `null`，这是合法结构值，不计入 `missing_fields`；字段缺席或非 null 类型为空仍会阻断。场景英文名、唯一标识等 string 输入不会因这条规则被放行。
+- “本次变更具体参数 JSON”会原样进入 `request.parameters`。新 IP、账号、端口、阈值和资源规格必须在这里填写；为空时页面会二次确认，模型不得从参考案例的 `instance_parameters` 复制旧值。
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
 - 只有已收到响应正文且模型负责的 JSON 或 `GeneratedChangeDraft` 协议不合规时才允许一次协议修复。请求/Profile 输入绑定会在模型调用前预检，错误码为 `REQUEST_PROFILE_BINDING_ERROR`；这类确定性错误即使在装配阶段暴露也立即停止，绝不发送第二个远程请求。超时、连接失败和 HTTP 错误同样立即停止，也不生成规则 fallback 草案。
@@ -354,6 +356,7 @@ RealChangeRequest
 - 真实草案任务之间的最大并发固定为 `CHANGE_DRAFT_MODEL_MAX_CONCURRENCY=1`，且关闭底层隐藏 HTTP 重试。若主模型返回 HTTP 429、`count/limit` 或等价容量错误，并且配置了 `CHANGE_DRAFT_FALLBACK_MODEL`，程序才用同一端点和凭据尝试备用模型一次；超时不会自动重试或切换模型，因为供应商侧原推理可能仍未结束。
 - 每个 revision 的 `model_usage.model_routing` 记录实际模型、是否回退和尝试顺序；全库模式与盲测报告因此可按模型区分。`/api/health.model_requests.routes` 显示各模型路由的活动/等待请求、峰值和独占状态。
 - 草案及 Runtime checkpoint 只保存非敏感生成统计：模型、等待上限、案例/卡片计数、Prompt 字符/字节数、输出预算、请求起止时间、耗时、请求数、响应大小，以及供应商确实返回时的 token usage；不保存真实 Prompt 正文。超时使用 `MODEL_TIMEOUT`，并明确提示本次未自动重试。
+- `generation_diagnostics.protocol_repairs` 记录发生第二次模型调用前的阶段、错误码和截断原因；nullable missing 只影响最终门禁，不会触发协议修复。
 - 只有当前 `REVIEW_APPROVED` revision 可以导出。
 - 留一案例盲测会在生成期间隔离目标及内容近重复案例。
 

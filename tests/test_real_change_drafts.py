@@ -17,6 +17,7 @@ from knowledge_platform.change_drafts import (
     ChangeDraftError,
     ChangeDraftStore,
     GENERATION_SYSTEM_PROMPT,
+    RealChangeDraftService,
 )
 from knowledge_platform.retrieval import SearchHit
 from knowledge_platform.runtime_tasks import create_knowledge_runtime
@@ -255,6 +256,27 @@ def synthetic_scene_reference() -> dict:
 
 
 class RealChangeDraftTests(unittest.TestCase):
+    def test_generated_null_value_is_present_not_missing(self) -> None:
+        missing: list[str] = ["tasks[0].nullable_present"]
+        result = RealChangeDraftService._apply_field_policy(
+            {"nullable_present": None, "required_text": None},
+            {
+                "nullable_present": {"type": "null", "policy": "generated"},
+                "nullable_absent": {"type": "null", "policy": "generated"},
+                "required_text": {"type": "string", "policy": "generated"},
+            },
+            {},
+            location="tasks[0]",
+            missing=missing,
+        )
+
+        self.assertIsNone(result["nullable_present"])
+        self.assertIsNone(result["nullable_absent"])
+        self.assertEqual(result["required_text"], "")
+        self.assertNotIn("tasks[0].nullable_present", missing)
+        self.assertIn("tasks[0].nullable_absent", missing)
+        self.assertIn("tasks[0].required_text", missing)
+
     def test_existing_draft_database_gets_diagnostics_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "legacy-change-drafts.db"
@@ -431,6 +453,18 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertGreaterEqual(performance["elapsed_seconds"], 0)
             self.assertGreater(performance["response_chars"], 0)
             self.assertEqual(performance["total_tokens"], 125)
+            self.assertEqual(diagnostics["protocol_repair_count"], 1)
+            self.assertEqual(
+                diagnostics["protocol_repairs"][0]["stage"], "DRAFT_ASSEMBLY"
+            )
+            self.assertIn(
+                "模型草案缺少 tasks",
+                diagnostics["protocol_repairs"][0]["reason"],
+            )
+            self.assertIn(
+                "request 是本次变更的事实源",
+                client.generation_calls[0][0],
+            )
             self.assertEqual(
                 generated["revision"]["model_usage"]["generation_budget"], budget
             )
@@ -896,6 +930,15 @@ class RealChangeDraftTests(unittest.TestCase):
             self.assertIn(
                 '"previous_output":"{\\"title\\":\\"broken\\""',
                 client.generation_calls[1][1],
+            )
+            self.assertEqual(
+                generated["generation_diagnostics"]["protocol_repair_count"], 1
+            )
+            self.assertEqual(
+                generated["generation_diagnostics"]["protocol_repairs"][0][
+                    "stage"
+                ],
+                "JSON_PARSE",
             )
 
     def test_profile_conflict_and_unbound_specific_parameters_are_blocked(self) -> None:

@@ -253,7 +253,7 @@
               <label>窗口结束<input id="real-change-window-end" placeholder="2026-08-19 01:00 +08:00"></label>
               <label>影响范围<textarea id="real-change-impact" rows="3" placeholder="受影响业务、用户或区域"></textarea></label>
               <label>约束（每行一项）<textarea id="real-change-constraints" rows="3" placeholder="禁止中断管理面&#10;必须可在 10 分钟内回退"></textarea></label>
-              <label class="span-2">已知参数 JSON<textarea id="real-change-parameters" rows="7" spellcheck="false" placeholder='{"device_id":"...","target_ip":"...","threshold":80}'>{}</textarea><small>高级 API 兼容方式也可传 parameters.change_scene 对象；与上方场景字段冲突时会在模型调用前阻断。</small></label>
+              <label class="span-2">本次变更具体参数 JSON<textarea id="real-change-parameters" rows="7" spellcheck="false" placeholder='{"device_id":"...","target_ip":"...","threshold":80}'>{}</textarea><small>这里的值优先于参考案例并写入 request.parameters。需要新 IP、账号、端口、阈值或资源规格时必须在此填写；高级 API 也可传 parameters.change_scene 对象。</small></label>
               <label class="span-2">验证要求（每行一项）<textarea id="real-change-validations" rows="3" placeholder="目标状态检查&#10;业务探测&#10;监控指标确认"></textarea></label>
               <label>申请人（自报）<input id="real-change-requester" value="shared-operator"></label>
               <div class="real-change-form-actions">

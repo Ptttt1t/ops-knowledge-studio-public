@@ -26,9 +26,13 @@ if TYPE_CHECKING:
 
 GENERATION_SYSTEM_PROMPT = """你是公司内网的真实 ChangeOrder 草案生成器。
 你只能使用用户提供的结构化需求和 APPROVED 案例包知识，不得使用常识补全具体设备ID、IP、账号、阈值、时间或命令参数。
+request 是本次变更的事实源，approved_cards 只是操作模板和历史证据。当 request.parameters 或 request 其他字段提供了本次值时，必须使用该值并添加对应 input_refs；不得沿用案例卡中的冲突历史值。
+案例卡中的 instance_parameters、历史对象名、IP、账号、阈值和资源规格不得作为本次具体参数复制。若 request 没有提供所需具体值，使用类型安全空值并写入 missing_fields，不得用参考案例旧值补齐。
+TaskRecord 的 name_cn、name_en、unique_id 等动作/能力定义字段可以由 source_refs 引用案例卡；它们不等同于本次设备、账号或资源参数。
 你只生成规范化草案 JSON，不得生成 Markdown，也不得直接生成 action_list 的分组副本或 ExecutionResult。
 每个任务、步骤和风险必须带 source_refs 或 input_refs。source_refs 只能使用提示中列出的 card_id、字段和索引；input_refs 只能指向结构化需求字段。
 任务 record 必须包含 SchemaProfile 声明的全部 TaskRecord 字段；四类 Procedure record 必须包含全部 ProcedureStep 字段。缺失值写入 missing_fields，禁止猜测。
+当 Profile 字段 type 为 null 时，必须输出该字段且值为 null；这是合法 Schema 值，不得把它列入 missing_fields。只有字段缺席，或非 null 类型缺少有效值，才属于缺失。
 输出必须是一个完整、合法、紧凑的 JSON 对象；不要输出代码围栏、注释或 JSON 前后的解释文字。
 
 输出格式：
@@ -908,9 +912,12 @@ class RealChangeDraftService:
 
     @staticmethod
     def _generation_diagnostics(
-        budget: dict[str, Any], request_attempts: list[dict[str, Any]]
+        budget: dict[str, Any],
+        request_attempts: list[dict[str, Any]],
+        protocol_repairs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         performance = RealChangeDraftService._generation_performance(request_attempts)
+        repairs = list(protocol_repairs or [])
         return {
             **budget,
             **{
@@ -920,6 +927,8 @@ class RealChangeDraftService:
             },
             "generation_budget": budget,
             "generation_performance": performance,
+            "protocol_repair_count": len(repairs),
+            "protocol_repairs": repairs,
         }
 
     @staticmethod
@@ -1649,11 +1658,27 @@ class RealChangeDraftService:
             elif policy == "not_executed":
                 value = empty_value(expected_type, not_executed=True, field_name=name)
             else:
-                if name not in raw_record or raw_record[name] in (None, ""):
-                    missing.append(f"{location}.{name}")
+                field_present = name in raw_record
+                raw_value = raw_record.get(name)
+                nullable_value_present = (
+                    field_present
+                    and expected_type == "null"
+                    and raw_value is None
+                )
+                field_path = f"{location}.{name}"
+                if nullable_value_present:
+                    # The model may conservatively list a nullable field in its
+                    # own missing_fields. Presence + None fully satisfies a
+                    # Profile type of null, so remove that false declaration as
+                    # well as avoiding a deterministic missing entry below.
+                    missing[:] = [item for item in missing if item != field_path]
+                if not field_present or (
+                    raw_value in (None, "") and not nullable_value_present
+                ):
+                    missing.append(field_path)
                     value = empty_value(expected_type, field_name=name)
                 else:
-                    value = raw_record[name]
+                    value = raw_value
             if not value_matches_type(value, expected_type):
                 error_type = (
                     ChangeDraftError
@@ -2133,6 +2158,7 @@ class RealChangeDraftService:
             self.store.set_draft_failure(draft_id, error)
             raise ChangeDraftError(error)
         request_attempts: list[dict[str, Any]] = []
+        protocol_repairs: list[dict[str, Any]] = []
         generation_budget: dict[str, Any] = {}
         try:
             preflight_missing = self._validate_request_profile_bindings(
@@ -2185,7 +2211,9 @@ class RealChangeDraftService:
             }
             self.store.set_generation_diagnostics(
                 draft_id,
-                self._generation_diagnostics(generation_budget, request_attempts),
+                self._generation_diagnostics(
+                    generation_budget, request_attempts, protocol_repairs
+                ),
             )
             validation_error = ""
             previous_protocol_output: Any = None
@@ -2230,6 +2258,14 @@ class RealChangeDraftService:
                     previous_protocol_output = exc.raw_output
                     if attempt:
                         raise
+                    protocol_repairs.append(
+                        {
+                            "after_model_request": attempt + 1,
+                            "stage": "JSON_PARSE",
+                            "error_code": "MODEL_PROTOCOL_INVALID_JSON",
+                            "reason": validation_error[:500],
+                        }
+                    )
                     continue
                 try:
                     normalized, change_json, provenance = self._assemble(
@@ -2249,8 +2285,18 @@ class RealChangeDraftService:
                     previous_protocol_output = payload
                     if attempt:
                         raise
+                    protocol_repairs.append(
+                        {
+                            "after_model_request": attempt + 1,
+                            "stage": "DRAFT_ASSEMBLY",
+                            "error_code": str(
+                                getattr(exc, "code", "change_draft_error")
+                            ),
+                            "reason": validation_error[:500],
+                        }
+                    )
             generation_diagnostics = self._generation_diagnostics(
-                generation_budget, request_attempts
+                generation_budget, request_attempts, protocol_repairs
             )
             self.store.set_generation_diagnostics(draft_id, generation_diagnostics)
             model_usage = dict(usage or {})
@@ -2259,6 +2305,9 @@ class RealChangeDraftService:
             ]
             model_usage["generation_performance"] = generation_diagnostics[
                 "generation_performance"
+            ]
+            model_usage["protocol_repairs"] = generation_diagnostics[
+                "protocol_repairs"
             ]
             assert normalized is not None and change_json is not None and provenance is not None
             validation = self._validate_assembled(
@@ -2275,7 +2324,7 @@ class RealChangeDraftService:
             )
         except Exception as exc:
             diagnostics = self._generation_diagnostics(
-                generation_budget, request_attempts
+                generation_budget, request_attempts, protocol_repairs
             )
             error_code = str(getattr(exc, "code", "") or "")
             if error_code:

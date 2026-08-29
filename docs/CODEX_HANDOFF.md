@@ -2,53 +2,52 @@
 
 ## Current Objective
 
-修复真实 ChangeOrder 草案中对象型 `change_scene` 被自由文本 `scenario` 错误绑定的问题，并确保输入/Profile 的确定性装配错误不会被误判为模型协议错误而再次调用模型。
+消除真实草案中 Profile `type=null` 字段被误报为缺失的问题，并明确本次 `request.parameters` 相对参考案例历史参数的优先级，同时让第二次模型调用具备可核查的触发原因。
 
 ## Completed
 
-- `RealChangeRequest` 新增 `scenario_reference` 对象；Web 表单分别收集场景中文名、英文名和唯一标识，旧 API 客户端仍可通过 `parameters.change_scene` 传入结构化场景。
-- 对象型 `change_scene` 按活动 Profile `sample` 的键集合和子字段类型确定性装配。Profile 样例仅提供结构，不复制任何样例值；样例为 `null` 的字段确定性写 `null`。
-- `scenario` 自由文本只作为 `name_cn` 的兼容输入。样例中原本非空而本次缺失的 `name_en`、`unique_id` 等字段写类型安全空值，并进入 `missing_fields` 硬门禁。
-- 新增 `REQUEST_PROFILE_BINDING_ERROR`。草案创建和生成开始时都会预检 request/Profile 绑定；类型冲突在模型调用前失败，模型请求数为 0。
-- 装配阶段如果仍出现确定性绑定错误，也立即失败且不进入 protocol repair；只有模型负责的 JSON/`GeneratedChangeDraft` 协议错误仍保留一次修复。
-- generation diagnostics 新增 `preflight_missing_field_count` 和仅含字段路径的 `preflight_missing_fields`，不保存 Prompt 或真实字段值。
-- `CHANGE_DRAFT_TIMEOUT_SECONDS` 仍由代码默认 `240`，并保留 `.env.example` 接口；部署环境可直接覆盖后重启，不影响全局 120 秒 timeout。
+- `_apply_field_policy` 现在区分字段缺席与合法 JSON `null`：`generated` 字段存在、Profile 类型为 `null` 且值为 `None` 时直接保留，不进入 `missing_fields`。
+- 如果模型自己的 `missing_fields` 已包含同一路径，装配器会在确认“字段存在 + type=null + value=null”后移除该误报；nullable 字段缺席仍然阻断。
+- string/number/object 等非 null 类型的 `None` 或空字符串仍按原门禁记为缺失；`context.change_scene.name_en` / `unique_id` 是 string，未输入时不会因 nullable 修复被放行。
+- 生成 Prompt 明确 `request` 是本次事实源、`approved_cards` 只是模板和证据；本次输入值必须优先并带 `input_refs`，不得用历史 `instance_parameters` 补齐缺失参数。TaskRecord 动作/能力身份字段仍允许来自卡片。
+- Web 参数区改名为“本次变更具体参数 JSON”，继续原样映射到 `request.parameters`。参数对象为空时，点击生成会二次确认，提醒模型没有新 IP、账号、端口、阈值或资源规格可用。
+- generation diagnostics 新增 `protocol_repair_count` / `protocol_repairs`，记录触发第二次远程请求的 `JSON_PARSE` 或 `DRAFT_ASSEMBLY` 阶段、错误码和截断原因；不保存 Prompt 或响应正文。
+- 已确认 missing 只影响 `_validate_assembled` 的最终硬门禁，不会从 `_assemble` 抛异常；此前两次模型请求不能归因于 null missing，下一轮应以新增诊断为准。
 
 ## Files Changed
 
-- `knowledge_platform/change_drafts.py`：结构化场景输入、Profile-shaped 装配、确定性绑定预检、错误分类和重试边界。
-- `knowledge_platform/static/index.html`, `knowledge_platform/static/app.js`：增加场景英文名/唯一标识输入并发送 `scenario_reference`。
-- `tests/test_real_change_drafts.py`：增加对象场景、缺失值、旧 API 兼容、预检 0 请求和晚期绑定错误不重试的合成回归。
-- `README.md`, `docs/real-change-generation.md`：更新表单/API、缺失项、`.env` timeout 和协议修复边界。
-- `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：记录 Profile 样例不作为实例值及确定性绑定不调用模型的长期约束。
+- `knowledge_platform/change_drafts.py`：nullable missing 语义、Prompt 参数优先级和协议修复诊断。
+- `knowledge_platform/static/index.html`, `knowledge_platform/static/app.js`：具体参数说明、空参数二次确认和单次 request 复用。
+- `tests/test_real_change_drafts.py`：nullable present/absent、非 null 空值、Prompt 和两类 protocol repair 诊断回归。
+- `README.md`, `docs/real-change-generation.md`：更新参数输入、nullable 和诊断使用说明。
+- `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：记录稳定业务语义与设计边界。
 
 ## Validation
 
-- `python -m unittest tests.test_real_change_drafts`：18 tests，全部通过。
-- `python -m unittest discover -s tests -t .`：167 tests，全部通过。
-- `python -m compileall -q harness knowledge_platform`：通过。
+- `python -m unittest tests.test_real_change_drafts`：19 tests，全部通过。
+- `python -m unittest discover -s tests -t .`：168 tests，全部通过。
+- `python -m compileall -q harness knowledge_platform tests`：通过。
 - `node --check knowledge_platform/static/app.js`：通过。
-- `git diff --check`：通过（仅有工作区 LF/CRLF 提示，无 whitespace error）。
-- 真实内网 ChangeOrder：外网未运行、未声称成功；需要人工更新部署后验证真实 Profile 与新表单的对应关系。
+- `git diff --check`：通过（只有 Windows 工作区 LF/CRLF 提示，无 whitespace error）。
+- 真实内网 ChangeOrder：外网未运行、未声称通过；真实 137 项误报和历史参数行为需要人工部署后复测。
 
 ## Known Issues
 
-- 旧请求若只有 `scenario`，对象型 Profile 会用它填充 `name_cn`，但 `name_en` / `unique_id` 等本次未提供的非空样例字段会使 revision 进入 `BLOCKED`；这是防止复制历史样例值的预期门禁。
-- Profile 目前从一份管理员确认的代表案例提取对象子字段类型；若后续真实 schema 的 nullable 子字段类型发生变化，应更新 Profile 管理能力，而不是在草案装配中猜测。
-- 真实长草案的网关排队/推理性能问题与本次结构绑定修复相互独立，客户端仍无法拆分 queue 与 inference 时间。
+- Prompt 已加强本次参数优先级，但本轮刻意没有同时实施卡片值占位化或大范围历史参数正则门禁，以便下一次真实运行单独判断输入/Prompt 修正效果。若仍复制旧值，再基于证据收紧 Prompt 投影。
+- 当前 UI 的 JSON 参数映射已确认有效；上次持久化 `request.parameters={}` 表示请求实际没有提交具体参数，不是后端丢失。操作者若需要新值必须填写该 JSON。
+- 当前 SchemaProfile/Adapter 仍只严格建模 `change_plan[0].result`，没有覆盖真实 `change_plan[0]` 的全部外层计划字段；这是独立的后续结构问题。
 
 ## Work In Progress
 
-None. 功能已合并并发布到 GitHub `main`。
+None. 代码、文档和合成回归已完成，等待本轮 commit / merge / push。
 
 ## Recommended Next Step
 
-内网更新后重启平台，在页面填写场景中文名、英文名和唯一标识，再对同一真实案例生成一次。应确认 `change_scene` 输出为 Profile 的完整对象键集合、三个实例值均来自本次输入、其余 nullable 字段为 `null`，并确认正常生成只增加 1 次模型请求；若缺少英文名或唯一标识，应看到 `context.change_scene.<field>` 缺失项和 `BLOCKED`，不能出现历史样例值。
+内网更新后，用同一需求重新生成，但先在“本次变更具体参数 JSON”中显式填写需要替换的虚构/真实部署参数。检查：nullable Task/Procedure 字段不再出现在 `missing_fields`；只有未输入的 string 字段继续阻断；若 `model_request_count=2`，读取 `generation_diagnostics.protocol_repairs[0]` 的 stage/reason；统计 `input_refs` 是否引用本次 `parameters.*`，并核对操作正文不再沿用参考案例旧值。若旧值仍被复制，再实施卡片 Prompt 参数占位化和历史实例值泄漏门禁。
 
 ## Last Updated
 
-- Date: 2026-08-27 (Asia/Shanghai)
-- Current branch: `main`
-- Published feature commit: `f5666db58f9186d248fa93571cba92845bf86fc0`
-- Publication status: merged and pushed to `github/main`
+- Date: 2026-08-29 (Asia/Shanghai)
+- Current branch: `codex/nullable-profile-and-parameter-priority`
+- Publication status: validated locally; pending commit and push to `github/main`
 - Containing commit: 提交后使用 `git log -1 --oneline -- docs/CODEX_HANDOFF.md` 获取；不保存自引用 SHA。

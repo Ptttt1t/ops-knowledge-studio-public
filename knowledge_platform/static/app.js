@@ -1940,12 +1940,18 @@ document.getElementById("real-change-generate").addEventListener("click", async 
   const button = event.currentTarget;
   const selected = selectedRealChangeCases();
   if (!selected.length) return toast("请至少确认 1 个推荐案例包", true);
+  let request;
+  try { request = realChangeRequest(); }
+  catch (error) { return toast(error.message, true); }
+  if (!Object.keys(request.parameters || {}).length && !window.confirm(
+    "本次 request.parameters 为空。若变更需要新的 IP、账号、端口、阈值或资源规格，模型没有这些新值可用，也不会被允许从参考案例复制。\n\n确认本次变更确实不需要具体参数并继续？"
+  )) return;
   setBusy(button, true, "正在创建生成任务……");
   try {
     const result = await api("/api/change-drafts", {
       method: "POST",
       body: JSON.stringify({
-        request: realChangeRequest(),
+        request,
         selected_case_ids: selected,
         mode: "normal",
       }),

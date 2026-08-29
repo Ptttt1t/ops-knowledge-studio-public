@@ -95,7 +95,7 @@ GET /api/health
 
 ## 正常生成流程
 
-1. 填写目标、场景中文名、场景英文名、场景唯一标识、区域、服务、对象、当前/目标状态、窗口、影响范围、约束、参数和验证要求。API 请求使用 `scenario_reference={name_cn,name_en,unique_id}`；兼容旧客户端的高级方式是 `parameters.change_scene` 对象。
+1. 填写目标、场景中文名、场景英文名、场景唯一标识、区域、服务、对象、当前/目标状态、窗口、影响范围、约束、参数和验证要求。页面“本次变更具体参数 JSON”会原样进入 `request.parameters`；新 IP、账号、端口、阈值和资源规格必须在这里显式提供。API 请求使用 `scenario_reference={name_cn,name_en,unique_id}`；兼容旧客户端的高级方式是 `parameters.change_scene` 对象。
 2. 点击“推荐完整案例包”。系统只从完整且为 `APPROVED` 的案例包中推荐最多三个，并检查字段集合与活动 Profile 一致。
 3. 人工确认 1～3 个案例包。系统按原顺序读取上下文、任务、前检、实施、验证和回退卡，排除 `EXECUTION_RESULT`；超出上下文预算时要求减少案例，不会静默截断。
 4. 异步生成 `GeneratedChangeDraft`。模型只生成规范化任务、四阶段步骤、风险、缺失项和引用。
@@ -116,13 +116,14 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
   --编辑--> 新 revision -> READY_FOR_REVIEW 或 BLOCKED
 ```
 
-模型已经返回内容但输出不符合 JSON/`GeneratedChangeDraft` 协议时，最多进行一次修复重试。输入/Profile 类型冲突不是模型协议问题：程序会在远程调用前阻断；缺失的结构化场景值进入 revision 的 `missing_fields` 并阻断审核；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。
+模型已经返回内容但输出不符合 JSON/`GeneratedChangeDraft` 协议时，最多进行一次修复重试。输入/Profile 类型冲突不是模型协议问题：程序会在远程调用前阻断；缺失的结构化场景值进入 revision 的 `missing_fields` 并阻断审核；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。`generation_diagnostics.protocol_repairs` 会记录触发第二次请求的 `JSON_PARSE` 或 `DRAFT_ASSEMBLY` 阶段、错误码和截断原因，因此不能再仅凭请求数猜测重试原因。
 
 ## 硬门禁
 
 导出前必须全部满足：
 
 - ChangeOrder Adapter 与活动 SchemaProfile 结构一致；
+- `generated` 字段存在且 Profile 类型为 `null`、值为 JSON `null` 时视为合法完成，不进入缺失项；字段缺席或 string/number 等非 null 类型为空仍进入缺失项；
 - Profile 为对象的 `change_scene` 按 `sample` 的键和子类型确定性装配；样例值不复制。样例中非空但本次未输入的子字段必须出现在缺失项中；
 - 必填字段和 `input:<path>` 参数齐全；
 - 前检、实施、验证、回退四阶段均非空；
@@ -131,6 +132,8 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
 - 批准和导出时引用卡仍为 `APPROVED`，内容快照未漂移；
 - `ExecutionResult` 只含空值或 `NOT_EXECUTED`；
 - 设备 ID、IP、端口、阈值、超时等具体值由 `parameters` 引用绑定，不得从历史案例复制或由模型猜测。
+
+生成 Prompt 明确规定 `request` 是本次事实源、`approved_cards` 只是模板和证据；输入值优先于历史卡片值。若 `request.parameters={}`，页面会提示操作者确认本次确实不需要具体参数。TaskRecord 的动作/能力身份字段可以继续引用卡片，它们不等同于本次设备或资源参数。
 
 原单相似度、任务/步骤匹配率、顺序相似度和专家评分只进入评测报告，不作为导出门禁。
 
