@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.6.0-b88924)
+![Version](https://img.shields.io/badge/version-1.6.1-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
@@ -376,6 +376,8 @@ RealChangeRequest
 - 强制以当前 Adapter 和 Builder 重新运行；
 - 使用新的单调递增 K ID，并增加 `build_generation`；
 - 不影响其他案例，也不关闭普通 ingest 的幂等机制。
+
+手动删除单张卡片也会在同一 SQLite 事务中失效包含它的知识簇、清理簇内相似关系，并下架已接受簇的派生 canonical。其他来源卡只有在不受其他有效治理结果约束时才恢复检索。
 
 `DEMO_FULL_RESET_ENABLED` 当前保留但默认关闭，Web 未开放全库重置入口。
 

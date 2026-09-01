@@ -120,6 +120,7 @@ RealChangeRequest
 - 相似治理同时以 `case_id` 和 `procedure_group` 为硬边界：同案例卡不得进入合并队列；不同 group 无论文本或 fingerprint 多相似都不得 MERGE，只能建立 `CROSS_PHASE_SIMILAR`、复用或业务关系。
 - 自动扫描只提出跨案例 complete-link 知识簇，不自动合并。一个簇中每个案例最多一张卡，任意两成员都必须满足阈值，避免传递相似过度扩簇。
 - 人工可选择 `FULL_EQUIVALENT` 或 `SHARED_CORE`。前者产生 `MERGED_INTO`；后者把来源卡保留为 `CASE_EVIDENCE + INSTANCE_OF`。两种方式都使来源成员退出普通检索；拒绝与成员 card/case/fingerprint 组合绑定。
+- 手动删除参与知识簇的卡片时，必须在同一事务中将相关簇置为 `STALE`、清理簇内 `SIMILAR_TO`、下架派生 canonical，并仅恢复不再受其他 accepted 治理结果约束的来源卡。簇成员行作为历史审计保留。
 - `VALIDATES` 和 `ROLLBACK_OF` 只在 operation target 和参数方向证据足够时建立；证据不足时为空，不猜测。
 - K 编号是展示 ID，不是稳定语义身份。案例重建使用新的单调递增 ID；稳定定位依赖 case ID、source pointer、semantic fingerprint 和 card type。
 
@@ -128,6 +129,7 @@ RealChangeRequest
 - ChangeOrder 结构层使用 `change_order_shape_v2`；动态 task group 不设上限，只约束每组为 TaskRecord 数组且与 flat view 完全对账。
 - 语义层使用 `change_order_semantic_builder_v2` / card model v2；rich text、时间、section、QA 和报告主要为确定性 Python 逻辑。
 - 相似治理使用 `semantic_cluster_v3`。pair 只作为本地聚类证据，新治理单位是跨案例 complete-link 知识簇；历史 pair API/记录保留兼容。共享锚点来自结构化字段、技术标识符和完整业务短语，不向用户展示中文字符滑窗片段。
+- 面向 UI 的知识簇列表保留 500 条上限；内部失效扫描不得复用该展示上限，必须处理全部 `PENDING_REVIEW/DEFERRED` 记录。
 - 相似治理后台扫描只执行本地 SQLite/确定性相似度计算，不调用模型；不要把扫描 Worker 存活误判为 API 并发占用。
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。结构化上下文对象（当前包括 `change_scene`）只使用 Profile `sample` 的键/类型，并从 `scenario_reference` 或兼容的 `parameters.change_scene` 取实例值；不得把 Profile 的历史样例值复制进新草案。

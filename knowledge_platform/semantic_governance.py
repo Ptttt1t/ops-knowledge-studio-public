@@ -1110,6 +1110,7 @@ class SemanticGovernanceService:
                 ),
                 -float(item.get("similarity_score") or 0.0),
                 str(item.get("updated_at") or ""),
+                str(item.get("proposal_id") or item.get("cluster_id") or ""),
             ),
         )
         proposals = proposals[: max(1, min(int(limit), 500))]

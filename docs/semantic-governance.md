@@ -74,7 +74,7 @@ PENDING_REVIEW -> ACCEPTED
 
 知识簇 identity 绑定算法版本、成员 card ID、case ID 和 semantic fingerprint。相同内容的已驳回簇不会重复推送；成员或内容变化会产生新的簇 identity。最终事务会重新验证来源卡仍是 `APPROVED + INDEXED + retrieval_enabled`，并再次验证 case 唯一性和 phase 一致性。
 
-## 案例重建一致性
+## 案例重建与手动删卡一致性
 
 “重建当前案例”会精确失效包含该案例成员的待审核、暂缓或已接受知识簇：
 
@@ -86,6 +86,16 @@ PENDING_REVIEW -> ACCEPTED
 6. 重建完成后等待下一轮扫描以新 Card ID 和 fingerprint 重新形成候选。
 
 清理始终按 case scope 执行，不影响无关案例。
+
+手动删除单张卡片时也使用同类的事务边界：
+
+1. 删除前查找该卡作为成员或 canonical 所属的待审核、暂缓或已接受知识簇；
+2. 簇标为 `STALE`，并删除该簇成员之间的全部 `SIMILAR_TO`；
+3. 已接受簇的 canonical 变为 `STALE + SKIPPED`，退出本地检索和外部长记忆投影；
+4. 其他成员只有在没有参与其他 accepted pair/知识簇时才恢复为 `NEW + INDEXED`；
+5. `semantic_merge_cluster_members` 保留历史成员 identity 作为审计记录，不会伪造为“从未加入该簇”。
+
+面向页面的列表查询最多返回 500 条，但扫描器的过期失效步骤直接遍历全部 `PENDING_REVIEW/DEFERRED` 簇，不受 UI 上限影响。
 
 ## 配置
 

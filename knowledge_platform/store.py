@@ -1579,6 +1579,7 @@ class KnowledgeStore:
             raise StoreError("删除操作者不能为空")
         now = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
                 "SELECT id, title, status, source_document_id FROM cards WHERE id = ?",
                 (card_id,),
@@ -1589,11 +1590,122 @@ class KnowledgeStore:
                 "SELECT case_id FROM card_lineage WHERE card_id = ?", (card_id,)
             ).fetchone()
 
+            affected_clusters = connection.execute(
+                """
+                SELECT DISTINCT clusters.*
+                FROM semantic_merge_clusters AS clusters
+                LEFT JOIN semantic_merge_cluster_members AS members
+                  ON members.cluster_id = clusters.cluster_id
+                WHERE clusters.status IN ('PENDING_REVIEW', 'DEFERRED', 'ACCEPTED')
+                  AND (members.card_id = ? OR clusters.canonical_card_id = ?)
+                ORDER BY clusters.created_at, clusters.cluster_id
+                """,
+                (card_id, card_id),
+            ).fetchall()
+            affected_canonical_ids: set[int] = set()
+            reactivation_candidates: set[int] = set()
+            for cluster in affected_clusters:
+                cluster_id = str(cluster["cluster_id"])
+                member_rows = connection.execute(
+                    "SELECT card_id FROM semantic_merge_cluster_members "
+                    "WHERE cluster_id = ? ORDER BY card_id",
+                    (cluster_id,),
+                ).fetchall()
+                member_ids = [int(row["card_id"]) for row in member_rows]
+                connection.execute(
+                    "UPDATE semantic_merge_clusters "
+                    "SET status = 'STALE', updated_at = ? WHERE cluster_id = ?",
+                    (now, cluster_id),
+                )
+                if member_ids:
+                    member_placeholders = ",".join("?" for _ in member_ids)
+                    connection.execute(
+                        f"DELETE FROM relations WHERE relation_type = 'SIMILAR_TO' "
+                        f"AND card_id IN ({member_placeholders}) "
+                        f"AND related_card_id IN ({member_placeholders})",
+                        [*member_ids, *member_ids],
+                    )
+                canonical_id = cluster["canonical_card_id"]
+                if canonical_id is not None:
+                    normalized_canonical_id = int(canonical_id)
+                    affected_canonical_ids.add(normalized_canonical_id)
+                    connection.execute(
+                        "DELETE FROM relations WHERE related_card_id = ? "
+                        "AND relation_type IN ('MERGED_INTO', 'INSTANCE_OF')",
+                        (normalized_canonical_id,),
+                    )
+                if str(cluster["status"]) == "ACCEPTED":
+                    reactivation_candidates.update(member_ids)
+
+            if affected_clusters:
+                connection.execute(
+                    "DELETE FROM semantic_governance_state WHERE state_key = 'last_scan'"
+                )
+            invalidated_canonical_ids = affected_canonical_ids - {card_id}
+            if invalidated_canonical_ids:
+                canonical_placeholders = ",".join(
+                    "?" for _ in invalidated_canonical_ids
+                )
+                connection.execute(
+                    f"UPDATE cards SET dedup_status = 'STALE', "
+                    f"publish_status = 'SKIPPED', retrieval_enabled = 0, "
+                    f"planning_rag_enabled = 0, updated_at = ? "
+                    f"WHERE id IN ({canonical_placeholders})",
+                    [now, *sorted(invalidated_canonical_ids)],
+                )
+
+            reactivation_candidates.discard(card_id)
+            reactivation_candidates.difference_update(affected_canonical_ids)
+            reactivated_card_ids: list[int] = []
+            for candidate_id in sorted(reactivation_candidates):
+                still_merged = connection.execute(
+                    "SELECT 1 FROM semantic_merge_proposals "
+                    "WHERE status = 'ACCEPTED' "
+                    "AND (left_card_id = ? OR right_card_id = ?) LIMIT 1",
+                    (candidate_id, candidate_id),
+                ).fetchone()
+                still_clustered = connection.execute(
+                    """
+                    SELECT 1
+                    FROM semantic_merge_cluster_members AS members
+                    JOIN semantic_merge_clusters AS clusters
+                      ON clusters.cluster_id = members.cluster_id
+                    WHERE clusters.status = 'ACCEPTED' AND members.card_id = ?
+                    LIMIT 1
+                    """,
+                    (candidate_id,),
+                ).fetchone()
+                candidate = connection.execute(
+                    "SELECT status, card_type FROM cards WHERE id = ?",
+                    (candidate_id,),
+                ).fetchone()
+                if (
+                    still_merged is None
+                    and still_clustered is None
+                    and candidate is not None
+                    and str(candidate["status"]) == CardStatus.APPROVED.value
+                    and str(candidate["card_type"]) == "PROCEDURE_STEP"
+                ):
+                    connection.execute(
+                        "UPDATE cards SET dedup_status = 'NEW', "
+                        "publish_status = 'INDEXED', retrieval_enabled = 1, "
+                        "planning_rag_enabled = 1, updated_at = ? WHERE id = ?",
+                        (now, candidate_id),
+                    )
+                    reactivated_card_ids.append(candidate_id)
+
+            retirement_card_ids = sorted({card_id, *invalidated_canonical_ids})
+            retirement_placeholders = ",".join("?" for _ in retirement_card_ids)
             memory_rows = connection.execute(
-                "SELECT backend, memory_id FROM memory_links WHERE card_id = ?",
-                (card_id,),
+                f"SELECT backend, memory_id, card_id FROM memory_links "
+                f"WHERE card_id IN ({retirement_placeholders})",
+                retirement_card_ids,
             ).fetchall()
             for row in memory_rows:
+                memory_lineage = connection.execute(
+                    "SELECT case_id FROM card_lineage WHERE card_id = ?",
+                    (int(row["card_id"]),),
+                ).fetchone()
                 connection.execute(
                     """
                     INSERT INTO memory_retirements
@@ -1610,10 +1722,31 @@ class KnowledgeStore:
                     (
                         str(row["backend"]),
                         str(row["memory_id"]),
-                        card_id,
-                        str(lineage["case_id"]) if lineage is not None else "",
+                        int(row["card_id"]),
+                        (
+                            str(memory_lineage["case_id"])
+                            if memory_lineage is not None
+                            else str(lineage["case_id"])
+                            if lineage is not None
+                            else ""
+                        ),
                         now,
                     ),
+                )
+            if invalidated_canonical_ids:
+                canonical_placeholders = ",".join(
+                    "?" for _ in invalidated_canonical_ids
+                )
+                connection.execute(
+                    f"DELETE FROM memory_links WHERE card_id IN ({canonical_placeholders})",
+                    sorted(invalidated_canonical_ids),
+                )
+                connection.execute(
+                    f"UPDATE memory_sync_state SET status = 'RETIRED', "
+                    f"memory_count = 0, "
+                    f"detail = 'card deletion invalidated canonical knowledge', "
+                    f"updated_at = ? WHERE card_id IN ({canonical_placeholders})",
+                    [now, *sorted(invalidated_canonical_ids)],
                 )
 
             # A deleted historical card must not remain as another card's
@@ -1630,6 +1763,14 @@ class KnowledgeStore:
                 "status": str(current["status"]),
                 "source_document_id": int(current["source_document_id"]),
                 "queued_memory_retirements": len(memory_rows),
+                "invalidated_semantic_cluster_count": len(affected_clusters),
+                "invalidated_semantic_cluster_ids": [
+                    str(row["cluster_id"]) for row in affected_clusters
+                ],
+                "invalidated_canonical_count": len(affected_canonical_ids),
+                "invalidated_canonical_card_ids": sorted(affected_canonical_ids),
+                "reactivated_semantic_source_count": len(reactivated_card_ids),
+                "reactivated_semantic_source_card_ids": reactivated_card_ids,
             }
             connection.execute(
                 """
@@ -2049,7 +2190,7 @@ class KnowledgeStore:
                     WHEN 'PENDING_REVIEW' THEN 0
                     WHEN 'DEFERRED' THEN 1
                     ELSE 2 END,
-                    similarity_score DESC, updated_at DESC
+                    similarity_score DESC, updated_at DESC, proposal_id ASC
                 LIMIT ?
                 """,
                 params,
@@ -2137,7 +2278,7 @@ class KnowledgeStore:
                     WHEN 'PENDING_REVIEW' THEN 0
                     WHEN 'DEFERRED' THEN 1
                     ELSE 2 END,
-                    average_score DESC, updated_at DESC
+                    average_score DESC, updated_at DESC, cluster_id ASC
                 LIMIT ?
                 """,
                 params,
@@ -2198,6 +2339,7 @@ class KnowledgeStore:
         now = utc_now()
         created = False
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             placeholders = ",".join("?" for _ in member_ids)
             current_rows = connection.execute(
                 f"""
@@ -2360,30 +2502,57 @@ class KnowledgeStore:
     ) -> int:
         stale_ids: list[str] = []
         stale_member_sets: list[list[int]] = []
-        for cluster in self.list_semantic_merge_clusters(status="ALL", limit=500):
-            if cluster["status"] not in {"PENDING_REVIEW", "DEFERRED"}:
-                continue
-            members = cluster.get("members") or []
-            member_cases = [str(item.get("case_id") or "") for item in members]
-            invalid = (
-                str(cluster.get("cluster_key") or "") not in active_cluster_keys
-                or str(cluster.get("algorithm_version") or "") != algorithm_version
-                or len(member_cases) != len(set(member_cases))
-                or any(
-                    eligible_fingerprints.get(int(item["card_id"]))
-                    != str(item.get("semantic_fingerprint") or "")
-                    or eligible_case_ids.get(int(item["card_id"]))
-                    != str(item.get("case_id") or "")
-                    for item in members
-                )
-            )
-            if invalid:
-                stale_ids.append(str(cluster["cluster_id"]))
-                stale_member_sets.append([int(item["card_id"]) for item in members])
-        if not stale_ids:
-            return 0
         now = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT * FROM semantic_merge_clusters "
+                "WHERE status IN ('PENDING_REVIEW', 'DEFERRED') "
+                "ORDER BY cluster_id"
+            ).fetchall()
+            member_rows = connection.execute(
+                """
+                SELECT members.*
+                FROM semantic_merge_cluster_members AS members
+                JOIN semantic_merge_clusters AS clusters
+                  ON clusters.cluster_id = members.cluster_id
+                WHERE clusters.status IN ('PENDING_REVIEW', 'DEFERRED')
+                ORDER BY members.cluster_id, members.card_id
+                """
+            ).fetchall()
+            members_by_cluster: dict[str, list[sqlite3.Row]] = {}
+            for member in member_rows:
+                members_by_cluster.setdefault(str(member["cluster_id"]), []).append(
+                    member
+                )
+            for row in rows:
+                cluster = self._decode_semantic_merge_cluster(
+                    row, members_by_cluster.get(str(row["cluster_id"]), [])
+                )
+                if cluster is None:
+                    continue
+                members = cluster.get("members") or []
+                member_cases = [str(item.get("case_id") or "") for item in members]
+                invalid = (
+                    str(cluster.get("cluster_key") or "") not in active_cluster_keys
+                    or str(cluster.get("algorithm_version") or "")
+                    != algorithm_version
+                    or len(member_cases) != len(set(member_cases))
+                    or any(
+                        eligible_fingerprints.get(int(item["card_id"]))
+                        != str(item.get("semantic_fingerprint") or "")
+                        or eligible_case_ids.get(int(item["card_id"]))
+                        != str(item.get("case_id") or "")
+                        for item in members
+                    )
+                )
+                if invalid:
+                    stale_ids.append(str(cluster["cluster_id"]))
+                    stale_member_sets.append(
+                        [int(item["card_id"]) for item in members]
+                    )
+            if not stale_ids:
+                return 0
             connection.executemany(
                 "UPDATE semantic_merge_clusters SET status = 'STALE', updated_at = ? "
                 "WHERE cluster_id = ?",

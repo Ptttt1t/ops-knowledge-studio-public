@@ -404,6 +404,290 @@ class SemanticGovernanceTests(unittest.TestCase):
                 any(edge["relation_type"] == "INSTANCE_OF" for edge in graph["edges"])
             )
 
+    def test_delete_pending_cluster_member_stales_cluster_and_clears_all_edges(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查活动告警、服务探针和关键业务指标，确认系统运行正常。"
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"delete-pending-{index}",
+                    title="前检：通用健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"delete-pending-{index}",
+                )
+                for index in range(3)
+            ]
+            service.semantic_governance.scan()
+            cluster = service.store.list_semantic_merge_clusters(
+                status="PENDING_REVIEW", limit=10
+            )[0]
+            representative_id = int(cluster["representative_card_id"])
+            deleted_id = next(
+                source_id for source_id in source_ids if source_id != representative_id
+            )
+
+            result = service.store.delete_card(deleted_id, actor="synthetic-operator")
+
+            stale = service.store.get_semantic_merge_cluster(str(cluster["cluster_id"]))
+            assert stale is not None
+            self.assertEqual(stale["status"], "STALE")
+            self.assertEqual(result["invalidated_semantic_cluster_count"], 1)
+            self.assertEqual(result["invalidated_canonical_count"], 0)
+            self.assertIsNone(service.store.get_card(deleted_id))
+            self.assertIn(deleted_id, stale["member_card_ids"])
+            self.assertIsNone(service.store.get_semantic_scan_report())
+            with service.store.connect() as connection:
+                similar_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) AS count FROM relations "
+                        "WHERE relation_type = 'SIMILAR_TO'"
+                    ).fetchone()["count"]
+                )
+            self.assertEqual(similar_count, 0)
+
+    def test_delete_accepted_cluster_source_retires_canonical_and_reactivates_peers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查活动告警、服务探针和关键业务指标，确认系统运行正常。"
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"delete-accepted-{index}",
+                    title="前检：通用健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"delete-accepted-{index}",
+                )
+                for index in range(3)
+            ]
+            service.semantic_governance.scan()
+            proposal = service.semantic_governance.list_proposals()["proposals"][0]
+            accepted = service.semantic_governance.decide(
+                proposal["proposal_id"],
+                decision="ACCEPT",
+                actor="knowledge-owner",
+                comment="synthetic shared core",
+                merge_mode="SHARED_CORE",
+            )
+            canonical_id = int(accepted["canonical_card_id"])
+
+            result = service.store.delete_card(
+                source_ids[1], actor="synthetic-operator"
+            )
+
+            stale = service.store.get_semantic_merge_cluster(proposal["proposal_id"])
+            assert stale is not None
+            self.assertEqual(stale["status"], "STALE")
+            self.assertEqual(result["invalidated_semantic_cluster_count"], 1)
+            self.assertEqual(result["invalidated_canonical_card_ids"], [canonical_id])
+            canonical = service.store.get_card(canonical_id)
+            assert canonical is not None
+            self.assertEqual(canonical["dedup_status"], "STALE")
+            self.assertEqual(canonical["publish_status"], "SKIPPED")
+            self.assertFalse(canonical["retrieval_enabled"])
+            for source_id in (source_ids[0], source_ids[2]):
+                source = service.store.get_card(source_id)
+                assert source is not None
+                self.assertEqual(source["dedup_status"], "NEW")
+                self.assertEqual(source["publish_status"], "INDEXED")
+                self.assertTrue(source["retrieval_enabled"])
+                self.assertFalse(
+                    any(
+                        relation["relation_type"] == "INSTANCE_OF"
+                        for relation in service.store.list_relations(source_id)
+                    )
+                )
+            self.assertEqual(
+                result["reactivated_semantic_source_card_ids"],
+                [source_ids[0], source_ids[2]],
+            )
+
+    def test_delete_accepted_cluster_canonical_reactivates_all_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            source_ids = list(self.prepare_pair(service))
+            service.semantic_governance.scan()
+            proposal = service.semantic_governance.list_proposals()["proposals"][0]
+            accepted = service.semantic_governance.decide(
+                proposal["proposal_id"],
+                decision="ACCEPT",
+                actor="knowledge-owner",
+                comment="synthetic canonical deletion",
+                merge_mode="SHARED_CORE",
+            )
+            canonical_id = int(accepted["canonical_card_id"])
+
+            result = service.store.delete_card(
+                canonical_id, actor="synthetic-operator"
+            )
+
+            stale = service.store.get_semantic_merge_cluster(proposal["proposal_id"])
+            assert stale is not None
+            self.assertEqual(stale["status"], "STALE")
+            self.assertEqual(result["invalidated_canonical_card_ids"], [canonical_id])
+            self.assertIsNone(service.store.get_card(canonical_id))
+            self.assertEqual(
+                result["reactivated_semantic_source_card_ids"], source_ids
+            )
+            for source_id in source_ids:
+                source = service.store.get_card(source_id)
+                assert source is not None
+                self.assertEqual(source["dedup_status"], "NEW")
+                self.assertEqual(source["publish_status"], "INDEXED")
+                self.assertTrue(source["retrieval_enabled"])
+
+    def test_stale_cluster_scan_is_not_limited_to_five_hundred_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            now = "2026-09-01T00:00:00+00:00"
+            cluster_count = 501
+            clusters = []
+            members = []
+            for index in range(cluster_count):
+                cluster_id = f"bulk-cluster-{index:04d}"
+                left_id = index * 2 + 1
+                right_id = left_id + 1
+                clusters.append(
+                    (
+                        cluster_id,
+                        f"bulk-key-{index:04d}",
+                        "PROCEDURE_STEP",
+                        "PRECHECK",
+                        "old-algorithm",
+                        left_id,
+                        0.8,
+                        0.8,
+                        0.8,
+                        "[]",
+                        "{}",
+                        "synthetic bulk stale test",
+                        "{}",
+                        "SHARED_CORE",
+                        now,
+                        now,
+                    )
+                )
+                members.extend(
+                    [
+                        (
+                            cluster_id,
+                            left_id,
+                            f"case-left-{index:04d}",
+                            f"fingerprint-left-{index:04d}",
+                            1.0,
+                            "{}",
+                            now,
+                        ),
+                        (
+                            cluster_id,
+                            right_id,
+                            f"case-right-{index:04d}",
+                            f"fingerprint-right-{index:04d}",
+                            0.8,
+                            "{}",
+                            now,
+                        ),
+                    ]
+                )
+            with service.store.connect() as connection:
+                connection.executemany(
+                    """
+                    INSERT INTO semantic_merge_clusters (
+                        cluster_id, cluster_key, card_type, procedure_group,
+                        algorithm_version, representative_card_id,
+                        minimum_score, average_score, maximum_score,
+                        shared_anchors, member_differences, reason, proposed_merge,
+                        recommended_merge_mode, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'PENDING_REVIEW', ?, ?)
+                    """,
+                    clusters,
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO semantic_merge_cluster_members (
+                        cluster_id, card_id, case_id, semantic_fingerprint,
+                        representative_score, signals, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    members,
+                )
+
+            first_page = service.store.list_semantic_merge_clusters(
+                status="PENDING_REVIEW", limit=3
+            )
+            self.assertEqual(
+                [item["cluster_id"] for item in first_page],
+                ["bulk-cluster-0000", "bulk-cluster-0001", "bulk-cluster-0002"],
+            )
+            stale_count = service.store.stale_semantic_merge_clusters(
+                set(), {}, {}, algorithm_version="new-algorithm"
+            )
+
+            self.assertEqual(stale_count, cluster_count)
+            counts = service.store.semantic_merge_cluster_counts()
+            self.assertEqual(counts.get("PENDING_REVIEW", 0), 0)
+            self.assertEqual(counts.get("STALE", 0), cluster_count)
+
+    def test_concurrent_cluster_upserts_serialize_without_lost_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            self.prepare_pair(service)
+            service.semantic_governance.scan()
+            cluster = service.store.list_semantic_merge_clusters(
+                status="PENDING_REVIEW", limit=10
+            )[0]
+            kwargs = {
+                "cluster_id": str(cluster["cluster_id"]),
+                "cluster_key": str(cluster["cluster_key"]),
+                "card_type": str(cluster["card_type"]),
+                "procedure_group": str(cluster["procedure_group"]),
+                "algorithm_version": str(cluster["algorithm_version"]),
+                "representative_card_id": int(cluster["representative_card_id"]),
+                "minimum_score": float(cluster["minimum_score"]),
+                "average_score": float(cluster["average_score"]),
+                "maximum_score": float(cluster["maximum_score"]),
+                "shared_anchors": list(cluster["shared_anchors"]),
+                "member_differences": dict(cluster["member_differences"]),
+                "reason": str(cluster["reason"]),
+                "proposed_merge": dict(cluster["proposed_merge"]),
+                "recommended_merge_mode": str(cluster["recommended_merge_mode"]),
+                "members": [dict(member) for member in cluster["members"]],
+            }
+            barrier = threading.Barrier(3)
+            errors: list[Exception] = []
+
+            def refresh_cluster() -> None:
+                barrier.wait()
+                try:
+                    service.store.upsert_semantic_merge_cluster(**kwargs)
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=refresh_cluster, daemon=True)
+                for _index in range(2)
+            ]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(timeout=10)
+
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            refreshed = service.store.get_semantic_merge_cluster(
+                str(cluster["cluster_id"])
+            )
+            assert refreshed is not None
+            self.assertEqual(refreshed["member_card_ids"], cluster["member_card_ids"])
+
     def test_rejection_suppresses_same_content_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = self.make_service(Path(directory))
