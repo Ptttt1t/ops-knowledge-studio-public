@@ -597,9 +597,10 @@ const semanticProposalStatusLabels = {
   REJECTED: "已排除",
   DEFERRED: "暂缓",
   STALE: "已失效",
+  SUPERSEDED: "已窄化替代",
 };
 
-function semanticCardComparisonHtml(card, side) {
+function semanticCardComparisonHtml(card, side, removable = false) {
   if (!card) return `<div class="semantic-source-card missing">来源卡片已不存在</div>`;
   const operation = card.generalized_operation || card.procedure_steps?.join("\n") || "";
   const validation = card.validation || card.validation_steps?.join("\n") || "";
@@ -614,6 +615,7 @@ function semanticCardComparisonHtml(card, side) {
       <dt>来源</dt><dd>${escapeHtml(card.source_name || card.source_ref || "—")}</dd>
     </dl>
     <button class="button small secondary" type="button" data-open-card="${card.id}">查看原卡</button>
+    ${removable ? `<button class="button small danger" type="button" data-semantic-remove-member="${card.id}">从本次簇移除</button>` : ""}
   </div>`;
 }
 
@@ -675,7 +677,11 @@ function semanticProposalHtml(proposal) {
       ? `<span>最低 ${Math.round(Number(proposal.minimum_score || 0) * 100)}%</span><span>平均 ${Math.round(Number(proposal.average_score || 0) * 100)}%</span><span>最高 ${Math.round(Number(proposal.maximum_score || 0) * 100)}%</span><span>complete-link</span>`
       : `<span>包含度 ${escapeHtml(signals.token_containment ?? "—")}</span><span>文本顺序 ${escapeHtml(signals.sequence_similarity ?? "—")}</span>`}</div>
     <div class="semantic-source-grid">
-      ${members.map((card, index) => semanticCardComparisonHtml(card, card?.is_representative ? "簇代表" : `成员 ${index + 1}`)).join("")}
+      ${members.map((card, index) => semanticCardComparisonHtml(
+        card,
+        card?.is_representative ? "簇代表" : `成员 ${index + 1}`,
+        editable && isCluster && memberCount > 2,
+      )).join("")}
     </div>
     ${isCluster ? semanticDifferencesHtml(proposal) : ""}
     ${editor}
@@ -1818,6 +1824,35 @@ document.getElementById("semantic-proposal-list").addEventListener("click", asyn
   const openCard = event.target.closest("[data-open-card]");
   if (openCard) {
     await window.showDetail(Number(openCard.dataset.openCard));
+    return;
+  }
+  const removeButton = event.target.closest("[data-semantic-remove-member]");
+  if (removeButton) {
+    const proposalElement = removeButton.closest("[data-proposal-id]");
+    const proposalId = proposalElement?.dataset.proposalId;
+    const memberCardId = Number(removeButton.dataset.semanticRemoveMember);
+    const comment = proposalElement?.querySelector("[data-merge-comment]")?.value.trim() || "";
+    if (!proposalId || !memberCardId) return;
+    if (!comment) {
+      toast("移除知识簇成员前请填写人工意见，说明该成员为何不属于本次簇。", true);
+      return;
+    }
+    if (!window.confirm(`确认从本次候选簇移除 K${memberCardId}？原候选会保留为审计记录，剩余成员将形成新的待审核簇。`)) return;
+    setBusy(removeButton, true, "正在窄化……");
+    try {
+      const result = await api(`/api/semantic-merge-proposals/${encodeURIComponent(proposalId)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({
+          decision: "REMOVE_MEMBER",
+          member_card_id: memberCardId,
+          comment,
+        }),
+      });
+      toast(`已移除 K${memberCardId}，新候选 ${result.proposal_id} 保留 ${result.member_count} 张卡`);
+      await loadSemanticGovernance();
+      if (document.getElementById("page-graph").classList.contains("active")) await loadKnowledgeGraph();
+    } catch (error) { toast(error.message, true); }
+    finally { setBusy(removeButton, false); }
     return;
   }
   const actionButton = event.target.closest("[data-semantic-action]");

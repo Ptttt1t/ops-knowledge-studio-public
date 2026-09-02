@@ -170,6 +170,7 @@ class KnowledgeStore:
             reviewed_by TEXT NOT NULL DEFAULT '',
             review_comment TEXT NOT NULL DEFAULT '',
             canonical_card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+            superseded_by_cluster_id TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             reviewed_at TEXT
@@ -193,6 +194,32 @@ class KnowledgeStore:
 
         CREATE INDEX IF NOT EXISTS idx_semantic_merge_cluster_members_card
             ON semantic_merge_cluster_members(card_id, cluster_id);
+
+        CREATE TABLE IF NOT EXISTS semantic_merge_member_exclusions (
+            source_cluster_id TEXT NOT NULL,
+            replacement_cluster_id TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            procedure_group TEXT NOT NULL,
+            left_card_id INTEGER NOT NULL,
+            right_card_id INTEGER NOT NULL,
+            left_case_id TEXT NOT NULL,
+            right_case_id TEXT NOT NULL,
+            left_fingerprint TEXT NOT NULL,
+            right_fingerprint TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            comment TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (
+                algorithm_version, procedure_group, left_card_id, right_card_id,
+                left_case_id, right_case_id, left_fingerprint, right_fingerprint
+            ),
+            CHECK(left_card_id < right_card_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_semantic_merge_member_exclusions_cards
+            ON semantic_merge_member_exclusions(
+                algorithm_version, left_card_id, right_card_id
+            );
 
         CREATE TABLE IF NOT EXISTS semantic_governance_state (
             state_key TEXT PRIMARY KEY,
@@ -398,6 +425,17 @@ class KnowledgeStore:
                 connection.execute(
                     "ALTER TABLE memory_retirements "
                     "ADD COLUMN case_id TEXT NOT NULL DEFAULT ''"
+                )
+            cluster_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(semantic_merge_clusters)"
+                ).fetchall()
+            }
+            if "superseded_by_cluster_id" not in cluster_columns:
+                connection.execute(
+                    "ALTER TABLE semantic_merge_clusters "
+                    "ADD COLUMN superseded_by_cluster_id TEXT NOT NULL DEFAULT ''"
                 )
             lineage_columns = {
                 str(row["name"])
@@ -2302,6 +2340,35 @@ class KnowledgeStore:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def semantic_merge_member_exclusion_pairs(
+        self,
+        eligible_fingerprints: dict[int, str],
+        eligible_case_ids: dict[int, str],
+        eligible_groups: dict[int, str],
+        *,
+        algorithm_version: str,
+    ) -> set[tuple[int, int]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM semantic_merge_member_exclusions "
+                "WHERE algorithm_version = ? ORDER BY left_card_id, right_card_id",
+                (algorithm_version,),
+            ).fetchall()
+        excluded: set[tuple[int, int]] = set()
+        for row in rows:
+            left_id = int(row["left_card_id"])
+            right_id = int(row["right_card_id"])
+            if (
+                eligible_fingerprints.get(left_id) == str(row["left_fingerprint"])
+                and eligible_fingerprints.get(right_id) == str(row["right_fingerprint"])
+                and eligible_case_ids.get(left_id) == str(row["left_case_id"])
+                and eligible_case_ids.get(right_id) == str(row["right_case_id"])
+                and eligible_groups.get(left_id) == str(row["procedure_group"])
+                and eligible_groups.get(right_id) == str(row["procedure_group"])
+            ):
+                excluded.add((left_id, right_id))
+        return excluded
+
     def upsert_semantic_merge_cluster(
         self,
         *,
@@ -2491,6 +2558,323 @@ class KnowledgeStore:
         if cluster is None:
             raise StoreError("相似知识簇写入后无法读取")
         return cluster, created
+
+    def revise_semantic_merge_cluster_without_member(
+        self,
+        cluster_id: str,
+        *,
+        excluded_card_id: int,
+        actor: str,
+        comment: str,
+        replacement_cluster_id: str,
+        replacement_cluster_key: str,
+        representative_card_id: int,
+        minimum_score: float,
+        average_score: float,
+        maximum_score: float,
+        shared_anchors: list[str],
+        member_differences: dict[str, Any],
+        reason: str,
+        proposed_merge: dict[str, Any],
+        recommended_merge_mode: str,
+        members: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        reviewer = actor.strip()
+        rationale = comment.strip()
+        if not reviewer:
+            raise StoreError("知识簇成员移除确认人不能为空")
+        if not rationale:
+            raise StoreError("移除知识簇成员必须填写判断依据")
+        normalized_members = sorted(members, key=lambda item: int(item["card_id"]))
+        if len(normalized_members) < 2:
+            raise StoreError("移除成员后至少需要保留两张来源卡片")
+        member_ids = [int(item["card_id"]) for item in normalized_members]
+        case_ids = [str(item.get("case_id") or "").strip() for item in normalized_members]
+        if any(not case_id for case_id in case_ids) or len(case_ids) != len(set(case_ids)):
+            raise StoreError("窄化后的知识簇必须保持一案例一张卡")
+        if int(representative_card_id) not in member_ids:
+            raise StoreError("窄化后的知识簇代表卡必须属于保留成员")
+        normalized_mode = str(recommended_merge_mode or "").strip().upper()
+        if normalized_mode not in {"FULL_EQUIVALENT", "SHARED_CORE"}:
+            raise StoreError("未知的知识簇治理方式")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source = connection.execute(
+                "SELECT * FROM semantic_merge_clusters WHERE cluster_id = ?",
+                (cluster_id,),
+            ).fetchone()
+            if source is None:
+                raise StoreError("相似知识簇不存在")
+            if str(source["status"]) not in {"PENDING_REVIEW", "DEFERRED"}:
+                raise StoreError(f"当前知识簇状态不能移除成员: {source['status']}")
+            source_members = connection.execute(
+                "SELECT * FROM semantic_merge_cluster_members "
+                "WHERE cluster_id = ? ORDER BY card_id",
+                (cluster_id,),
+            ).fetchall()
+            if len(source_members) < 3:
+                raise StoreError("两成员知识簇不能继续移除成员，请驳回该候选")
+            source_by_id = {int(row["card_id"]): row for row in source_members}
+            excluded_id = int(excluded_card_id)
+            if excluded_id not in source_by_id:
+                raise StoreError("要移除的卡片不属于当前知识簇")
+            expected_remaining = set(source_by_id) - {excluded_id}
+            if set(member_ids) != expected_remaining:
+                raise StoreError("窄化后的知识簇成员与原簇不一致")
+            if replacement_cluster_key == str(source["cluster_key"]):
+                raise StoreError("窄化后的知识簇 identity 未变化")
+
+            all_ids = sorted(source_by_id)
+            placeholders = ",".join("?" for _ in all_ids)
+            current_rows = connection.execute(
+                f"""
+                SELECT cards.id, cards.status, cards.card_type,
+                       cards.publish_status, cards.retrieval_enabled,
+                       cards.semantic_fingerprint, cards.semantic_payload,
+                       lineage.case_id
+                FROM cards
+                JOIN card_lineage AS lineage ON lineage.card_id = cards.id
+                WHERE cards.id IN ({placeholders})
+                """,
+                all_ids,
+            ).fetchall()
+            if len(current_rows) != len(all_ids):
+                raise StoreError("知识簇来源卡片或案例 lineage 已不存在")
+            current_by_id = {int(row["id"]): row for row in current_rows}
+            normalized_group = str(source["procedure_group"] or "").strip().upper()
+            for source_id, source_member in source_by_id.items():
+                current = current_by_id[source_id]
+                if (
+                    str(current["case_id"]) != str(source_member["case_id"])
+                    or str(current["semantic_fingerprint"])
+                    != str(source_member["semantic_fingerprint"])
+                ):
+                    raise StoreError("知识簇成员内容或案例 identity 已变化，请重新扫描")
+                if (
+                    str(current["status"]) != CardStatus.APPROVED.value
+                    or str(current["card_type"]).upper() != "PROCEDURE_STEP"
+                    or str(current["publish_status"]).upper() != "INDEXED"
+                    or not bool(current["retrieval_enabled"])
+                ):
+                    raise StoreError("知识簇成员已不再满足治理条件")
+                payload = json.loads(str(current["semantic_payload"] or "{}"))
+                if procedure_phase(payload) != normalized_group:
+                    raise StoreError("知识簇成员执行阶段不一致")
+
+            replacement = connection.execute(
+                "SELECT * FROM semantic_merge_clusters WHERE cluster_key = ?",
+                (replacement_cluster_key,),
+            ).fetchone()
+            if replacement is not None and str(replacement["status"]) not in {
+                "PENDING_REVIEW",
+                "DEFERRED",
+            }:
+                raise StoreError("保留成员已有终态治理记录，不能自动覆盖")
+            persisted_replacement_id = (
+                str(replacement["cluster_id"])
+                if replacement is not None
+                else replacement_cluster_id
+            )
+            if replacement is None:
+                connection.execute(
+                    """
+                    INSERT INTO semantic_merge_clusters (
+                        cluster_id, cluster_key, card_type, procedure_group,
+                        algorithm_version, representative_card_id,
+                        minimum_score, average_score, maximum_score,
+                        shared_anchors, member_differences, reason, proposed_merge,
+                        recommended_merge_mode, status, created_at, updated_at
+                    ) VALUES (?, ?, 'PROCEDURE_STEP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'PENDING_REVIEW', ?, ?)
+                    """,
+                    (
+                        persisted_replacement_id,
+                        replacement_cluster_key,
+                        normalized_group,
+                        str(source["algorithm_version"]),
+                        int(representative_card_id),
+                        max(0.0, min(float(minimum_score), 1.0)),
+                        max(0.0, min(float(average_score), 1.0)),
+                        max(0.0, min(float(maximum_score), 1.0)),
+                        json.dumps(shared_anchors, ensure_ascii=False, sort_keys=True),
+                        json.dumps(member_differences, ensure_ascii=False, sort_keys=True),
+                        reason.strip(),
+                        json.dumps(proposed_merge, ensure_ascii=False, sort_keys=True),
+                        normalized_mode,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE semantic_merge_clusters
+                    SET representative_card_id = ?, minimum_score = ?, average_score = ?,
+                        maximum_score = ?, shared_anchors = ?, member_differences = ?,
+                        reason = ?, proposed_merge = ?, recommended_merge_mode = ?,
+                        updated_at = ?
+                    WHERE cluster_id = ?
+                    """,
+                    (
+                        int(representative_card_id), minimum_score, average_score,
+                        maximum_score,
+                        json.dumps(shared_anchors, ensure_ascii=False, sort_keys=True),
+                        json.dumps(member_differences, ensure_ascii=False, sort_keys=True),
+                        reason.strip(),
+                        json.dumps(proposed_merge, ensure_ascii=False, sort_keys=True),
+                        normalized_mode, now, persisted_replacement_id,
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM semantic_merge_cluster_members WHERE cluster_id = ?",
+                    (persisted_replacement_id,),
+                )
+
+            connection.executemany(
+                """
+                INSERT INTO semantic_merge_cluster_members
+                    (cluster_id, card_id, case_id, semantic_fingerprint,
+                     representative_score, signals, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        persisted_replacement_id,
+                        int(item["card_id"]),
+                        str(item["case_id"]),
+                        str(item["semantic_fingerprint"]),
+                        max(0.0, min(float(item.get("representative_score") or 0.0), 1.0)),
+                        json.dumps(item.get("signals") or {}, ensure_ascii=False, sort_keys=True),
+                        now,
+                    )
+                    for item in normalized_members
+                ],
+            )
+            connection.execute(
+                f"DELETE FROM relations WHERE relation_type = 'SIMILAR_TO' "
+                f"AND card_id IN ({placeholders}) AND related_card_id IN ({placeholders})",
+                [*all_ids, *all_ids],
+            )
+            for item in normalized_members:
+                member_id = int(item["card_id"])
+                if member_id == int(representative_card_id):
+                    continue
+                left_id, right_id = sorted((int(representative_card_id), member_id))
+                connection.execute(
+                    """
+                    INSERT INTO relations
+                        (card_id, related_card_id, relation_type,
+                         confidence, reason, created_at)
+                    VALUES (?, ?, 'SIMILAR_TO', ?, ?, ?)
+                    ON CONFLICT(card_id, related_card_id, relation_type)
+                    DO UPDATE SET confidence = excluded.confidence,
+                                  reason = excluded.reason
+                    """,
+                    (
+                        left_id,
+                        right_id,
+                        max(0.0, min(float(item.get("representative_score") or 0.0), 1.0)),
+                        reason.strip(),
+                        now,
+                    ),
+                )
+
+            excluded_member = source_by_id[excluded_id]
+            for item in normalized_members:
+                remaining_id = int(item["card_id"])
+                left_id, right_id = sorted((excluded_id, remaining_id))
+                if left_id == excluded_id:
+                    left_member = excluded_member
+                    right_case_id = str(item["case_id"])
+                    right_fingerprint = str(item["semantic_fingerprint"])
+                    left_case_id = str(left_member["case_id"])
+                    left_fingerprint = str(left_member["semantic_fingerprint"])
+                else:
+                    left_case_id = str(item["case_id"])
+                    left_fingerprint = str(item["semantic_fingerprint"])
+                    right_case_id = str(excluded_member["case_id"])
+                    right_fingerprint = str(excluded_member["semantic_fingerprint"])
+                connection.execute(
+                    """
+                    INSERT INTO semantic_merge_member_exclusions (
+                        source_cluster_id, replacement_cluster_id, algorithm_version,
+                        procedure_group,
+                        left_card_id, right_card_id, left_case_id, right_case_id,
+                        left_fingerprint, right_fingerprint, actor, comment, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(
+                        algorithm_version, procedure_group, left_card_id, right_card_id,
+                        left_case_id, right_case_id,
+                        left_fingerprint, right_fingerprint
+                    ) DO UPDATE SET
+                        source_cluster_id = excluded.source_cluster_id,
+                        replacement_cluster_id = excluded.replacement_cluster_id,
+                        actor = excluded.actor, comment = excluded.comment,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        cluster_id,
+                        persisted_replacement_id,
+                        str(source["algorithm_version"]),
+                        normalized_group,
+                        left_id,
+                        right_id,
+                        left_case_id,
+                        right_case_id,
+                        left_fingerprint,
+                        right_fingerprint,
+                        reviewer,
+                        rationale,
+                        now,
+                    ),
+                )
+            connection.execute(
+                """
+                UPDATE semantic_merge_clusters
+                SET status = 'SUPERSEDED', reviewed_by = ?, review_comment = ?,
+                    superseded_by_cluster_id = ?, reviewed_at = ?, updated_at = ?
+                WHERE cluster_id = ?
+                """,
+                (
+                    reviewer,
+                    rationale,
+                    persisted_replacement_id,
+                    now,
+                    now,
+                    cluster_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_log (card_id, action, actor, detail, created_at)
+                VALUES (?, 'REMOVED_FROM_SEMANTIC_CLUSTER', ?, ?, ?)
+                """,
+                (
+                    excluded_id,
+                    reviewer,
+                    json.dumps(
+                        {
+                            "source_cluster_id": cluster_id,
+                            "replacement_cluster_id": persisted_replacement_id,
+                            "remaining_card_ids": member_ids,
+                            "comment": rationale,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+        source_result = self.get_semantic_merge_cluster(cluster_id)
+        replacement_result = self.get_semantic_merge_cluster(persisted_replacement_id)
+        if source_result is None or replacement_result is None:
+            raise StoreError("知识簇成员移除后无法读取治理记录")
+        return {
+            "superseded_cluster": source_result,
+            "replacement_cluster": replacement_result,
+            "excluded_card_id": int(excluded_card_id),
+        }
 
     def stale_semantic_merge_clusters(
         self,

@@ -427,6 +427,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             HarnessRuntimeError,
             DemoChangeError,
             SimulationError,
+            SemanticGovernanceError,
             ValueError,
             json.JSONDecodeError,
         )
@@ -437,7 +438,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 KnowledgeRequestError,
                 ChangeSessionLimitError,
                 ChangeDraftError,
-                SemanticGovernanceError,
             ),
         ):
             headers = (
@@ -770,6 +770,11 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     comment=str(payload.get("comment") or ""),
                     merged_card=payload.get("merged_card"),
                     merge_mode=str(payload.get("merge_mode") or ""),
+                    member_card_id=(
+                        int(payload["member_card_id"])
+                        if payload.get("member_card_id") is not None
+                        else None
+                    ),
                 )
                 self._send_json(result)
                 return

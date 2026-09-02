@@ -2,39 +2,42 @@
 
 ## Current Objective
 
-收口 `semantic_cluster_v3` 内网代码审查中确认的治理一致性问题：手动删卡必须失效相关知识簇与 canonical，失效扫描不得受 UI 500 条列表上限影响。
+完成 `semantic_cluster_v3` 的审核前成员窄化：知识负责人可从三成员以上候选簇逐张移除误入成员，同时保留原始审核历史，并避免后续扫描把同一内容版本立即塞回原簇。
 
 ## Completed
 
-- `delete_card` 现在使用 `BEGIN IMMEDIATE`，删除前查找该卡作为成员或 canonical 所属的待审核、暂缓或已接受知识簇。
-- 受影响知识簇在同一 SQLite 事务内变为 `STALE`，簇内 `SIMILAR_TO` 和指向派生 canonical 的 `MERGED_INTO/INSTANCE_OF` 投影被删除。
-- 已接受簇的派生 canonical 变为 `STALE + SKIPPED`、退出 retrieval/planning RAG，相关长记忆映射进入回收队列。
-- 其他来源成员只有在不再受其他 accepted pair/知识簇约束时恢复 `NEW + INDEXED`；知识簇成员行保留作为历史审计。
-- `stale_semantic_merge_clusters` 改为事务内批量读取全部 `PENDING_REVIEW/DEFERRED` 簇及成员，不再调用最多 500 条的 UI 列表方法。
-- 知识簇 upsert 增加 `BEGIN IMMEDIATE`，两个连接并发刷新同一 `cluster_key` 时串行化读-改-写。
-- 知识簇和历史 pair 列表增加 ID 最终排序键，同状态、同分数、同时间时结果稳定。
-- 项目版本提升为 1.6.1，长期上下文、专项文档和 README 已与代码一致。
+- 相似知识审核页在三成员以上的 `PENDING_REVIEW/DEFERRED` 簇上提供“从本次簇移除”。人工意见必填；两成员簇必须直接接受、驳回或暂缓。
+- 成员移除使用单个 `BEGIN IMMEDIATE` 事务：原簇变为 `SUPERSEDED`，原成员快照保留，剩余成员重新计算代表卡、complete-link 分数、共享锚点、差异和 canonical 草案，并形成新的 `PENDING_REVIEW` 簇。
+- 新增 `semantic_merge_member_exclusions` 审计表。每次窄化为“被移除成员 × 每个保留成员”记录算法版本、procedure group、两端 card/case/fingerprint、审核人和理由。
+- 扫描器只跳过仍与上述 identity 完全匹配的 pair，并报告 `human_exclusion_pair_skipped_count`；任一绑定值变化后重新评估。
+- 原簇与新簇的 `SIMILAR_TO` 投影在事务内切换。成员窄化本身不改变任何来源卡的检索状态，只有最终接受才建立 canonical 并让相应来源退出普通检索。
+- API 复用 `POST /api/semantic-merge-proposals/{id}/decision`，新增 `REMOVE_MEMBER + member_card_id`；治理参数错误稳定返回 HTTP 400。
+- 页面可筛选 `SUPERSEDED` 历史簇。项目版本提升为 1.6.2，共享上下文、设计决策、专项文档和 README 已同步。
 
 ## Files Changed
 
-- `knowledge_platform/store.py`：删卡的簇/canonical 失效、来源恢复、长记忆回收、全量 stale 扫描、upsert 事务和稳定排序。
-- `knowledge_platform/semantic_governance.py`：合并知识簇/历史 pair 队列的稳定 ID tie-breaker。
-- `tests/test_semantic_governance.py`：三成员簇删卡、已接受簇删卡、501 条 stale、稳定排序和并发 upsert 回归。
-- `README.md`, `docs/semantic-governance.md`, `docs/CODEX_CONTEXT.md`：删卡与全量失效规则。
-- `pyproject.toml`：版本 1.6.1。
+- `knowledge_platform/store.py`：schema/migration、pair 排除读取、成员窄化原子事务、审核日志与新簇投影。
+- `knowledge_platform/semantic_governance.py`：可复用知识簇 spec、扫描排除、成员窄化服务和 `REMOVE_MEMBER` 决策。
+- `knowledge_platform/web.py`：成员 ID 入参与治理错误的 HTTP 400 映射。
+- `knowledge_platform/static/app.js`, `knowledge_platform/static/index.html`：成员移除交互与 `SUPERSEDED` 状态筛选。
+- `tests/test_semantic_governance.py`：窄化、重扫、接受、版本变化、错误门禁和 HTTP 回归。
+- `README.md`, `docs/semantic-governance.md`, `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：成员窄化的状态、identity 与审计边界。
+- `pyproject.toml`：版本 1.6.2。
 
 ## Validation
 
-- `python -m unittest tests.test_semantic_governance tests.test_demo_mode_and_card_delete -v`：25 tests，全部通过。
-- `python -m unittest discover -s tests -t .`：177 tests，全部通过。
-- `python -m py_compile knowledge_platform/store.py knowledge_platform/semantic_governance.py tests/test_semantic_governance.py`：通过。
+- `D:\Anaconda\envs\zte\python.exe -m unittest tests.test_semantic_governance tests.test_demo_mode_and_card_delete -v`：29 tests，全部通过。
+- `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：181 tests，全部通过。
+- `D:\Anaconda\envs\zte\python.exe -m py_compile knowledge_platform/store.py knowledge_platform/semantic_governance.py knowledge_platform/web.py tests/test_semantic_governance.py`：通过。
+- `D:\Anaconda\envs\zte\python.exe -m compileall -q harness knowledge_platform tests`：通过。
+- `node --check knowledge_platform/static/app.js`：通过。
 - `git diff --check`：通过；仅有 Windows LF/CRLF 提示，无 whitespace error。
 - 真实内网知识库：外网未运行、未声称验证真实卡片数据。
 
 ## Known Issues
 
 - 已接受 canonical 当前不重新作为来源参与聚类；只新增一个高度相似案例时，尚不能单独提交“追加到既有 canonical”的人工审核。
-- 知识簇审核页尚不支持接受前移除单个成员或手工拆簇。
+- 审核页可以逐张移除成员，但尚不能一次把一个候选簇手工拆成多个独立分组。
 - README 中相似治理截图仍来自 pair 版页面，尚未重拍。
 
 ## Work In Progress
@@ -43,11 +46,11 @@ None.
 
 ## Recommended Next Step
 
-内网更新后用合成或可删除的测试卡做一次手动删除：先确认三个不同案例的卡形成知识簇，再删除一张非代表卡，核对簇变为 `STALE`、图上无遗留 `SIMILAR_TO`、派生 canonical 已下架、其他案例卡恢复检索。之后再执行“立即扫描”确认可以按当前内容重新形成候选。
+内网人工更新后用可删除测试卡构造四案例候选簇，在页面移除一张成员并填写理由，核对原簇为 `SUPERSEDED`、新簇保留三成员、旧关系已替换、被移除卡仍可检索；再次立即扫描后确认相同版本不会回到新簇。下一项外网开发可优先设计“单个新案例追加审核到既有 canonical”，但不得形成 canonical 链或改写既有接受决策历史。
 
 ## Last Updated
 
-- Date: 2026-09-01 (Asia/Shanghai)
+- Date: 2026-09-02 (Asia/Shanghai)
 - Current branch: `main`
-- Target release: 1.6.1 to `github/main`
+- Target release: 1.6.2 to `github/main`
 - Containing commit: use `git log -1 --oneline -- docs/CODEX_HANDOFF.md`; this file does not store its own commit SHA.

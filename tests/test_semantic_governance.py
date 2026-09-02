@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from knowledge_platform.schema import CardStatus, ComparisonResult, KnowledgeCardDraft
@@ -341,6 +342,162 @@ class SemanticGovernanceTests(unittest.TestCase):
                 ),
                 [],
             )
+
+    def test_reviewer_can_remove_member_then_rescan_and_accept_narrowed_cluster(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = (
+                "检查活动告警、服务探针和关键业务指标，确认系统运行正常后继续。"
+            )
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"narrow-cluster-{index}",
+                    title="前检：业务健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"narrow-cluster-fingerprint-{index}",
+                )
+                for index in range(3)
+            ]
+            service.semantic_governance.scan(actor="test-scanner")
+            original = service.semantic_governance.list_proposals()["proposals"][0]
+
+            narrowed = service.semantic_governance.decide(
+                original["proposal_id"],
+                decision="REMOVE_MEMBER",
+                member_card_id=source_ids[2],
+                actor="knowledge-owner",
+                comment="该案例检查目标不同，不纳入本次共享核心",
+            )
+
+            self.assertNotEqual(narrowed["proposal_id"], original["proposal_id"])
+            self.assertEqual(narrowed["member_card_ids"], source_ids[:2])
+            self.assertEqual(narrowed["excluded_card_id"], source_ids[2])
+            superseded = service.store.get_semantic_merge_cluster(
+                original["proposal_id"]
+            )
+            assert superseded is not None
+            self.assertEqual(superseded["status"], "SUPERSEDED")
+            self.assertEqual(
+                superseded["superseded_by_cluster_id"], narrowed["proposal_id"]
+            )
+            excluded_card = service.store.get_card(source_ids[2])
+            assert excluded_card is not None
+            self.assertTrue(excluded_card["retrieval_enabled"])
+            with service.store.connect() as connection:
+                exclusions = connection.execute(
+                    "SELECT * FROM semantic_merge_member_exclusions "
+                    "ORDER BY left_card_id, right_card_id"
+                ).fetchall()
+                audit = connection.execute(
+                    "SELECT * FROM audit_log WHERE card_id = ? AND action = ?",
+                    (source_ids[2], "REMOVED_FROM_SEMANTIC_CLUSTER"),
+                ).fetchone()
+            self.assertEqual(len(exclusions), 2)
+            self.assertIsNotNone(audit)
+            similar_pairs = {
+                tuple(sorted((relation["card_id"], relation["related_card_id"])))
+                for relation in service.store.list_relations(source_ids[0])
+                if relation["relation_type"] == "SIMILAR_TO"
+            }
+            self.assertEqual(similar_pairs, {(source_ids[0], source_ids[1])})
+
+            report = service.semantic_governance.scan(actor="test-rescan")
+            pending = service.semantic_governance.list_proposals()["proposals"]
+            self.assertEqual(report["human_exclusion_pair_skipped_count"], 2)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["proposal_id"], narrowed["proposal_id"])
+            self.assertEqual(
+                service.store.get_semantic_merge_cluster(original["proposal_id"])[
+                    "status"
+                ],
+                "SUPERSEDED",
+            )
+
+            accepted = service.semantic_governance.decide(
+                narrowed["proposal_id"],
+                decision="ACCEPT",
+                actor="knowledge-owner",
+                comment="synthetic narrowed shared core",
+                merge_mode="SHARED_CORE",
+            )
+            self.assertEqual(accepted["status"], "ACCEPTED")
+            for source_id in source_ids[:2]:
+                source = service.store.get_card(source_id)
+                assert source is not None
+                self.assertFalse(source["retrieval_enabled"])
+            excluded_card = service.store.get_card(source_ids[2])
+            assert excluded_card is not None
+            self.assertTrue(excluded_card["retrieval_enabled"])
+
+    def test_member_removal_requires_reason_and_three_member_cluster(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            left_id, _right_id = self.prepare_pair(service)
+            service.semantic_governance.scan()
+            proposal = service.semantic_governance.list_proposals()["proposals"][0]
+
+            with self.assertRaisesRegex(SemanticGovernanceError, "判断依据"):
+                service.semantic_governance.decide(
+                    proposal["proposal_id"],
+                    decision="REMOVE_MEMBER",
+                    member_card_id=left_id,
+                    actor="knowledge-owner",
+                )
+            with self.assertRaisesRegex(SemanticGovernanceError, "两成员知识簇"):
+                service.semantic_governance.decide(
+                    proposal["proposal_id"],
+                    decision="REMOVE_MEMBER",
+                    member_card_id=left_id,
+                    actor="knowledge-owner",
+                    comment="synthetic member mismatch",
+                )
+
+    def test_member_exclusion_is_bound_to_current_card_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查活动告警、服务探针和关键业务指标，确认系统运行正常。"
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"versioned-exclusion-{index}",
+                    title="前检：业务健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"versioned-exclusion-fingerprint-{index}",
+                )
+                for index in range(3)
+            ]
+            service.semantic_governance.scan()
+            original = service.semantic_governance.list_proposals()["proposals"][0]
+            narrowed = service.semantic_governance.decide(
+                original["proposal_id"],
+                decision="REMOVE_MEMBER",
+                member_card_id=source_ids[2],
+                actor="knowledge-owner",
+                comment="当前版本检查目标不同",
+            )
+            changed_fingerprint = hashlib.sha256(
+                b"versioned-exclusion-card-changed"
+            ).hexdigest()
+            with service.store.connect() as connection:
+                connection.execute(
+                    "UPDATE cards SET semantic_fingerprint = ? WHERE id = ?",
+                    (changed_fingerprint, source_ids[2]),
+                )
+
+            report = service.semantic_governance.scan(actor="test-rescan")
+            pending = service.semantic_governance.list_proposals()["proposals"]
+
+            self.assertEqual(report["human_exclusion_pair_skipped_count"], 0)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(set(pending[0]["member_card_ids"]), set(source_ids))
+            stale_replacement = service.store.get_semantic_merge_cluster(
+                narrowed["proposal_id"]
+            )
+            assert stale_replacement is not None
+            self.assertEqual(stale_replacement["status"], "STALE")
 
     def test_complete_link_does_not_merge_transitive_similarity_chain(self) -> None:
         cards = [
@@ -947,6 +1104,78 @@ class SemanticGovernanceTests(unittest.TestCase):
                 with urlopen(decision, timeout=5) as response:
                     rejected = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(rejected["status"], "REJECTED")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_web_can_remove_member_from_pending_cluster(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = self.make_service(Path(directory))
+            operation = "检查活动告警、服务探针和关键业务指标，确认系统运行正常。"
+            source_ids = [
+                self.add_procedure_card(
+                    service,
+                    source_name=f"web-narrow-{index}",
+                    title="前检：业务健康检查",
+                    operation=operation,
+                    phase="PRECHECK",
+                    fingerprint_seed=f"web-narrow-fingerprint-{index}",
+                )
+                for index in range(3)
+            ]
+            server = create_server(service, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                scan = Request(
+                    base + "/api/semantic-merge-proposals/scan",
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(scan, timeout=5):
+                    pass
+                with urlopen(
+                    base + "/api/semantic-merge-proposals?status=PENDING_REVIEW",
+                    timeout=5,
+                ) as response:
+                    queue = json.loads(response.read().decode("utf-8"))
+                proposal_id = queue["proposals"][0]["proposal_id"]
+                decision = Request(
+                    base
+                    + f"/api/semantic-merge-proposals/{proposal_id}/decision",
+                    data=json.dumps(
+                        {
+                            "decision": "REMOVE_MEMBER",
+                            "member_card_id": source_ids[2],
+                            "comment": "synthetic web member exclusion",
+                        }
+                    ).encode("utf-8"),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(decision, timeout=5) as response:
+                    narrowed = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(narrowed["member_card_ids"], source_ids[:2])
+                self.assertEqual(narrowed["excluded_card_id"], source_ids[2])
+                invalid = Request(
+                    base
+                    + f"/api/semantic-merge-proposals/{narrowed['proposal_id']}/decision",
+                    data=json.dumps(
+                        {
+                            "decision": "REMOVE_MEMBER",
+                            "member_card_id": source_ids[0],
+                            "comment": "two-member cluster must fail closed",
+                        }
+                    ).encode("utf-8"),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with self.assertRaises(HTTPError) as failure:
+                    urlopen(invalid, timeout=5)
+                self.assertEqual(failure.exception.code, 400)
             finally:
                 server.shutdown()
                 server.server_close()

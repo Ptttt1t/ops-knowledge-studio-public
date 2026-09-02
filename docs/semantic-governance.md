@@ -63,12 +63,25 @@
 
 “前检：变更分析”通常优先采用共享核心。标题相同只是候选召回信号，不是完整等价证明。人工仍应检查差异区域，并在提交前编辑 canonical 草案。
 
+## 接受前窄化成员
+
+三张及以上卡片的待审核或暂缓知识簇允许逐张移除不属于本次共享语义的成员。该动作不是删除来源卡，也不会直接接受剩余成员：
+
+1. 审核人必须填写判断依据；
+2. 原候选变为 `SUPERSEDED`，原始成员快照继续作为不可变审核历史；
+3. 系统在同一 SQLite 事务内为“被移除成员 × 每个保留成员”记录 procedure group、card/case/fingerprint 和算法版本绑定的人工排除；
+4. 剩余成员重新计算代表卡、complete-link 分数、共享锚点、差异和 canonical 草案，形成新的 `PENDING_REVIEW` 候选；
+5. 旧 `SIMILAR_TO` 投影被清理，只投影新候选的代表卡关系；所有来源卡仍保持原检索状态，直到新候选被接受。
+
+后续扫描会跳过仍与人工排除记录完全匹配的 pair，因此不会把同一内容版本立即塞回原簇。任一 procedure group、card ID、case identity、fingerprint 或算法版本变化后，该排除不再代替新一轮判断。两成员簇不能继续移除成员，应直接驳回；当前页面也不支持一次把一个簇任意拆成多个分组。
+
 ## 状态与漂移
 
 ```text
 PENDING_REVIEW -> ACCEPTED
                -> REJECTED
                -> DEFERRED -> ACCEPTED / REJECTED
+               -> SUPERSEDED -> 新的窄化 PENDING_REVIEW
 成员、fingerprint、case identity、阶段或算法变化 -> STALE
 ```
 
@@ -118,6 +131,18 @@ SEMANTIC_SCAN_MAX_PROPOSALS=100
 - `GET /api/semantic-merge-proposals/{id}`：单个知识簇或历史 pair；
 - `POST /api/semantic-merge-proposals/scan`：立即运行一次增量扫描；
 - `POST /api/semantic-merge-proposals/{id}/decision`：人工决策。
+
+移除单个成员并生成窄化候选：
+
+```json
+{
+  "decision": "REMOVE_MEMBER",
+  "member_card_id": 103,
+  "comment": "该案例的检查目标不同，不属于本次共享核心"
+}
+```
+
+该操作仅适用于至少三成员的 `PENDING_REVIEW/DEFERRED` 知识簇，响应返回新的待审核簇，并包含 `superseded_cluster_id` 与 `excluded_card_id`。
 
 共享核心确认示例：
 

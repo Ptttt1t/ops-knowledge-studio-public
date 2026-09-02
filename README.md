@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.6.1-b88924)
+![Version](https://img.shields.io/badge/version-1.6.2-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
@@ -61,7 +61,7 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 
 ### 2. 相似知识由系统发现、由人决定
 
-后台会持续比较已批准 Procedure 卡，把不同案例包中的相似知识整理成 N 成员候选簇。同一案例包内的卡片不会互相进入合并队列。操作者可以查看簇代表、全部成员、最低/平均相似度和关键差异，再选择完整合并、建立共享核心、排除或暂缓。
+后台会持续比较已批准 Procedure 卡，把不同案例包中的相似知识整理成 N 成员候选簇。同一案例包内的卡片不会互相进入合并队列。操作者可以查看簇代表、全部成员、最低/平均相似度和关键差异；三成员以上的候选可先逐张移除误入成员，再选择完整合并、建立共享核心、排除或暂缓。
 
 ![相似知识人工治理](docs/images/semantic-governance.png)
 
@@ -196,7 +196,7 @@ APPROVED + INDEXED Procedure Cards
 → 同案例 pair: SKIP
 → 跨案例、同 procedure_group: 本地确定性相似度
 → complete-link 知识簇 + PENDING_REVIEW + SIMILAR_TO
-→ 人工 FULL_EQUIVALENT / SHARED_CORE / REJECT / DEFER
+→ 人工 REMOVE_MEMBER（可选窄化）/ FULL_EQUIVALENT / SHARED_CORE / REJECT / DEFER
 → canonical + MERGED_INTO / INSTANCE_OF
 
 跨 procedure_group
@@ -210,6 +210,7 @@ APPROVED + INDEXED Procedure Cards
 - complete-link 要求簇内任意两张成员卡均达到阈值，避免传递相似导致过度合并。
 - 页面共享锚点来自结构化字段和完整业务短语，不展示中文字符滑窗片段。
 - `REJECTED` 与成员 case/card/fingerprint 组合绑定；内容不变时不重复推送。
+- 接受前移除成员会保留原簇为 `SUPERSEDED`，按 procedure group 与 card/case/fingerprint 记录 pair 排除，并原子创建剩余成员的新待审核簇；来源卡此时不退出检索。
 - 内容或审批状态变化后旧候选自动 `STALE`。
 - 完整合并与共享核心都在单个 SQLite 事务中完成，来源成员立即退出普通检索和长期记忆映射。
 - 重建任一来源案例会链式下架派生 canonical，恢复仍有效的其他来源卡。
