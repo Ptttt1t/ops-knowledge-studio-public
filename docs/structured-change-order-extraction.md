@@ -2,6 +2,8 @@
 
 平台将 ChangeOrder 的结构识别和知识建模明确分成两层。`change_order_shape_v2` Adapter 只负责确认结构、对账任务双视图，并保存 JSON Pointer、字符范围和 SHA-256；`change_order_semantic_builder_v2` 再从 normalized business objects 构建知识卡。Extraction Unit 是证据运输和处理分块，不再等同于 Knowledge Card。
 
+字段来源和业务含义以人工确认的真实结构为准；同样的外层路径和字段数不能证明字段语义相同，更不能证明已覆盖操作页面。早期自拟字段的五份 JSON 案例及其专用脚本已退役。现有合成业务 fixture 位于 `tests/fixtures/change_order_card_builder/cases.json`，完整组装见 `tests/test_change_order_card_builder.py`；这套 fixture 也不是完整真实字段清单。页面对照、1+1 check 人工流程及尚未实现的映射见 [变更单页面与 JSON 字段对应](change-order-page-field-mapping.md)。
+
 ## 流水线
 
 ```text

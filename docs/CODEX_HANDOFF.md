@@ -2,55 +2,51 @@
 
 ## Current Objective
 
-完成 `semantic_cluster_v3` 的审核前成员窄化：知识负责人可从三成员以上候选簇逐张移除误入成员，同时保留原始审核历史，并避免后续扫描把同一内容版本立即塞回原簇。
+以人工确认的真实 ChangeOrder 业务结构为准，退役早期自拟字段的五份 JSON 案例，并核对操作页面信息与当前字段映射的差距。本轮只完成过时样例清理和字段对照，不实现尚未确认的页面字段，也不增加真实变更执行能力。
 
 ## Completed
 
-- 相似知识审核页在三成员以上的 `PENDING_REVIEW/DEFERRED` 簇上提供“从本次簇移除”。人工意见必填；两成员簇必须直接接受、驳回或暂缓。
-- 成员移除使用单个 `BEGIN IMMEDIATE` 事务：原簇变为 `SUPERSEDED`，原成员快照保留，剩余成员重新计算代表卡、complete-link 分数、共享锚点、差异和 canonical 草案，并形成新的 `PENDING_REVIEW` 簇。
-- 新增 `semantic_merge_member_exclusions` 审计表。每次窄化为“被移除成员 × 每个保留成员”记录算法版本、procedure group、两端 card/case/fingerprint、审核人和理由。
-- 扫描器只跳过仍与上述 identity 完全匹配的 pair，并报告 `human_exclusion_pair_skipped_count`；任一绑定值变化后重新评估。
-- 原簇与新簇的 `SIMILAR_TO` 投影在事务内切换。成员窄化本身不改变任何来源卡的检索状态，只有最终接受才建立 canonical 并让相应来源退出普通检索。
-- API 复用 `POST /api/semantic-merge-proposals/{id}/decision`，新增 `REMOVE_MEMBER + member_card_id`；治理参数错误稳定返回 HTTP 400。
-- 页面可筛选 `SUPERSEDED` 历史簇。项目版本提升为 1.6.2，共享上下文、设计决策、专项文档和 README 已同步。
+- 删除 `sample_data/realistic_change_orders/` 中五份旧 JSON 和说明，以及专用生成脚本、评估脚本、对应测试模块。这套数据只对齐外层路径和字段数量，不能作为真实字段语义或页面完整性的证据；全部可通过 Git 历史恢复。
+- 保留 `tests/fixtures/change_order_card_builder/cases.json`、`tests/test_change_order_card_builder.py` 等已知业务字段的合成测试，以及字段基数/漂移测试。
+- 保留独立的 `change_management` 模拟器、十个合成 Demo 案例及其文档导出脚本，不改变真实草案只生成/审核/导出的边界。
+- 新增 `docs/change-order-page-field-mapping.md`，逐项区分代码已有映射、仅保存元数据、字段含义待确认和未见明确字段，避免把合成样例缺字段误报为原始真实 JSON 缺失。
+- 记录人工确认的 1+1 check：执行人逐步操作，配合人逐步核验、截图和回填；异常时停止后续步骤，回退或其他处置均由人工决定。步骤内验证不改变其所属 phase。
+- 记录顶层“影响分析”当前无人填写、暂不纳入要求；“处理记录”是申请至完成的人员/时间流程历史，不能替代步骤核验。
+- README、构建说明、长期上下文和设计决策已同步。运行时代码、卡片模型和包版本未改，版本仍为 1.6.2。
 
 ## Files Changed
 
-- `knowledge_platform/store.py`：schema/migration、pair 排除读取、成员窄化原子事务、审核日志与新簇投影。
-- `knowledge_platform/semantic_governance.py`：可复用知识簇 spec、扫描排除、成员窄化服务和 `REMOVE_MEMBER` 决策。
-- `knowledge_platform/web.py`：成员 ID 入参与治理错误的 HTTP 400 映射。
-- `knowledge_platform/static/app.js`, `knowledge_platform/static/index.html`：成员移除交互与 `SUPERSEDED` 状态筛选。
-- `tests/test_semantic_governance.py`：窄化、重扫、接受、版本变化、错误门禁和 HTTP 回归。
-- `README.md`, `docs/semantic-governance.md`, `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`：成员窄化的状态、identity 与审计边界。
-- `pyproject.toml`：版本 1.6.2。
+- 删除五份旧 JSON、它们的 README、`scripts/generate_realistic_change_orders.py`、`scripts/evaluate_realistic_change_orders.py`、`tests/test_realistic_change_order_samples.py`。
+- 新增 `docs/change-order-page-field-mapping.md`。
+- 更新 `README.md`、`docs/structured-change-order-extraction.md`、`docs/CODEX_CONTEXT.md`、`docs/DECISIONS.md` 和本交接文件。
 
 ## Validation
 
-- `D:\Anaconda\envs\zte\python.exe -m unittest tests.test_semantic_governance tests.test_demo_mode_and_card_delete -v`：29 tests，全部通过。
-- `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：181 tests，全部通过。
-- `D:\Anaconda\envs\zte\python.exe -m py_compile knowledge_platform/store.py knowledge_platform/semantic_governance.py knowledge_platform/web.py tests/test_semantic_governance.py`：通过。
-- `D:\Anaconda\envs\zte\python.exe -m compileall -q harness knowledge_platform tests`：通过。
+- `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：179 tests 全部通过，退出码 0。比上一轮 181 少两项，仅因退役旧五案例专用测试，其他测试保留。
+- `D:\Anaconda\envs\zte\python.exe -m compileall -q harness knowledge_platform tests scripts`：通过。
 - `node --check knowledge_platform/static/app.js`：通过。
-- `git diff --check`：通过；仅有 Windows LF/CRLF 提示，无 whitespace error。
-- 真实内网知识库：外网未运行、未声称验证真实卡片数据。
+- `git diff --check`：通过；仅有 Windows LF/CRLF 提示。
+- 使用合成值做内存内 Builder 诊断：`change_level`、`change_notes`、`special_change_type`、`change_guide`、`change_guides`、`authorization_reference`、`notification_status` 不进入当前 Context 字段白名单；`result_confirm_notes` 留在步骤 `source_metadata`，不进入整单 Outcome。该诊断用于说明缺口，没有修改这些行为。
+- 仅使用合成测试与公开代码；未读取、发送或验证真实内网数据，也未调用真实模型/执行工具。
 
 ## Known Issues
 
-- 已接受 canonical 当前不重新作为来源参与聚类；只新增一个高度相似案例时，尚不能单独提交“追加到既有 canonical”的人工审核。
-- 审核页可以逐张移除成员，但尚不能一次把一个候选簇手工拆成多个独立分组。
-- README 中相似治理截图仍来自 pair 版页面，尚未重拍。
+- 不能证明页面与之前的完整真实 JSON 一一对应：当前只有代码映射和合成字段样例，没有在外网独立核验完整原始字段清单。
+- 优先核对每步三个子页各自的涉及标记、正常/异常选择、核验说明、截图、人员和时间；当前未形成步骤级执行记录，`operate_verified` 仍直接作为 Procedure validation。
+- CASE_CONTEXT 字段白名单与 Adapter 识别字段不完全一致；具体缺口、详情链接、范围层级、SOP 模板及处理记录见新对照文档。不得凭字段名猜测“4号提权方式”等未知语义。
+- 既有语义治理仍不支持单个新案例追加到已接受 canonical，也不支持一次把候选簇拆成多组；README 相似治理截图仍待更新。
 
 ## Work In Progress
 
-None.
+None. 本轮样例清理已完成；字段映射与步骤执行记录的后续实现尚未开始。
 
 ## Recommended Next Step
 
-内网人工更新后用可删除测试卡构造四案例候选簇，在页面移除一张成员并填写理由，核对原簇为 `SUPERSEDED`、新簇保留三成员、旧关系已替换、被移除卡仍可检索；再次立即扫描后确认相同版本不会回到新簇。下一项外网开发可优先设计“单个新案例追加审核到既有 canonical”，但不得形成 canonical 链或改写既有接受决策历史。
+由内网人工依据字段对照核实源路径、类型、枚举含义和填写阶段，仅反馈允许的脱敏结构信息。优先确定逐步骤核验与整单结果/处理记录的不同来源，再用已确认字段和合成值补测试、调整 Builder；不得把真实 JSON、SchemaProfile、截图、账号、地址或执行结果带到外网，不建设真实执行或自动回退能力。
 
 ## Last Updated
 
-- Date: 2026-09-02 (Asia/Shanghai)
+- Date: 2026-09-04 (Asia/Shanghai)
 - Current branch: `main`
-- Target release: 1.6.2 to `github/main`
+- Package version: 1.6.2 (本轮无运行时代码变更)
 - Containing commit: use `git log -1 --oneline -- docs/CODEX_HANDOFF.md`; this file does not store its own commit SHA.

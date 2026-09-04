@@ -23,6 +23,8 @@ Status: Active
 
 Adapter 和 Card Builder 必须保持独立版本与测试；审批时仍需重新验证证据，语义层不得削弱结构门禁。真实 schema 变化应先更新 Profile/Adapter，而不是在提示词中绕过。
 
+业务字段对应必须以人工确认的真实来源为准，不能从自拟案例反推真实页面。早期仅对齐外层路径与记录字段数的五份合成 JSON 及其专用生成/评估入口已退役；外网继续使用已知字段加合成值的 fixture，未确认字段保持待确认。结构覆盖率不等于页面覆盖率，原始字段存在也不代表已被 Builder 语义化；当前差距记录在 `change-order-page-field-mapping.md`。
+
 ## Decision: 使用有类型、分状态的 Knowledge Card 模型
 
 Status: Active

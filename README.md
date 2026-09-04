@@ -161,6 +161,8 @@ ChangeOrder JSON
 
 每次构建会输出 `card_build_report.json`，包含结构覆盖、语义覆盖、Parent/Child 发布、noop section、重复复用、标题冲突、关系数量、逐卡 QA 和 `skip_reason`。示例见 [card_build_report.example.json](docs/card_build_report.example.json)。
 
+业务字段以经人工确认的真实结构为准，公开测试仍只使用合成值。早期仅模拟外层路径和字段数量的五份 JSON 案例及其专用生成、评估入口已退役；结构测试通过不代表覆盖真实页面全部信息。当前字段对照和缺口见 [变更单页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)。独立的 `change_management` 合成执行 Demo 不受本次清理影响，也不得被真实草案调用。
+
 ## 知识状态不是一个字段
 
 平台将过去容易混淆的状态拆开：
@@ -454,7 +456,8 @@ python run.py run-submit --help
 change_management/     合成案例、计划、审批、模拟执行、反馈
 harness/                DeepSeek 客户端、配置、Runtime、Tool Registry
 knowledge_platform/     文档解析、Adapter、Card Builder、治理、检索、Web
-sample_data/            合成 SOP、案例文档和同结构 ChangeOrder fixtures
+sample_data/            合成 SOP 和独立 Demo 案例文档
+tests/fixtures/         合成测试数据；ChangeOrder 业务字段见专项说明
 knowledge_sources/      知识来源与公开测试语料
 scripts/                诊断、评估、导入和实验脚本
 docs/                   部署、安全、ChangeOrder、MindMemOS 与专题文档
@@ -530,6 +533,7 @@ python run.py generate-access-token
 - [Codex 当前交接状态](docs/CODEX_HANDOFF.md)
 - [架构与技术决策](docs/DECISIONS.md)
 - [ChangeOrder 语义知识卡构建](docs/structured-change-order-extraction.md)
+- [变更单页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)
 - [相似知识人工合并治理](docs/semantic-governance.md)
 - [真实 ChangeOrder 草案生成与能力盲测](docs/real-change-generation.md)
 - [合成变更 Demo](docs/change-demo.md)

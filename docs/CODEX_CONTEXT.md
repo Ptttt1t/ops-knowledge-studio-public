@@ -105,12 +105,15 @@ RealChangeRequest
 ### ChangeOrder 和知识卡
 
 - Extraction Unit 是来源证据/处理单元，不等于 Knowledge Card。
+- ChangeOrder 业务字段以人工确认的真实结构为准，外网 fixture 只填合成值。早期仅对齐外层路径/字段数的五份自拟 JSON 案例及其生成、评估脚本已退役；保留字段基数/漂移单元测试，但不能把它们当作真实语义清单。页面字段对应和缺口见 `change-order-page-field-mapping.md`。
 - Card Type 至少分为 `CASE_CONTEXT`、`PROCEDURE_STEP`、`EXECUTION_OUTCOME`；每个 ChangeOrder 最多一个 Context。
 - 四个 procedure group 是 `PRECHECK`、`IMPLEMENTATION`、`VALIDATION`、`ROLLBACK`。Phase 是业务语义和相似合并的强约束。
 - `/data/action_list` 是 Action/Capability metadata，不是有序 Procedure；它是生成草案时唯一任务主视图，`change_tool_relate_action` 必须由程序派生并通过稳定 JSON + SHA-256 multiset reconciliation 对账。
 - 默认一条源 ProcedureStep 对应一个可检索单元。section 默认只留在 `operation_sections[]`；仅当步骤确实过长且多个 section 自包含、可操作、非 noop 时才发布 child。
 - Parent/Child 发布互斥：普通 Parent 为 `INDEXED/true`；拆分 Parent 为 `CONTAINER/false`，只有 meaningful children 为 `INDEXED/true`。
 - `EXECUTION_OUTCOME.planning_rag_enabled` 固定为 `false`，历史执行结果不能默认进入新方案生成。
+- 人工描述确认真实变更采用 1+1 check：执行人逐步操作，配合人逐步核验、截图和回填；异常时不得继续后续步骤，是否回退或采取其他操作由人工决定。步骤内核验不等同于独立 VALIDATION 阶段，回退方案不等同于已执行回退。这是数据解释和草案边界，不授权建设真实执行、自动重试或自动回退能力。
+- 页面还有试运行且当前无人填写的顶层“影响分析”，暂不纳入本轮构建要求；不得与步骤内“影响分析”混同。“处理记录”是申请至完成的操作人员/时间流程历史，不能替代逐步骤核验证据或知识卡审核。上述新增页面映射与步骤执行记录尚未实现，当前不能声称完整覆盖页面。
 - 实例具体值存入 `instance_parameters`，RAG 优先使用 `generalized_operation`。timestamp、duration、boolean、enum、number 等由 Python 确定性规范化，不交给 LLM 计算。
 - 原始 JSON、HTML 和完整图片 URL不得进入知识正文；证据使用 JSON Pointer、范围和 SHA-256 保存，审核时重新校验漂移。
 
