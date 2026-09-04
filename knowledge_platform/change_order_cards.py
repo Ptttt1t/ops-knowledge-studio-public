@@ -1291,7 +1291,9 @@ class ChangeOrderCardBuilder:
         for key in ("tool_related_actions", "action_unique_ids", "actions"):
             value = record.get(key)
             if isinstance(value, list):
-                return value
+                if value:
+                    return value
+                continue
             if value not in (None, ""):
                 return [value]
         return []

@@ -30,6 +30,7 @@ request 是本次变更的事实源，approved_cards 只是操作模板和历史
 案例卡中的 instance_parameters、历史对象名、IP、账号、阈值和资源规格不得作为本次具体参数复制。若 request 没有提供所需具体值，使用类型安全空值并写入 missing_fields，不得用参考案例旧值补齐。
 TaskRecord 的 name_cn、name_en、unique_id 等动作/能力定义字段可以由 source_refs 引用案例卡；它们不等同于本次设备、账号或资源参数。
 你只生成规范化草案 JSON，不得生成 Markdown，也不得直接生成 action_list 的分组副本或 ExecutionResult。
+步骤中的 result_confirm、result_confirm_notes、update_user、update_time 由人工或系统在后续阶段填写；草案中必须按 Profile 保持类型安全空值，不得生成核验结论、人员或时间。
 每个任务、步骤和风险必须带 source_refs 或 input_refs。source_refs 只能使用提示中列出的 card_id、字段和索引；input_refs 只能指向结构化需求字段。
 任务 record 必须包含 SchemaProfile 声明的全部 TaskRecord 字段；四类 Procedure record 必须包含全部 ProcedureStep 字段。缺失值写入 missing_fields，禁止猜测。
 当 Profile 字段 type 为 null 时，必须输出该字段且值为 null；这是合法 Schema 值，不得把它列入 missing_fields。只有字段缺席，或非 null 类型缺少有效值，才属于缺失。
@@ -64,6 +65,15 @@ PROCEDURE_KEYS = (
     "change_verified",
     "change_rollback",
 )
+PROCEDURE_NON_GENERATED_FIELDS = frozenset(
+    {
+        "result_confirm",
+        "result_confirm_notes",
+        "update_time",
+        "update_user",
+    }
+)
+SAFE_DRAFT_EMPTY_VALUES = (None, "", False, 0, [], {})
 ROLE_TO_PROCEDURE_KEY = {
     "PRECHECK_STEPS": "check_before_change",
     "IMPLEMENTATION_STEPS": "change_implement",
@@ -1008,6 +1018,21 @@ class RealChangeDraftService:
             for name, value in record.items()
         }
 
+    @staticmethod
+    def _generation_profile(profile: dict[str, Any]) -> dict[str, Any]:
+        """Return effective policies without mutating a stored legacy Profile."""
+
+        result = dict(profile)
+        procedure_fields: dict[str, dict[str, Any]] = {}
+        for name, raw_spec in (profile.get("procedure_fields") or {}).items():
+            spec = dict(raw_spec)
+            if name in PROCEDURE_NON_GENERATED_FIELDS:
+                spec["policy"] = "empty"
+                spec.pop("value", None)
+            procedure_fields[str(name)] = spec
+        result["procedure_fields"] = procedure_fields
+        return result
+
     def inspect_schema_profile(self, case_id: str) -> dict[str, Any]:
         bundle = self.knowledge.store.get_case_bundle(case_id, include_cards=True)
         eligible, reasons = self._eligible_bundle(bundle)
@@ -1081,7 +1106,7 @@ class RealChangeDraftService:
                 },
             },
         }
-        return profile
+        return self._generation_profile(profile)
 
     @staticmethod
     def _validate_profile(profile: Any) -> dict[str, Any]:
@@ -1110,6 +1135,11 @@ class RealChangeDraftService:
                     raise ChangeDraftError(f"{section}.{name} policy 无效: {policy}")
                 if policy == "fixed" and "value" not in spec:
                     raise ChangeDraftError(f"{section}.{name} fixed policy 缺少 value")
+                if section == "procedure_fields" and name in PROCEDURE_NON_GENERATED_FIELDS:
+                    if policy != "empty":
+                        raise ChangeDraftError(
+                            f"procedure_fields.{name} 只允许 empty"
+                        )
                 if section == "execution_fields" and policy not in {
                     "empty",
                     "not_executed",
@@ -1176,9 +1206,12 @@ class RealChangeDraftService:
         return self.store.activate_profile(validated, actor=reviewer)
 
     def profile_status(self) -> dict[str, Any]:
+        active_profile = self.store.active_profile()
         return {
             "feature_enabled": self.enabled,
-            "active_profile": self.store.active_profile(),
+            "active_profile": (
+                self._generation_profile(active_profile) if active_profile else None
+            ),
             "warning": (
                 "当前是未鉴权能力试验；审核人仅为自报身份，不能作为正式生产审计。"
                 if self.knowledge.settings.demo_mode
@@ -1909,6 +1942,7 @@ class RealChangeDraftService:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         if not isinstance(normalized, dict):
             raise ChangeDraftError("模型草案不是 JSON 对象")
+        profile = self._generation_profile(profile)
         request = draft["request"]
         tasks_raw = normalized.get("tasks")
         procedure_raw = normalized.get("procedure")
@@ -2114,6 +2148,18 @@ class RealChangeDraftService:
         )
         if not execution_sanitized:
             hard_failures.append("EXECUTION_RESULT_NOT_SANITIZED")
+        procedure_non_generated_fields_sanitized = four_phase_complete and all(
+            isinstance(record, dict)
+            and all(
+                record.get(name) in SAFE_DRAFT_EMPTY_VALUES
+                for name in PROCEDURE_NON_GENERATED_FIELDS
+                if name in record
+            )
+            for key in PROCEDURE_KEYS
+            for record in procedure.get(key) or []
+        )
+        if not procedure_non_generated_fields_sanitized:
+            hard_failures.append("PROCEDURE_NON_GENERATED_FIELDS_NOT_SANITIZED")
         expected_provenance = (
             len(normalized.get("tasks") or [])
             + sum(len((normalized.get("procedure") or {}).get(key) or []) for key in PROCEDURE_KEYS)
@@ -2133,6 +2179,9 @@ class RealChangeDraftService:
             ),
             "approved_sources_unchanged": True,
             "execution_result_sanitized": execution_sanitized,
+            "procedure_non_generated_fields_sanitized": (
+                procedure_non_generated_fields_sanitized
+            ),
             "no_unattributed_specific_values": True,
         }
         return {
@@ -2157,6 +2206,7 @@ class RealChangeDraftService:
             error = "生成期间 SchemaProfile 已变化"
             self.store.set_draft_failure(draft_id, error)
             raise ChangeDraftError(error)
+        profile = self._generation_profile(profile)
         request_attempts: list[dict[str, Any]] = []
         protocol_repairs: list[dict[str, Any]] = []
         generation_budget: dict[str, Any] = {}
@@ -2346,6 +2396,7 @@ class RealChangeDraftService:
         profile = self.store.active_profile()
         if profile is None or str(profile["profile_id"]) != str(draft["profile_id"]):
             raise ChangeDraftError("SchemaProfile 已变化，不能在旧 Profile 上编辑")
+        profile = self._generation_profile(profile)
         _bundles, cards = self._selected_context(draft)
         normalized_result, change_json, provenance = self._assemble(
             normalized, draft=draft, profile=profile, cards=cards
@@ -2412,12 +2463,19 @@ class RealChangeDraftService:
             raise ChangeDraftError("只有人工审核通过的 revision 可以导出", status=409)
         self._revalidate_snapshots(draft)
         revision = draft.get("revision") or {}
+        validation = self._validate_assembled(
+            revision.get("change") or {},
+            normalized=revision.get("normalized") or {},
+            provenance=revision.get("provenance") or {},
+        )
+        if not validation["passed"]:
+            raise ChangeDraftError("草案导出前未通过当前硬门禁", status=409)
         return {
             "draft_id": draft_id,
             "revision": draft["current_revision"],
             "change_order": revision.get("change"),
             "provenance_report": revision.get("provenance"),
-            "validation_report": revision.get("validation"),
+            "validation_report": validation,
         }
 
     def blind_request(self, case_id: str, *, actor: str) -> dict[str, Any]:

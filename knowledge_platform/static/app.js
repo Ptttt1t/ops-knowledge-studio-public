@@ -1618,6 +1618,7 @@ function realChangeValidationRows(validation) {
     provenance_coverage_complete: "引用覆盖率 100%",
     approved_sources_unchanged: "引用仍为 APPROVED 且未漂移",
     execution_result_sanitized: "无历史执行结果泄漏",
+    procedure_non_generated_fields_sanitized: "步骤核验与更新字段保持未填写",
     no_unattributed_specific_values: "无无来源具体值",
   };
   return Object.entries(gates).map(([key, passed]) => `

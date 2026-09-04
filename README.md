@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.6.2-b88924)
+![Version](https://img.shields.io/badge/version-1.6.3-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
@@ -357,6 +357,7 @@ RealChangeRequest
 - “本次变更具体参数 JSON”会原样进入 `request.parameters`。新 IP、账号、端口、阈值和资源规格必须在这里填写；为空时页面会二次确认，模型不得从参考案例的 `instance_parameters` 复制旧值。
 - `action_list` 是唯一任务主视图，分组视图由程序派生并对账。
 - `ExecutionResult` 只能保持空值或 `NOT_EXECUTED`。
+- 步骤内的 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 不是模型所有字段：新旧 Profile 在生成和编辑时都会被确定性改为空值，最终硬门禁再次检查，避免草案虚构人工核验、人员或时间。
 - 只有已收到响应正文且模型负责的 JSON 或 `GeneratedChangeDraft` 协议不合规时才允许一次协议修复。请求/Profile 输入绑定会在模型调用前预检，错误码为 `REQUEST_PROFILE_BINDING_ERROR`；这类确定性错误即使在装配阶段暴露也立即停止，绝不发送第二个远程请求。超时、连接失败和 HTTP 错误同样立即停止，也不生成规则 fallback 草案。
 - 普通模型请求继续使用 `DEEPSEEK_TIMEOUT_SECONDS`（默认 120）；真实草案单独使用 `CHANGE_DRAFT_TIMEOUT_SECONDS`（默认 240）。修改实际 `.env` 后重启服务即可调整草案上限，不会同时放宽知识抽取和问答。
 - 同一进程按 base URL、API Key 指纹和实际模型建立共享门禁；主模型普通路径最多并发 `DEEPSEEK_MODEL_MAX_CONCURRENCY=2`。真实草案在所选模型路由上申请独占槽位，不与本进程内同模型的抽取、问答或其他 Runtime Worker 请求重叠。

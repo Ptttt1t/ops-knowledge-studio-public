@@ -139,6 +139,7 @@ RealChangeRequest
 - 相似治理后台扫描只执行本地 SQLite/确定性相似度计算，不调用模型；不要把扫描 Worker 存活误判为 API 并发占用。
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。结构化上下文对象（当前包括 `change_scene`）只使用 Profile `sample` 的键/类型，并从 `scenario_reference` 或兼容的 `parameters.change_scene` 取实例值；不得把 Profile 的历史样例值复制进新草案。
+- ProcedureStep 的 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 保留真实 Schema 的键和类型，但不属于模型所有字段。新建 Profile 固定为 `empty`；已有活动 Profile 在生成、编辑和展示时应用同一有效策略；最终硬门禁逐步骤检查，防止草案虚构人工核验、人员或时间。
 - SchemaProfile 的 `type=null` 表示字段必须存在且值为 JSON `null`；该值是完整、合法的结构结果，不是缺失。非 null 字段为空和 nullable 字段缺席仍按缺失处理。真实草案以 `request` 为本次事实源，参考卡只作模板/证据；具体新参数必须进入 `request.parameters`，历史 `instance_parameters` 不得替代本次输入。
 - 可选 MindMemOS 只作语义后备。同步内容有白名单，召回必须映射回本地 card 并重新验证；外部失败退回本地检索。
 

@@ -40,7 +40,7 @@ def base_step(**overrides: object) -> dict[str, object]:
         "impact_analysis": "无影响",
         "operate_commond": "",
         "command_list": [],
-        "action_risk_level": "low",
+        "result_confirm": None,
         "sop_step_id": "synthetic-step",
         "label": "synthetic",
         "tool_unique_ids": [],
@@ -130,6 +130,28 @@ def build(
 
 
 class ChangeOrderCardBuilderTests(unittest.TestCase):
+    def test_procedure_actions_skip_empty_higher_priority_candidates(self):
+        self.assertEqual(
+            ChangeOrderCardBuilder._procedure_actions(
+                {
+                    "tool_related_actions": [],
+                    "action_unique_ids": ["synthetic-action"],
+                    "actions": ["unused-fallback"],
+                }
+            ),
+            ["synthetic-action"],
+        )
+        self.assertEqual(
+            ChangeOrderCardBuilder._procedure_actions(
+                {
+                    "tool_related_actions": [],
+                    "action_unique_ids": [],
+                    "actions": ["synthetic-fallback"],
+                }
+            ),
+            ["synthetic-fallback"],
+        )
+
     def test_case_a_single_step_maps_fields_and_cleans_rich_text(self):
         groups = {
             "check_before_change": [base_step(**FIXTURE["case_a"])],

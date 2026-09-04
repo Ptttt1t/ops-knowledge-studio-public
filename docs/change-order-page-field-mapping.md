@@ -78,16 +78,16 @@
 | 页面信息 | 当前字段或转换 | 覆盖情况与缺口 |
 | --- | --- | --- |
 | 步骤名称、操作步骤 | `check_name` → `title`；`operate_description` → `operation` | 已有主要文本映射，保持源步骤顺序。 |
-| 选择 Action | `_procedure_actions()` 读取 `tool_related_actions`、`action_unique_ids`、`actions` | 有关联字段候选，需核验真实填充形式及页面选择值，不根据“有数组”就视为完整关联。 |
+| 选择 Action | `_procedure_actions()` 按顺序读取 `tool_related_actions`、`action_unique_ids`、`actions` | 空列表不会再遮蔽后续候选；真实填充形式及页面选择值仍需核验，不根据“有数组”就视为完整关联。 |
 | 有/无可变参数 | 无确认的专用开关 | `instance_parameters` 是从已识别键或操作文本取得的实例参数，不能代替页面是否有可变参数的选择。 |
 | 操作验证 | `operate_verified` → `validation` | 当前是直接文本映射，尚未按指导要求和实际核验回填分离。 |
-| 结果确认、核验说明 | 合成步骤样例含 `result_confirm_notes` | 当前留在 `source_metadata`，没有形成步骤级 Outcome；也没有确认正常/异常选择的独立源键及枚举。 |
+| 结果确认、核验说明 | 合成步骤样例含 `result_confirm`、`result_confirm_notes` | 当前留在 `source_metadata`，没有形成步骤级 Outcome；草案生成将两者确定性置空并用硬门禁阻止模型或草案编辑填入。正常/异常枚举含义仍待确认。 |
 | 影响分析文字、涉及/不涉及 | `impact_analysis` → `impact_analysis`；样例含 `is_involved_step` | 单个涉及标记尚未确定属于哪个子页，不能同时当作影响分析和回退的两个开关。 |
 | 影响分析子页的结果确认及证据 | 没有明确的独立转换 | 不能证明与操作实施子页的结果确认分别保存、分别关联。 |
 | 操作回退说明、涉及/不涉及 | `operate_rollback` → `rollback`；`is_involved_step` 仅留元数据 | 有文本，未区分计划回退、是否需要回退、是否实际执行回退。 |
 | 回退子页的结果确认及证据 | 没有明确的独立转换 | 不能用单一确认说明证明各子页核验都已覆盖。 |
 | 图片、文字证据 | 对主要富文本字段执行清洗，图片留 attachment/evidence metadata | 尚未建立每张截图与子页、核验人、核验时间的完整关联；元数据保留不等于完成证据建模。 |
-| 步骤 ID、更新人员和时间 | 样例中的 `sop_step_id`、`update_user`、`update_time` 留在 `source_metadata` | 来源步骤身份可追溯；更新人员/时间不能被解释为执行人、核验人及各自操作时间。 |
+| 步骤 ID、更新人员和时间 | 样例中的 `sop_step_id`、`update_user`、`update_time` 留在 `source_metadata` | 来源步骤身份可追溯；更新人员/时间不能被解释为执行人、核验人及各自操作时间，也不允许模型在新草案中生成。 |
 | 异常后的人工决定与可能的多次核验 | 尚无独立模型 | 不应凭最后一个正常状态重建或掩盖先前异常；在没有历史源数据时不得制造事件序列。 |
 
 当前每个步骤仍只生成 Procedure 或其互斥子卡。新增步骤执行记录是待设计方向，未在此次样例清理中实现。

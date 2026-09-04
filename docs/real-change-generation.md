@@ -38,6 +38,8 @@ python run.py change-schema-profile-inspect --case-id "change-order:<source-sha2
 
 所有设备 ID、IP、端口、阈值、超时等具体参数应设为 `input:parameters.<name>`。`execution_fields` 只允许 `empty`、`not_executed` 或安全空值形式的 `fixed`，不能复制历史执行结果。
 
+ProcedureStep 中的 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 固定使用 `empty`。这些字段保留 Profile 声明的 JSON 类型，但不由模型生成；人工或源系统只能在草案生成流程之外按正式流程填写。生成服务也会对已有活动 Profile 应用相同的有效策略，因此升级后不依赖修改数据库中的旧 Profile 才能获得保护。Profile 查看接口显示有效策略。
+
 确认后激活：
 
 ```powershell
@@ -131,6 +133,7 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
 - 每个任务和步骤都有输入或知识引用，输出引用覆盖率为 100%；
 - 批准和导出时引用卡仍为 `APPROVED`，内容快照未漂移；
 - `ExecutionResult` 只含空值或 `NOT_EXECUTED`；
+- 四阶段每个步骤的 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 只能保持类型安全空值；模型输出和人工编辑都不能在本 BETA 中填入这些执行后字段；
 - 设备 ID、IP、端口、阈值、超时等具体值由 `parameters` 引用绑定，不得从历史案例复制或由模型猜测。
 
 生成 Prompt 明确规定 `request` 是本次事实源、`approved_cards` 只是模板和证据；输入值优先于历史卡片值。若 `request.parameters={}`，页面会提示操作者确认本次确实不需要具体参数。TaskRecord 的动作/能力身份字段可以继续引用卡片，它们不等同于本次设备或资源参数。

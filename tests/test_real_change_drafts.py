@@ -17,6 +17,7 @@ from knowledge_platform.change_drafts import (
     ChangeDraftError,
     ChangeDraftStore,
     GENERATION_SYSTEM_PROMPT,
+    PROCEDURE_NON_GENERATED_FIELDS,
     RealChangeDraftService,
 )
 from knowledge_platform.retrieval import SearchHit
@@ -429,11 +430,49 @@ class RealChangeDraftTests(unittest.TestCase):
                 )
             )
             prompt_payload = json.loads(client.generation_calls[-1][1].split("\n\n", 1)[0])
+            self.assertTrue(
+                all(
+                    prompt_payload["schema_profile"]["procedure_fields"][name][
+                        "policy"
+                    ]
+                    == "empty"
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                )
+            )
             self.assertFalse(
                 any(
                     "sample" in spec
                     for spec in prompt_payload["schema_profile"]["task_fields"].values()
                 )
+            )
+            self.assertTrue(
+                all(
+                    record.get(name) in (None, "", False, 0, [], {})
+                    for records in change["data"]["sop_change_step"].values()
+                    for record in records
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                    if name in record
+                )
+            )
+
+            tampered = deepcopy(change)
+            tampered["data"]["sop_change_step"]["change_implement"][0][
+                "result_confirm_notes"
+            ] = "synthetic model claimed that a human check passed"
+            tampered_validation = service.change_drafts._validate_assembled(
+                tampered,
+                normalized=generated["revision"]["normalized"],
+                provenance=generated["revision"]["provenance"],
+            )
+            self.assertFalse(tampered_validation["passed"])
+            self.assertIn(
+                "PROCEDURE_NON_GENERATED_FIELDS_NOT_SANITIZED",
+                tampered_validation["hard_failures"],
+            )
+            self.assertFalse(
+                tampered_validation["gates"][
+                    "procedure_non_generated_fields_sanitized"
+                ]
             )
             diagnostics = generated["generation_diagnostics"]
             budget = diagnostics["generation_budget"]
@@ -483,6 +522,27 @@ class RealChangeDraftTests(unittest.TestCase):
             exported = service.change_drafts.export_draft(draft["draft_id"])
             self.assertEqual(exported["change_order"], change)
             self.assertEqual(exported["provenance_report"]["profile_id"], profile["profile_id"])
+
+            legacy_unsafe_change = deepcopy(change)
+            legacy_unsafe_change["data"]["sop_change_step"]["change_implement"][0][
+                "result_confirm_notes"
+            ] = "synthetic stale approval with a claimed human result"
+            connection = service.change_drafts.store.connect()
+            try:
+                connection.execute(
+                    "UPDATE change_draft_revisions SET change_json = ? "
+                    "WHERE draft_id = ? AND revision = ?",
+                    (
+                        json.dumps(legacy_unsafe_change, ensure_ascii=False),
+                        draft["draft_id"],
+                        approved["current_revision"],
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(ChangeDraftError, "当前硬门禁"):
+                service.change_drafts.export_draft(draft["draft_id"])
 
             edited = service.change_drafts.update_draft(
                 draft["draft_id"],
@@ -957,6 +1017,15 @@ class RealChangeDraftTests(unittest.TestCase):
                     conflicting, actor="schema-admin"
                 )
 
+            unsafe_procedure_profile = deepcopy(profile)
+            unsafe_procedure_profile["procedure_fields"][
+                "result_confirm_notes"
+            ]["policy"] = "generated"
+            with self.assertRaisesRegex(ChangeDraftError, "只允许 empty"):
+                service.change_drafts.activate_schema_profile(
+                    unsafe_procedure_profile, actor="schema-admin"
+                )
+
             request = real_request()
             self.assertEqual(
                 service.change_drafts._specific_parameter_violations(
@@ -974,6 +1043,87 @@ class RealChangeDraftTests(unittest.TestCase):
                     request=request,
                 ),
                 [],
+            )
+
+    def test_legacy_active_profile_is_safely_overridden_during_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = RealDraftClient()
+            service = self.make_service(root, client)
+            case = self.prepare_case(service, root)
+            profile = service.change_drafts.inspect_schema_profile(case["case_id"])
+            legacy_profile = deepcopy(profile)
+            for name in PROCEDURE_NON_GENERATED_FIELDS:
+                legacy_profile["procedure_fields"][name]["policy"] = "generated"
+            service.change_drafts.store.activate_profile(
+                legacy_profile, actor="legacy-schema-admin"
+            )
+            displayed_profile = service.change_drafts.profile_status()["active_profile"]
+            self.assertTrue(
+                all(
+                    displayed_profile["procedure_fields"][name]["policy"] == "empty"
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                )
+            )
+            self.force_bundle_hits(service, case["case_id"])
+
+            draft = service.change_drafts.create_draft(
+                real_request(),
+                selected_case_ids=[case["case_id"]],
+                actor="pilot-operator",
+            )
+            generated = service.change_drafts.generate(draft["draft_id"])
+
+            prompt = json.loads(client.generation_calls[0][1].split("\n\n", 1)[0])
+            self.assertTrue(
+                all(
+                    prompt["schema_profile"]["procedure_fields"][name]["policy"]
+                    == "empty"
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                )
+            )
+            self.assertTrue(generated["revision"]["validation"]["passed"])
+            self.assertTrue(
+                generated["revision"]["validation"]["gates"][
+                    "procedure_non_generated_fields_sanitized"
+                ]
+            )
+            procedure = generated["revision"]["change"]["data"][
+                "sop_change_step"
+            ]
+            self.assertTrue(
+                all(
+                    record.get(name) in (None, "", False, 0, [], {})
+                    for records in procedure.values()
+                    for record in records
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                    if name in record
+                )
+            )
+
+            edited_normalized = deepcopy(generated["revision"]["normalized"])
+            edited_step = edited_normalized["procedure"]["change_implement"][0][
+                "record"
+            ]
+            edited_step.update(
+                {
+                    "result_confirm": "synthetic-human-result",
+                    "result_confirm_notes": "synthetic-human-notes",
+                    "update_user": "synthetic-human",
+                    "update_time": 1900000000000,
+                }
+            )
+            edited = service.change_drafts.update_draft(
+                draft["draft_id"], edited_normalized, actor="pilot-editor"
+            )
+            edited_step = edited["revision"]["change"]["data"]["sop_change_step"][
+                "change_implement"
+            ][0]
+            self.assertTrue(
+                all(
+                    edited_step[name] in (None, "", False, 0, [], {})
+                    for name in PROCEDURE_NON_GENERATED_FIELDS
+                )
             )
 
     def test_blind_target_is_excluded_and_cannot_be_profile_sample(self) -> None:

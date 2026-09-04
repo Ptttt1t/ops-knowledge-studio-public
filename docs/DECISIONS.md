@@ -97,6 +97,8 @@ Status: Active
 
 ### Decision
 
+ProcedureStep 的确认结果、确认说明、更新人员和更新时间只保留真实 Schema 的键与类型，不属于模型所有字段。新建 Profile 对这些字段固定使用 `empty`；旧 Profile 的宽松 policy 在运行时收窄；装配后的硬门禁逐步骤阻断任何非空值。模型不能生成或通过草案编辑写入人工核验、人员和时间。
+
 真实草案生成使用结构化 `RealChangeRequest`、人工确认的完整 `APPROVED` 案例包和已激活 `SchemaProfile`。模型只输出独立 `GeneratedChangeDraft`，程序确定性装配真实 JSON、派生任务分组、清空 ExecutionResult 并执行硬门禁。Profile 样例只定义结构和类型，不得作为新草案的实例值来源；对象型 `change_scene` 从 `scenario_reference` 或兼容的 `parameters.change_scene` 确定性装配。只有模型已返回正文后的 JSON/`GeneratedChangeDraft` 协议失败最多修复一次；输入/Profile 绑定错误在模型调用前预检并立即停止，超时、连接和 HTTP 传输失败也立即停止。草案任务并发固定为 1；草案请求取得所选模型路由的进程内独占槽位并关闭底层隐藏 HTTP retry。真实草案使用独立、可由 `.env` 覆盖且默认 240 秒的客户端等待上限，不改变普通模型请求默认 120 秒的全局上限。允许配置同一兼容端点上的一个备用模型，但只在主模型出现明确容量错误时切换一次，并记录实际路由。只有人工批准 revision 可导出，不提供执行工具。
 
 ### Reason
