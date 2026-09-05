@@ -43,7 +43,7 @@
 
 ## Work In Progress
 
-None. 代码、全量测试、文档同步及完整 diff/敏感信息复核已完成。
+代码、全量测试、文档同步及完整 diff/敏感信息复核已完成，实现提交为 `8e1bd1a`。公开推送被自动审批拒绝，等待明确发布授权；`github/main` 仍为 `0d1a87bc5b23beb58d30ec4078deae1089ed4601`，尚未包含本轮修复。
 
 ## Recommended Next Step
 
