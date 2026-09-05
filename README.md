@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.6.3-b88924)
+![Version](https://img.shields.io/badge/version-1.6.4-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。

@@ -12,10 +12,11 @@
 - `retrieval_enabled = true`；
 - 已有稳定 `semantic_fingerprint` 和 `card_lineage.case_id`；
 - 每个知识簇中每个 `case_id` 最多一张卡；
-- 不属于相同 source lineage；
 - `procedure_group` 相同且结构化对象/action 不冲突。
 
 同一案例包内的卡片不会进入相似合并队列。即使正文高度相似，也只说明案例内部可能存在建模重叠，不代表可以丢失步骤顺序、source pointer 或阶段上下文。扫描、候选写入和最终确认事务都会检查 `case_id`，旧的同案例候选会在下次扫描时变为 `STALE`。
+
+JSON Pointer 只定位各自案例中的字段。不同案例即使都使用 `/data/sop_change_step/check_before_change/0`，也不能据此当成同一来源并跳过相似扫描；案例边界以 `case_id` 判断。
 
 ## 从 pair 到 complete-link 知识簇
 

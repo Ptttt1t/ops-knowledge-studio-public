@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from copy import deepcopy
 import json
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.request import Request, urlopen
 
 from harness.api_client import APIError, APITimeoutError, JSONOutputError
@@ -318,6 +320,47 @@ class RealChangeDraftTests(unittest.TestCase):
 
             self.assertIn("model_error_code", columns)
             self.assertIn("generation_diagnostics_json", columns)
+
+    def test_revision_and_review_status_are_visible_in_the_same_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChangeDraftStore(Path(directory) / "change-drafts.db")
+            draft = store.create_draft(
+                request={}, selected_case_ids=[], profile_id="synthetic-profile",
+                actor="test-operator",
+            )
+            connect = store.connect
+            visible_states = []
+
+            @contextmanager
+            def observe_commits():
+                with connect() as connection:
+                    yield connection
+                # Read through an independent connection after every commit,
+                # including the interval before save_revision returns.
+                with connect() as observer:
+                    row = observer.execute(
+                        "SELECT current_revision, status FROM change_drafts "
+                        "WHERE draft_id = ?", (draft["draft_id"],),
+                    ).fetchone()
+                    visible_states.append(tuple(row))
+
+            for revision, passed, expected in (
+                (1, True, "READY_FOR_REVIEW"), (2, False, "BLOCKED"),
+            ):
+                with self.subTest(passed=passed):
+                    visible_states.clear()
+                    with patch.object(store, "connect", observe_commits):
+                        saved = store.save_revision(
+                            draft["draft_id"], normalized={}, change_json={},
+                            provenance={}, validation={"passed": passed},
+                            usage={}, actor="test-operator",
+                        )
+                    self.assertEqual(saved["status"], expected)
+                    self.assertTrue(visible_states)
+                    self.assertTrue(
+                        all(state == (revision, expected) for state in visible_states),
+                        visible_states,
+                    )
 
     def make_service(
         self, root: Path, client: RealDraftClient, **setting_overrides

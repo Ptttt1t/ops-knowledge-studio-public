@@ -118,6 +118,8 @@ READY_FOR_REVIEW / REVIEW_APPROVED / REJECTED
   --编辑--> 新 revision -> READY_FOR_REVIEW 或 BLOCKED
 ```
 
+revision 内容与 `READY_FOR_REVIEW` / `BLOCKED` 状态在同一事务中提交，避免 HTTP 读取到内容已保存但尚未转为待审核的中间状态。
+
 模型已经返回内容但输出不符合 JSON/`GeneratedChangeDraft` 协议时，最多进行一次修复重试。输入/Profile 类型冲突不是模型协议问题：程序会在远程调用前阻断；缺失的结构化场景值进入 revision 的 `missing_fields` 并阻断审核；第二次协议修复仍失败时保留检索诊断和错误并停止，不会输出部分草案或 deterministic fallback。`generation_diagnostics.protocol_repairs` 会记录触发第二次请求的 `JSON_PARSE` 或 `DRAFT_ASSEMBLY` 阶段、错误码和截断原因，因此不能再仅凭请求数猜测重试原因。
 
 ## 硬门禁

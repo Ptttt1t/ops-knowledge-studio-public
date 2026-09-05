@@ -91,6 +91,8 @@ Status: Active
 
 扫描器、候选写入和 Store 确认事务均必须重复执行 case/phase 门禁，不能只依赖前端。新扫描只生成知识簇，历史 pair 保持兼容读取。簇 identity 绑定成员 card/case/fingerprint 和算法版本；人工拒绝、成员漂移和 case rebuild 都会影响簇生命周期。接受前的成员窄化不得原地覆盖候选历史：原簇标为 `SUPERSEDED`，被移除成员与每个保留成员的排除证据按算法、procedure group 及两端 card/case/fingerprint 绑定，剩余成员在同一事务中形成新候选；绑定 identity 变化后重新评估。来源卡只在最终接受后退出普通检索，证据和图谱 lineage 必须保留。
 
+来源隔离按 `case_id` 执行，不再额外按裸 JSON Pointer 排除。不同案例的同位置步骤天然共享路径，路径相等不能证明同源；合成测试也必须允许这种路径重复，避免用全局唯一假路径掩盖漏召回。
+
 ## Decision: 真实 ChangeOrder 生成是隔离、默认关闭、不可执行的 BETA
 
 Status: Active

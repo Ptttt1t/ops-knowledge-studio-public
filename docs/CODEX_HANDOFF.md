@@ -2,44 +2,37 @@
 
 ## Current Objective
 
-修复内网只读审查和外网合成复现已确认的两个问题：Procedure Action 候选被前置空列表遮蔽，以及真实 ChangeOrder 草案能够生成步骤级人工核验/更新字段。未确认语义的页面字段和 `change_plan` 兄弟字段继续保持待确认，不猜测映射。
+按第一性原理审视近期相似治理和真实草案实现，优先删除已确认无用或错误的逻辑。已修复跨案例相同步骤路径被误判为同源而漏召回的问题，保留证据、人工审核、case/phase 隔离和草案不可执行边界。
 
 ## Completed
 
-- `_procedure_actions()` 现在跳过空列表并继续检查 `action_unique_ids`、`actions` 等后续候选；非空列表和标量兼容行为保持不变。
-- 合成 ProcedureStep fixture 用已观察到的 `result_confirm` 替换未在当前结构观察中出现的 `action_risk_level`，仍保持 20 字段结构；Builder 继续兼容可选的 `action_risk_level`。
-- 将 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 定义为草案非模型所有字段：
-  - 新建 SchemaProfile 对这些字段使用 `empty`；
-  - Profile 激活校验拒绝把它们配置为 `generated`、`input`、`not_executed` 或其他 policy；
-  - 已有活动 Profile 无需修改数据库，生成、人工编辑和 Profile 展示时会应用同一有效 `empty` 策略；
-  - 装配程序忽略模型或草案编辑提供的值，按 Profile 类型写入空值；
-  - 最终校验逐阶段、逐步骤检查这些字段，并新增 `procedure_non_generated_fields_sanitized` 硬门禁；
-  - 审核和导出都会按当前硬门禁重新验证，升级前已经批准但含非空回填字段的 revision 不能继续导出。
-- 生成 Prompt 明确禁止模型生成步骤核验结论、人员和时间；Web 验证结果增加对应中文门禁说明。
-- README、页面字段映射、真实草案说明、长期上下文和架构决策已同步；包版本更新为 1.6.3。
+- 删除扫描器 `_same_lineage()` 及其排除分支：裸 JSON Pointer 只在案例内定位，不能把不同案例的相同路径当作同一来源。案例隔离继续由 `_same_case()` 和 Store 事务执行。
+- 删除无调用的旧 pair 候选构造 `proposed_canonical_merge()` 和 `_pair_key()`。历史 pair 的读取、审核及数据库记录仍保留兼容。
+- 删除 `update_draft()` 的重复 Profile 转换；共享 `_assemble()` 仍强制应用步骤非模型字段的 `empty` 策略，生成 Prompt 和 Profile 展示也继续使用有效策略。
+- 全量测试暴露草案保存的两次事务提交竞态。删除无业务用途的瞬时 `DRAFT` 写入和第二次更新，revision 内容与最终 `READY_FOR_REVIEW` / `BLOCKED` 状态改为同一事务提交。
+- 语义治理合成 fixture 改用标准 ProcedureStep JSON Pointer，不再把案例名拼进路径；加强现有扫描测试，明确覆盖不同 case、相同 pointer 的候选生成和幂等重扫。
+- 生产代码净删 94 行，未增加依赖、配置、数据迁移、门禁或自动化。版本更新为 1.6.4。
+- 上轮 1.6.3 的步骤字段约束继续生效：`result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 在草案中保持类型安全空值；审核/导出仍复核当前硬门禁。
 
 ## Files Changed
 
-- `knowledge_platform/change_order_cards.py`
+- `knowledge_platform/semantic_governance.py`
 - `knowledge_platform/change_drafts.py`
-- `knowledge_platform/static/app.js`
-- `tests/test_change_order_card_builder.py`
+- `tests/test_semantic_governance.py`
 - `tests/test_real_change_drafts.py`
-- `README.md`
-- `docs/change-order-page-field-mapping.md`
+- `README.md`, `pyproject.toml`
+- `docs/semantic-governance.md`
 - `docs/real-change-generation.md`
-- `docs/CODEX_CONTEXT.md`
-- `docs/DECISIONS.md`
-- `docs/CODEX_HANDOFF.md`
-- `pyproject.toml`
+- `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`, `docs/CODEX_HANDOFF.md`
 
 ## Validation
 
-- `D:\Anaconda\envs\zte\python.exe -m unittest tests.test_change_order_card_builder tests.test_real_change_drafts -v`：39 tests 全部通过。
-- `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：181 tests 全部通过，退出码 0。
-- `D:\Anaconda\envs\zte\python.exe -m py_compile ...`、`python -m compileall -q harness knowledge_platform tests scripts`、`node --check knowledge_platform/static/app.js`、`git diff --check`：全部通过；仅有 Windows LF/CRLF 提示。
-- 覆盖空 Action 候选回退、新 Profile 策略、旧活动 Profile 运行时收窄、模型值确定性置空、人工编辑置空、最终硬门禁和旧批准 revision 导出复核。
-- 所有测试仅使用 synthetic fixture；未读取或固化真实内网 JSON、SchemaProfile、人员、地址、Prompt 或执行结果，也未调用真实执行工具。
+- 修复前，用标准路径的合成 fixture 运行扫描回归：预期 1 个候选，实际 0；同案例排除测试通过。
+- 修复后，`D:\Anaconda\envs\zte\python.exe -m unittest tests.test_semantic_governance tests.test_real_change_drafts -v`：42 tests 全部通过。
+- 首次全量 181 tests 有 1 项 HTTP 草案测试失败，实际读到 `DRAFT`。新增独立连接观察每次提交的回归测试：加载修改前的 `save_revision` 时稳定复现 `DRAFT -> READY_FOR_REVIEW` 两次可见提交；删除中间写入后该测试与 HTTP 测试均通过。
+- 最终 `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：182 tests 全部通过，98.933 秒，退出码 0。
+- `python -m compileall -q harness knowledge_platform tests scripts`、`node --check knowledge_platform/static/app.js`、`git diff --check` 已通过。
+- 验证仅使用合成 fixture 和测试临时数据库；未读取真实业务数据库，未调用外部模型或真实执行工具。
 
 ## Known Issues
 
@@ -50,15 +43,15 @@
 
 ## Work In Progress
 
-None. 已完成代码、全量验证、文档同步和最终 diff/敏感信息复核。
+None. 代码、全量测试、文档同步及完整 diff/敏感信息复核已完成。
 
 ## Recommended Next Step
 
-完成全量测试和发布后，由内网人工升级并使用可丢弃草案验证：活动 Profile 展示上述四字段为 `empty`，生成草案对应值为类型安全空值，人工审核与导出正常；不得执行真实变更。其余页面映射仍按脱敏结构信息逐项确认。
+内网由人工升级后重新执行相似知识扫描，确认跨案例、相同步骤路径的相似卡能形成待审核知识簇；无需重建案例或迁移数据库。候选数量可能增加，仍由人工审核。其余页面字段映射按脱敏结构证据逐项确认。
 
 ## Last Updated
 
 - Date: 2026-09-05 (Asia/Shanghai)
 - Current branch: `main`
-- Package version: 1.6.3
+- Package version: 1.6.4
 - Containing commit: use `git log -1 --oneline -- docs/CODEX_HANDOFF.md`; this file does not store its own commit SHA.

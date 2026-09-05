@@ -518,7 +518,7 @@ class ChangeDraftStore:
         actor: str,
     ) -> dict[str, Any]:
         now = utc_now()
-        status = "DRAFT" if validation.get("passed") else "BLOCKED"
+        status = "READY_FOR_REVIEW" if validation.get("passed") else "BLOCKED"
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT current_revision FROM change_drafts WHERE draft_id = ?",
@@ -558,13 +558,6 @@ class ChangeDraftStore:
                 """,
                 (revision, status, now, draft_id),
             )
-        if status == "DRAFT":
-            with self.connect() as connection:
-                connection.execute(
-                    "UPDATE change_drafts SET status = 'READY_FOR_REVIEW', updated_at = ? "
-                    "WHERE draft_id = ? AND current_revision = ? AND status = 'DRAFT'",
-                    (utc_now(), draft_id, revision),
-                )
         return self.get_draft(draft_id) or {}
 
     def get_draft(self, draft_id: str) -> dict[str, Any] | None:
@@ -2396,7 +2389,6 @@ class RealChangeDraftService:
         profile = self.store.active_profile()
         if profile is None or str(profile["profile_id"]) != str(draft["profile_id"]):
             raise ChangeDraftError("SchemaProfile 已变化，不能在旧 Profile 上编辑")
-        profile = self._generation_profile(profile)
         _bundles, cards = self._selected_context(draft)
         normalized_result, change_json, provenance = self._assemble(
             normalized, draft=draft, profile=profile, cards=cards

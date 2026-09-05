@@ -402,62 +402,6 @@ def _prefer_text(values: list[Any], *, limit: int = 12_000) -> str:
     return max(normalized, key=lambda item: (len(_identity(item)), len(item)))
 
 
-def proposed_canonical_merge(
-    left: dict[str, Any], right: dict[str, Any]
-) -> dict[str, Any]:
-    left_group = procedure_group(left)
-    right_group = procedure_group(right)
-    if not left_group or left_group != right_group:
-        raise SemanticGovernanceError("不同执行阶段的 Procedure Knowledge 不允许合并")
-    titles = [_phase_neutral_title(left.get("title")), _phase_neutral_title(right.get("title"))]
-    operation = _prefer_text(
-        [
-            left.get("generalized_operation") or left.get("operation"),
-            right.get("generalized_operation") or right.get("operation"),
-            left.get("procedure_steps"),
-            right.get("procedure_steps"),
-        ]
-    )
-    title = _prefer_text(titles, limit=200) or "合并后的通用操作知识"
-    return {
-        "title": title,
-        "summary": _prefer_text([left.get("summary"), right.get("summary")]),
-        "generalized_operation": operation,
-        "validation": _prefer_text(
-            [
-                left.get("validation") or left.get("validation_steps"),
-                right.get("validation") or right.get("validation_steps"),
-            ]
-        ),
-        "rollback": _prefer_text(
-            [
-                left.get("rollback") or left.get("rollback_steps"),
-                right.get("rollback") or right.get("rollback_steps"),
-            ]
-        ),
-        "impact_analysis": _prefer_text(
-            [left.get("impact_analysis"), right.get("impact_analysis")]
-        ),
-        "risk_level": _prefer_text([left.get("risk_level"), right.get("risk_level")], limit=100),
-        "risk_control": _prefer_text([left.get("risk_control"), right.get("risk_control")]),
-        "scenario": _prefer_text([left.get("scenario"), right.get("scenario")], limit=1000),
-        "object_type": _prefer_text([left.get("object_type"), right.get("object_type")], limit=200),
-        "object_name": _prefer_text([left.get("object_name"), right.get("object_name")], limit=300),
-        "applicable_versions": _unique(
-            [*(left.get("applicable_versions") or []), *(right.get("applicable_versions") or [])]
-        ),
-        "prerequisites": _unique(
-            [*(left.get("prerequisites") or []), *(right.get("prerequisites") or [])]
-        ),
-        "keywords": _unique([*(left.get("keywords") or []), *(right.get("keywords") or [])]),
-        "applicable_phases": _unique(
-            [left_group]
-        ),
-        "procedure_group": left_group,
-        "source_card_ids": sorted((int(left["id"]), int(right["id"]))),
-    }
-
-
 def proposed_canonical_cluster(cards: list[dict[str, Any]]) -> dict[str, Any]:
     if len(cards) < 2:
         raise SemanticGovernanceError("canonical 知识簇至少需要两张来源卡片")
@@ -582,12 +526,6 @@ class SemanticGovernanceService:
             and card.get("retrieval_enabled") is not False
             and bool(str(card.get("semantic_fingerprint") or "").strip())
         )
-
-    @staticmethod
-    def _same_lineage(left: dict[str, Any], right: dict[str, Any]) -> bool:
-        left_pointer = str(left.get("source_procedure_pointer") or "")
-        right_pointer = str(right.get("source_procedure_pointer") or "")
-        return bool(left_pointer and left_pointer == right_pointer)
 
     @staticmethod
     def _case_id(card: dict[str, Any]) -> str:
@@ -772,28 +710,6 @@ class SemanticGovernanceService:
             "edge_map": edge_map,
         }
 
-    @staticmethod
-    def _pair_key(left: dict[str, Any], right: dict[str, Any]) -> str:
-        left_id, right_id = sorted((int(left["id"]), int(right["id"])))
-        return content_hash(
-            {
-                "algorithm_version": ALGORITHM_VERSION,
-                "left_card_id": left_id,
-                "right_card_id": right_id,
-                "left_fingerprint": (
-                    left["semantic_fingerprint"]
-                    if int(left["id"]) == left_id
-                    else right["semantic_fingerprint"]
-                ),
-                "right_fingerprint": (
-                    right["semantic_fingerprint"]
-                    if int(right["id"]) == right_id
-                    else left["semantic_fingerprint"]
-                ),
-                "procedure_group": procedure_group(left),
-            }
-        )
-
     def scan(self, *, actor: str = "semantic-governance-worker") -> dict[str, Any]:
         if not self.enabled:
             raise SemanticGovernanceError(
@@ -846,8 +762,6 @@ class SemanticGovernanceService:
                 for right in cards[left_index + 1 :]:
                     if self._same_case(left, right):
                         same_case_skipped += 1
-                        continue
-                    if self._same_lineage(left, right):
                         continue
                     pair_ids = tuple(sorted((int(left["id"]), int(right["id"]))))
                     if pair_ids in excluded_pairs:

@@ -122,6 +122,7 @@ RealChangeRequest
 - `review_status`、`dedup_status`、`content_quality`、`publish_status`、`retrieval_enabled`、`planning_rag_enabled` 是独立维度。
 - `APPROVED` 本身不代表能检索；普通可信检索还要求已发布、允许检索、证据未漂移并通过语义相关性门禁。
 - 相似治理同时以 `case_id` 和 `procedure_group` 为硬边界：同案例卡不得进入合并队列；不同 group 无论文本或 fingerprint 多相似都不得 MERGE，只能建立 `CROSS_PHASE_SIMILAR`、复用或业务关系。
+- JSON Pointer 是案例内定位，不能跨案例充当来源身份；不同案例的相同步骤路径必须正常参与相似扫描。
 - 自动扫描只提出跨案例 complete-link 知识簇，不自动合并。一个簇中每个案例最多一张卡，任意两成员都必须满足阈值，避免传递相似过度扩簇。
 - 人工可选择 `FULL_EQUIVALENT` 或 `SHARED_CORE`。前者产生 `MERGED_INTO`；后者把来源卡保留为 `CASE_EVIDENCE + INSTANCE_OF`。两种方式都使来源成员退出普通检索；拒绝与成员 card/case/fingerprint 组合绑定。
 - 三成员以上的待审核/暂缓簇可在接受前逐张移除成员。原簇保留为 `SUPERSEDED`，人工排除按算法、procedure group 与两端 card/case/fingerprint 绑定，剩余成员原子生成新的待审核簇；任何绑定 identity 变化后重新评估。
@@ -140,6 +141,7 @@ RealChangeRequest
 - 知识图谱是 SQLite cards/cases/objects/sources/relations 的投影视图，不是独立图数据库。当前布局策略为 `type_centroid_local_force_v1`，颜色和空间簇共同表达节点类型/phase，显式关系边仍参与局部力布局。
 - 真实草案由模型只生成独立 `GeneratedChangeDraft`，程序负责 SchemaProfile 驱动的真实 JSON 装配、ExecutionResult 清空、任务双视图和全部硬门禁。结构化上下文对象（当前包括 `change_scene`）只使用 Profile `sample` 的键/类型，并从 `scenario_reference` 或兼容的 `parameters.change_scene` 取实例值；不得把 Profile 的历史样例值复制进新草案。
 - ProcedureStep 的 `result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 保留真实 Schema 的键和类型，但不属于模型所有字段。新建 Profile 固定为 `empty`；已有活动 Profile 在生成、编辑和展示时应用同一有效策略；最终硬门禁逐步骤检查，防止草案虚构人工核验、人员或时间。
+- 草案 revision 内容与最终 `READY_FOR_REVIEW` / `BLOCKED` 状态原子提交，不再单独持久化瞬时 `DRAFT` 状态。
 - SchemaProfile 的 `type=null` 表示字段必须存在且值为 JSON `null`；该值是完整、合法的结构结果，不是缺失。非 null 字段为空和 nullable 字段缺席仍按缺失处理。真实草案以 `request` 为本次事实源，参考卡只作模板/证据；具体新参数必须进入 `request.parameters`，历史 `instance_parameters` 不得替代本次输入。
 - 可选 MindMemOS 只作语义后备。同步内容有白名单，召回必须映射回本地 card 并重新验证；外部失败退回本地检索。
 

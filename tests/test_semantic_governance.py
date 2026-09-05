@@ -46,6 +46,13 @@ class SemanticGovernanceTests(unittest.TestCase):
         fingerprint_seed: str,
         case_id: str | None = None,
     ) -> int:
+        procedure_key = {
+            "PRECHECK": "check_before_change",
+            "IMPLEMENTATION": "change_implement",
+            "VALIDATION": "change_verified",
+            "ROLLBACK": "change_rollback",
+        }[phase]
+        source_pointer = f"/data/sop_change_step/{procedure_key}/0"
         summary = f"{title}：{operation}"
         content = f"标题：{title}\n摘要：{summary}\n通用化操作：{operation}"
         checksum = hashlib.sha256(
@@ -100,7 +107,7 @@ class SemanticGovernanceTests(unittest.TestCase):
                     "impact_analysis": "无业务影响",
                     "applicable_phases": [phase],
                     "procedure_group": phase,
-                    "source_procedure_pointer": f"/synthetic/{source_name}/{phase}",
+                    "source_procedure_pointer": source_pointer,
                 },
             },
         )
@@ -116,8 +123,8 @@ class SemanticGovernanceTests(unittest.TestCase):
             case_id=case_id,
             extraction_strategy="synthetic",
             unit_role="PROCEDURE_STEP",
-            unit_pointer=f"/synthetic/{source_name}/{phase}",
-            source_pointers=[f"/synthetic/{source_name}/{phase}"],
+            unit_pointer=source_pointer,
+            source_pointers=[source_pointer],
             source_order=0,
         )
         return card_id
@@ -146,6 +153,12 @@ class SemanticGovernanceTests(unittest.TestCase):
             service = self.make_service(Path(directory))
             left_id, right_id = self.prepare_pair(service)
 
+            # A JSON Pointer is local to its case, not a global step identity.
+            left, right = service.store.list_semantic_governance_cards()
+            self.assertNotEqual(left["case_id"], right["case_id"])
+            self.assertEqual(
+                left["source_procedure_pointer"], right["source_procedure_pointer"]
+            )
             first = service.semantic_governance.scan(actor="test-scanner")
             second = service.semantic_governance.scan(actor="test-scanner")
             queue = service.semantic_governance.list_proposals()
