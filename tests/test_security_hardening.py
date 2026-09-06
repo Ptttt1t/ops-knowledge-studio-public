@@ -18,7 +18,6 @@ import zipfile
 from harness.api_client import APIError, DeepSeekClient
 from harness.config import ConfigurationError, Settings
 from harness.trace import TraceLogger
-from knowledge_platform.change_web import ChangeDemoWebManager, ChangeSessionLimitError
 from knowledge_platform.documents import DocumentError, DocumentLimits, read_document
 from knowledge_platform.security import (
     SlidingWindowLimiter,
@@ -118,38 +117,6 @@ class EmptyClient:
 
 
 class SecurityHardeningTests(unittest.TestCase):
-    def test_change_snapshot_retries_ready_ticket_seen_with_waiting_run(self):
-        class FakeChangeStore:
-            @staticmethod
-            def get_ticket(_ticket_id):
-                return {"ticket_id": "CHG-TEST"}
-
-        class FakeService:
-            TICKET_ID = "CHG-TEST"
-            change_store = FakeChangeStore()
-
-            def __init__(self):
-                self.reads = 0
-
-            def ticket_package(self, _ticket_id):
-                self.reads += 1
-                status = "READY_FOR_APPROVAL" if self.reads == 1 else "WAITING_APPROVAL"
-                return {"ticket": {"status": status}}
-
-        class FakeSession:
-            service = FakeService()
-            generate_run_id = "generate"
-            execute_run_id = "execute"
-
-        manager = object.__new__(ChangeDemoWebManager)
-        manager._run_detail = lambda _session, run_id: {
-            "status": "SUCCEEDED" if run_id == "generate" else "WAITING_APPROVAL"
-        }
-        package, _generate, execute = manager._consistent_snapshot(FakeSession())
-        self.assertEqual(execute["status"], "WAITING_APPROVAL")
-        self.assertEqual(package["ticket"]["status"], "WAITING_APPROVAL")
-        self.assertEqual(FakeSession.service.reads, 2)
-
     def test_trace_redacts_queries_rotates_and_hash_chains_records(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -499,33 +466,6 @@ class SecurityHardeningTests(unittest.TestCase):
                     method="GET",
                     client_key="127.0.0.1",
                 )
-
-    def test_change_session_limit_and_active_ttl_cleanup(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            settings = make_settings(
-                root,
-                api_key="YOUR_DEEPSEEK_API_KEY_HERE",
-                change_max_active_sessions=1,
-                change_max_retained_sessions=2,
-                change_active_ttl_seconds=1,
-            )
-            service = KnowledgeService(settings, client=EmptyClient())
-            manager = ChangeDemoWebManager(service)
-            try:
-                created = manager.create(requested_by="shared-operator")
-                session_id = str(created["session_id"])
-                with self.assertRaises(ChangeSessionLimitError):
-                    manager.create(requested_by="shared-operator")
-                session = manager._sessions[session_id]
-                workspace = session.service.workspace
-                session.created_at = time.time() - 5
-                manager.cleanup()
-                self.assertFalse(workspace.exists())
-                self.assertIsNone(manager.latest())
-            finally:
-                manager.close()
-
 
 if __name__ == "__main__":
     unittest.main()

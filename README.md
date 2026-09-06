@@ -2,17 +2,15 @@
 
 [![CI](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml/badge.svg)](https://github.com/Ptttt1t/ops-knowledge-studio-public/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10--3.13-1f6f50)
-![Version](https://img.shields.io/badge/version-1.6.4-b88924)
+![Version](https://img.shields.io/badge/version-1.7.0-b88924)
 ![Mode](https://img.shields.io/badge/default-Demo%20Mode-e9dcc5)
 
 一个面向运维场景的本地知识治理与可信变更工作台。它把 SOP、ChangeOrder、复盘和历史方案加工为可审核、可追溯、可检索的知识资产，再用这些已批准知识辅助生成变更草案和安全建议。
 
-它不是“把文档丢进向量库后直接问模型”，而是把证据定位、知识建模、人工审核、可信检索、变更审批、模拟执行、结果反馈和相似知识合并放进同一个受治理闭环。
+工作台将证据定位、知识建模、人工审核、可信检索、相似知识治理和草案审核连成一条可追溯的工作流程。
 
 > [!IMPORTANT]
 > 仓库中的工单号、服务名、资源标识、网络地址、人员、指标和执行结果全部是合成演示数据。默认版本不会连接真实云账号、CMDB、监控、工单或执行系统，也不接受真实云凭据。
-
-![Ops Knowledge Studio 平台概览](docs/images/platform-overview.png)
 
 ## 为什么需要它
 
@@ -23,7 +21,7 @@
 - 历史执行结果是否被错误地当成当前规划依据？
 - 具体设备 ID、IP、阈值和版本来自用户输入，还是模型猜测？
 - 两张表述不同的检查卡是否其实是一条可复用知识？
-- 变更失败后能否回退，审批是否绑定了参数和环境快照？
+- 草案是否保留回退指导，是否误用了历史人工核验结果？
 - 代码升级后重建同一案例，旧卡、旧索引和旧合并关系是否真的失效？
 
 Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型、状态流、硬门禁和人工决策点。
@@ -40,14 +38,13 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 | 相似知识治理 | 同案例隔离、跨案例 complete-link 知识簇、人工完整合并或共享核心 | 跨阶段只建关系；同案例不进入合并队列；不调用模型 |
 | 知识关系图 | 案例、卡片、对象、来源、版本、验证、回退、相似和合并关系 | 当前是 SQLite 关系投影与可视化，不是独立图数据库 |
 | 可信问答 | 本地混合检索、字段级引用、可选只读 Agent | 无强相关已审核证据时拒绝输出“可信方案” |
-| 合成变更 Demo | 风险评估、计划生成、人工审批、灰度模拟、失败回退、反馈 | 只修改隔离模拟器，不操作真实基础设施 |
 | 真实 ChangeOrder BETA | 结构化需求、完整案例推荐、草案生成、留版、审核、JSON 导出、盲测 | 默认关闭；只生成草案，不注册真实执行工具 |
 | Harness Runtime | SQLite Run、步骤、事件、检查点、幂等、取消、恢复、工具审批 | 参数、预算或审批上下文漂移会使旧授权失效 |
 | MindMemOS | 可选的跨表述语义后备与长期记忆同步 | 默认关闭；内容外发需第二个显式开关；结果仍回到本地复核 |
 
 ## 产品界面
 
-以下界面截图均由当前代码使用公开合成数据生成，不包含真实 ChangeOrder 或内网信息。
+以下为历史版本的合成数据功能截图；1.7.0 已统一更新导航与视觉样式，以本地工作台为准。截图不包含真实 ChangeOrder 或内网信息。
 
 ### 1. ChangeOrder 以案例包为整体治理
 
@@ -83,15 +80,11 @@ Ops Knowledge Studio 的回答是：把这些问题变成明确的数据模型�
 
 它只生成和审核 JSON 草案，不执行变更；所有具体值必须来自结构化表单参数，缺失值以占位符暴露并阻断审核。
 
-### 5. 合成变更闭环仍可独立体验
+### 5. 四份结构样例
 
-仓库内置十个合成云网络案例，覆盖简单切换和十几步分波次变更。它们用于验证审批、快照、灰度、失败注入和自动回退，不依赖真实云环境。
+知识采集页提供容量调整、配置更新、证书轮换、阈值调整四份合成 JSON，支持预览、下载和标准导入。四阶段和步骤 20 个字段名使用已确认信息；Action/整单结果的字段及部分类型暂拟，不能作为真实接口契约。导入后的案例包仍需人工审核。
 
-| 方案与拓扑 | 执行结果与审计 |
-| --- | --- |
-| ![合成变更方案](docs/images/change-case-library.png) | ![合成执行结果](docs/images/change-execution-result.png) |
-
-![复杂变更计划](docs/images/complex-change-plan.png)
+样例文件与确认边界见 [合成结构样例](knowledge_platform/static/samples/README.md)。旧合成执行 Demo、模拟路由和十案例目录已移除；可信问答移动到知识库。
 
 ## 核心架构
 
@@ -161,7 +154,7 @@ ChangeOrder JSON
 
 每次构建会输出 `card_build_report.json`，包含结构覆盖、语义覆盖、Parent/Child 发布、noop section、重复复用、标题冲突、关系数量、逐卡 QA 和 `skip_reason`。示例见 [card_build_report.example.json](docs/card_build_report.example.json)。
 
-业务字段以经人工确认的真实结构为准，公开测试仍只使用合成值。早期仅模拟外层路径和字段数量的五份 JSON 案例及其专用生成、评估入口已退役；结构测试通过不代表覆盖真实页面全部信息。当前字段对照和缺口见 [变更单页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)。独立的 `change_management` 合成执行 Demo 不受本次清理影响，也不得被真实草案调用。
+业务字段以经人工确认的真实结构为准，公开测试仍只使用合成值。早期仅模拟外层路径和字段数量的五份 JSON 案例及其专用生成、评估入口已退役；结构测试通过不代表覆盖真实页面全部信息。当前字段对照和缺口见 [变更单页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)。旧合成执行 Demo 已退役；真实草案仍不注册或调用执行工具。
 
 ## 知识状态不是一个字段
 
@@ -226,7 +219,7 @@ APPROVED + INDEXED Procedure Cards
 - Python `3.10–3.13`
 - Git
 - Windows、Linux 或 macOS
-- DeepSeek 兼容 API：知识抽取、可信回答和真实草案生成需要；合成变更 Demo 和已有知识浏览不需要
+- DeepSeek 兼容 API：知识抽取、可信回答和真实草案生成需要；样例预览和已有知识浏览不需要
 - 可选 OCR：PaddleOCR、PaddlePaddle、PyMuPDF
 
 ### Windows + Conda
@@ -263,22 +256,9 @@ python run.py serve
 
 ## 建议的首次体验
 
-### 路线 A：不调用模型，体验合成变更闭环
+### 路线 A：浏览合成结构样例
 
-1. 打开“变更方案生成”。
-2. 选择任一内置案例。
-3. 生成变更单并检查风险、快照、步骤、验证和回退。
-4. 输入页面要求的精确确认串。
-5. 观察灰度执行；也可以选择故障场景验证自动回退。
-6. 在“变更结果”查看事件、前后状态哈希和反馈候选。
-
-CLI 也可直接运行：
-
-```powershell
-python run.py demo-change --case-id dc-route-failover --actor demo-operator
-```
-
-复杂案例列表和推荐输入见 [十个合成云网络案例](sample_data/change_case_documents/README.md)。
+打开“知识采集”，预览或下载四份合成 JSON。使用标准导入后，在审核队列查看整包证据和有序步骤；未批准的案例不会进入可信生成上下文。Action 与整单结果字段尚待内网确认。
 
 ### 路线 B：导入知识并走审核闭环
 
@@ -439,7 +419,6 @@ search                       本地治理检索
 query / agent-query          可信回答与只读 Agent
 change-schema-profile-*      管理真实生成 SchemaProfile
 memory-status / memory-sync  检查或同步 MindMemOS
-demo-change                  运行合成变更闭环
 run-*                        管理持久化 Harness Run
 ```
 
@@ -447,14 +426,12 @@ run-*                        管理持久化 Harness Run
 
 ```powershell
 python run.py --help
-python run.py demo-change --help
 python run.py run-submit --help
 ```
 
 ## 数据与目录
 
 ```text
-change_management/     合成案例、计划、审批、模拟执行、反馈
 harness/                DeepSeek 客户端、配置、Runtime、Tool Registry
 knowledge_platform/     文档解析、Adapter、Card Builder、治理、检索、Web
 sample_data/            合成 SOP 和独立 Demo 案例文档
@@ -472,7 +449,6 @@ artifacts/              运行、报告、审计与模拟执行工件，默认�
 - `data/runtime.db`：Run、步骤、事件、检查点和工具审批。
 - `data/change_drafts.db`：SchemaProfile、真实草案 revision 和盲测报告。
 - `artifacts/change_order_card_reports/`：逐案例 `card_build_report.json`。
-- `artifacts/change_demos/`：合成变更计划、快照、执行与反馈工件。
 
 ## 测试与验证
 
@@ -537,7 +513,6 @@ python run.py generate-access-token
 - [变更单页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)
 - [相似知识人工合并治理](docs/semantic-governance.md)
 - [真实 ChangeOrder 草案生成与能力盲测](docs/real-change-generation.md)
-- [合成变更 Demo](docs/change-demo.md)
 - [MindMemOS 长期记忆实验接入](docs/mindmemos-integration.md)
 - [第一阶段安全加固](docs/first-stage-hardening.md)
 - [部署指南](docs/deployment.md)

@@ -8,7 +8,6 @@ import tempfile
 import time
 import unittest
 
-from change_management.cases import seed_case_catalog_knowledge
 from harness.config import Settings
 from knowledge_platform.service import KnowledgeService
 from knowledge_platform.store import KnowledgeStore
@@ -367,17 +366,23 @@ class LongTermMemoryTests(unittest.TestCase):
             service = KnowledgeService(settings, client=FakeDeepSeekClient())
             client = PerCardClient()
             service.memory.client = client
-            seed_case_catalog_knowledge(service.store)
+            for index in range(5):
+                card_id = service.ingest_text(
+                    source_name=f"合成同步测试 {index}",
+                    source_ref=f"synthetic://memory-batch/{index}",
+                    content=SOURCE_TEXT + f"\n合成分片 {index}",
+                )["card_ids"][0]
+                service.store.review_card(card_id, action="APPROVE", reviewer="test", comment="test")
 
             remaining = []
-            for _ in range(5):
+            for _ in range(3):
                 result = service.sync_long_term_memory()
                 remaining.append(result["remaining"])
 
-            self.assertEqual(remaining, [8, 6, 4, 2, 0])
-            self.assertEqual(len(client.add_calls), 10)
+            self.assertEqual(remaining, [3, 1, 0])
+            self.assertEqual(len(client.add_calls), 5)
             self.assertEqual(
-                service.store.memory_sync_stats(service.memory.BACKEND)["cards"], 10
+                service.store.memory_sync_stats(service.memory.BACKEND)["cards"], 5
             )
 
     def test_changed_and_unapproved_cards_retire_remote_memories(self):

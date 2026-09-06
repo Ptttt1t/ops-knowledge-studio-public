@@ -193,10 +193,6 @@ class Settings:
     max_image_pixels: int = 25_000_000
     document_parse_timeout_seconds: int = 120
     model_max_response_bytes: int = 2 * 1024 * 1024
-    change_max_active_sessions: int = 3
-    change_max_retained_sessions: int = 20
-    change_active_ttl_seconds: int = 2 * 60 * 60
-    change_terminal_ttl_seconds: int = 24 * 60 * 60
     mindmemos_enabled: bool = False
     mindmemos_base_url: str = "http://127.0.0.1:8000"
     mindmemos_api_key: str = ""
@@ -304,12 +300,6 @@ class Settings:
                 "change_order_semantic_reuse_threshold": self.change_order_semantic_reuse_threshold,
                 "model_calls_per_ingest": self.max_model_calls_per_ingest,
                 "concurrent_ingestions": self.max_concurrent_ingestions,
-            },
-            "change_session_limits": {
-                "active": self.change_max_active_sessions,
-                "retained": self.change_max_retained_sessions,
-                "active_ttl_seconds": self.change_active_ttl_seconds,
-                "terminal_ttl_seconds": self.change_terminal_ttl_seconds,
             },
             "real_change_generation": {
                 "enabled": self.real_change_generation_enabled,
@@ -647,18 +637,6 @@ class Settings:
             model_max_response_bytes=_read_int(
                 values, "MODEL_MAX_RESPONSE_BYTES", 2 * 1024 * 1024
             ),
-            change_max_active_sessions=_read_int(
-                values, "CHANGE_MAX_ACTIVE_SESSIONS", 3
-            ),
-            change_max_retained_sessions=_read_int(
-                values, "CHANGE_MAX_RETAINED_SESSIONS", 20
-            ),
-            change_active_ttl_seconds=_read_int(
-                values, "CHANGE_ACTIVE_TTL_SECONDS", 2 * 60 * 60
-            ),
-            change_terminal_ttl_seconds=_read_int(
-                values, "CHANGE_TERMINAL_TTL_SECONDS", 24 * 60 * 60
-            ),
             mindmemos_enabled=_read_bool(values, "MINDMEMOS_ENABLED", False),
             mindmemos_base_url=mindmemos_base_url,
             mindmemos_api_key=_get(values, "MINDMEMOS_API_KEY", ""),
@@ -734,10 +712,6 @@ class Settings:
                 values, "SEMANTIC_SCAN_MAX_PROPOSALS", 100
             ),
         )
-        if settings.change_max_active_sessions > settings.change_max_retained_sessions:
-            raise ConfigurationError(
-                "CHANGE_MAX_ACTIVE_SESSIONS 不能大于 CHANGE_MAX_RETAINED_SESSIONS"
-            )
         if not 1 <= settings.model_max_concurrency <= 32:
             raise ConfigurationError(
                 "DEEPSEEK_MODEL_MAX_CONCURRENCY 必须在 1 到 32 之间"

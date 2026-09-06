@@ -1,0 +1,38 @@
+[
+  {
+    "id": "capacity-adjustment",
+    "title": "服务容量调整",
+    "category": "容量变更",
+    "summary": "将虚构服务 sample-api 的副本数从 2 调整为 3。",
+    "format": "JSON",
+    "phase_count": 4,
+    "schema_status": "部分字段待确认"
+  },
+  {
+    "id": "configuration-rollout",
+    "title": "配置分批更新",
+    "category": "配置变更",
+    "summary": "将虚构服务 sample-worker 的批次大小从 20 调整为 30。",
+    "format": "JSON",
+    "phase_count": 4,
+    "schema_status": "部分字段待确认"
+  },
+  {
+    "id": "certificate-renewal",
+    "title": "服务证书轮换",
+    "category": "证书变更",
+    "summary": "将虚构服务 sample-gateway 的证书标识由 sample-cert-a 更换为 sample-cert-b。",
+    "format": "JSON",
+    "phase_count": 4,
+    "schema_status": "部分字段待确认"
+  },
+  {
+    "id": "alert-threshold",
+    "title": "监控阈值调整",
+    "category": "监控变更",
+    "summary": "将虚构服务 sample-monitor 的队列告警阈值从 100 调整为 120。",
+    "format": "JSON",
+    "phase_count": 4,
+    "schema_status": "部分字段待确认"
+  }
+]

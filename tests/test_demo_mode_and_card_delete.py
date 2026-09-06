@@ -154,7 +154,7 @@ class DemoModeAndCardDeleteTests(unittest.TestCase):
 
                 with urlopen(f"{base}/", timeout=5) as response:
                     self.assertEqual(response.status, 200)
-                    self.assertIn("data-page=\"library\">知识库", response.read().decode("utf-8"))
+                    self.assertIn("data-page=\"library\"", response.read().decode("utf-8"))
                 with urlopen(f"{base}/app.js", timeout=5) as response:
                     app_script = response.read().decode("utf-8")
                 self.assertIn("window.deleteCard", app_script)

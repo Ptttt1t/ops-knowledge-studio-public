@@ -166,7 +166,7 @@ Status: Active
 
 ### Decision
 
-页面“安全退出”和命令行 `Ctrl+C` 都先进入 `DRAINING`：原子关闭新工作 admission，通知相似治理、主 Runtime 和合成 Demo Runtime 停止领取任务，等待在途 Web 操作、Worker 和所有已跟踪模型路由的活动请求归零，再关闭 HTTP Server。页面退出入口只在 `DEMO_MODE=true` 且 `DEMO_SAFE_SHUTDOWN_ENABLED=true` 时开放。
+页面“安全退出”和命令行 `Ctrl+C` 都先进入 `DRAINING`：原子关闭新工作 admission，通知相似治理、主 Runtime 停止领取任务，等待在途 Web 操作、Worker 和所有已跟踪模型路由的活动请求归零，再关闭 HTTP Server。页面退出入口只在 `DEMO_MODE=true` 且 `DEMO_SAFE_SHUTDOWN_ENABLED=true` 时开放。
 
 ### Reason
 
@@ -181,3 +181,10 @@ Status: Active
 ### Consequences
 
 退出可能需要等待长模型请求完成，期间页面会显示活动模型、在途操作和 Worker 数量，并拒绝新工作。该机制只能排空本进程能跟踪的请求，不能清理其他进程、其他主机或供应商已泄漏的计数；这种情况仍需网关管理员处理。
+
+## Decision: 退役合成执行 Demo，样例仅服务知识流程
+
+Date: 2026-09-06
+Status: Active
+
+用户当前目标是知识采集、治理和真实草案验证。旧云网络模拟执行及十个历史自拟案例不再提供有效结构证据，因此删除专用模块、配置、接口、CLI、测试和实验脚本，不保留隐藏入口。四份替代 JSON 随应用分发，使用已确认步骤字段；用户允许 Action/整单结果的未确认字段暂拟，须在样例及 UI 明示，待收到脱敏字段信息后集中替换。样例按现有标准采集流程进入待审核案例包，不自动批准或执行。平台 DEMO_MODE 管理能力、真实草案 BETA 和通用 Harness Runtime 保留。

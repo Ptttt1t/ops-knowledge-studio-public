@@ -11,7 +11,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 - 结构化 ChangeOrder 的确定性识别、语义知识建模、证据追溯和案例包治理；
 - 相似知识候选发现、人工确认合并及知识关系变化；
 - 基于 `APPROVED` 完整案例包生成可审核但不可执行的真实 ChangeOrder 草案；
-- 用隔离的合成云网络 Demo 验证计划、审批、模拟执行、验证、回退和反馈。
+- 用四份合成 ChangeOrder 样例验证知识采集与整包审核，未确认字段明确暂拟。
 
 产品形态是一个 Python 单机 Web/CLI Demo。HTTP 服务、Harness Worker 和 SQLite 可运行在同一进程或同一主机，无 Redis、Docker 或外部消息队列依赖。默认配置是本机或隔离内网 Demo，不是生产变更系统。
 
@@ -21,7 +21,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 
 | 路径 | 职责 |
 | --- | --- |
-| `run.py`, `knowledge_platform/cli.py` | CLI 入口、服务启动、导入、审核、查询、SchemaProfile 和合成变更命令。 |
+| `run.py`, `knowledge_platform/cli.py` | CLI 入口、服务启动、导入、审核、查询、SchemaProfile 管理。 |
 | `harness/` | 配置、DeepSeek-compatible 客户端、持久化 Run Runtime、预算、事件、检查点和工具审批。 |
 | `knowledge_platform/documents.py` | 文本、PDF、可选 OCR 和安全文档解析。 |
 | `knowledge_platform/change_order_adapter.py` | `change_order_shape_v2` 结构指纹、JSON Pointer 证据和任务双视图 reconciliation。 |
@@ -33,7 +33,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 | `knowledge_platform/change_drafts.py` | SchemaProfile、案例推荐、真实草案 revision、硬门禁、审核、导出和留一盲测。 |
 | `knowledge_platform/graph_layout.py`, `static/` | 关系图类型簇提示和 Web UI；浏览器执行 type-centroid + local force 的 3D 布局。 |
 | `knowledge_platform/long_term_memory.py` | 可选 MindMemOS 映射、白名单同步、回读后本地重新验证和降级。 |
-| `change_management/` | 完全合成的变更案例、票据、审批、隔离模拟器、验证/回退和反馈闭环。 |
+| `knowledge_platform/static/samples/` | 四份合成结构 JSON、目录及字段确认边界；随包发布。 |
 | `tests/`, `sample_data/` | 单元/集成回归和虚构的同结构 fixture；不得加入真实内网样本。 |
 | `docs/` | 部署、安全、ChangeOrder、语义治理、真实草案和共享 Codex 上下文。 |
 
@@ -78,7 +78,7 @@ RealChangeRequest
 → approved JSON + provenance report export
 ```
 
-合成执行 Demo 使用独立 `change_management` 数据库和模拟器，不会被真实草案功能调用。
+合成执行 Demo 已退役，专用模块、CLI/API、十案例种子和模拟执行页面均已删除。可信问答保留在知识库。四份替代样例采用已确认四阶段和 20 个步骤字段名，Action/整单结果及部分类型暂拟，不代表真实接口；样例不自动批准。
 
 ## Important Constraints
 

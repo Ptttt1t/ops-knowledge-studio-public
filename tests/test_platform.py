@@ -894,12 +894,38 @@ class PlatformTests(unittest.TestCase):
                     importlib.util.find_spec("pypdf") is not None,
                 )
                 self.assertIn("Ops Knowledge", html)
-                self.assertIn("知识审核队列", html)
-                self.assertIn("变更方案生成", html)
-                self.assertIn("变更结果", html)
-                self.assertIn("change-case-catalog", html)
-                self.assertIn("从知识库选择一个变更实验", html)
-                self.assertNotIn('data-page="change"', html)
+                self.assertIn('data-page="review"', html)
+                self.assertIn('data-page="real-change"', html)
+                self.assertIn('id="sample-cases"', html)
+                self.assertIn('id="query-form"', html)
+                self.assertNotIn('data-page="query"', html)
+                self.assertNotIn('data-page="results"', html)
+                self.assertNotIn("change_demo_workers", health["shutdown"])
+                self.assertNotIn("change_session_limits", health["config"])
+                self.assertEqual(service.store.stats()["cards"], 0)
+                for path in ("/api/change-cases", "/api/change-demos/latest", "/api/change-demos/old"):
+                    with self.assertRaises(HTTPError) as removed:
+                        http_urlopen(f"http://127.0.0.1:{port}{path}", timeout=5)
+                    self.assertEqual(removed.exception.code, 404)
+                for path in ("/api/change-demos", "/api/change-demos/old/execute", "/api/change-demos/old/decision", "/api/change-demos/old/publish-feedback"):
+                    request = Request(f"http://127.0.0.1:{port}{path}", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+                    with self.assertRaises(HTTPError) as removed:
+                        http_urlopen(request, timeout=5)
+                    self.assertEqual(removed.exception.code, 404)
+                with http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases", timeout=5) as response:
+                    samples = json.load(response)["cases"]
+                self.assertEqual(len(samples), 4)
+                for sample in samples:
+                    with http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases/{sample['id']}", timeout=5) as response:
+                        content = json.load(response)["content"]
+                    for phase in ("check_before_change", "change_implement", "change_verified", "change_rollback"):
+                        self.assertIn(phase, json.loads(content)["data"]["sop_change_step"])
+                    self.assertIn("SYNTHETIC_PROVISIONAL_SCHEMA", content)
+                    self.assertIn("result_confirm_notes", content)
+                for sample_id in ("unknown", "../app.js", "%2e%2e%2fapp.js"):
+                    with self.assertRaises(HTTPError) as rejected:
+                        http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases/{sample_id}", timeout=5)
+                    self.assertEqual(rejected.exception.code, 404)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -1159,161 +1185,6 @@ class PlatformTests(unittest.TestCase):
             )["card_ids"][0]
             with self.assertRaises(StoreError):
                 service.review(card_id, action="approve", reviewer="tester")
-
-
-    def test_integrated_change_center_requires_confirmation_and_publishes_feedback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            service = KnowledgeService(
-                make_settings(root, configured=False), client=FakeDeepSeekClient()
-            )
-            server = create_server(service, host="127.0.0.1", port=0)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            base = f"http://127.0.0.1:{server.server_address[1]}"
-
-            def post(path: str, payload: dict[str, object]) -> dict[str, object]:
-                request = Request(
-                    f"{base}{path}",
-                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with http_urlopen(request, timeout=10) as response:
-                    return json.loads(response.read().decode("utf-8"))
-
-            def get_session(session_id: str) -> dict[str, object]:
-                with http_urlopen(
-                    f"{base}/api/change-demos/{session_id}", timeout=10
-                ) as response:
-                    return json.loads(response.read().decode("utf-8"))
-
-            def wait_for_session(session_id: str, predicate, *, timeout: float = 10.0):
-                deadline = time.monotonic() + timeout
-                current = get_session(session_id)
-                while not predicate(current) and time.monotonic() < deadline:
-                    threading.Event().wait(0.02)
-                    current = get_session(session_id)
-                return current
-
-            try:
-                with http_urlopen(f"{base}/api/change-cases", timeout=10) as response:
-                    catalog = json.loads(response.read().decode("utf-8"))["cases"]
-                self.assertEqual(len(catalog), 10)
-                self.assertTrue(
-                    all(item["knowledge_status"] == "APPROVED" for item in catalog)
-                )
-                complex_case = next(
-                    item
-                    for item in catalog
-                    if item["case_id"] == "east-west-firewall-service-chain"
-                )
-                self.assertEqual(complex_case["execution_step_count"], 14)
-                self.assertEqual(len(complex_case["failure_injection_points"]), 14)
-                created = post(
-                    "/api/change-demos",
-                    {
-                        "requested_by": "web-tester",
-                        "use_model": False,
-                        "case_id": "nat-egress-bluegreen",
-                    },
-                )
-                self.assertEqual(created["case"]["ticket_id"], "CHG-DEMO-NAT-002")
-                session_id = str(created["session_id"])
-                generated = wait_for_session(
-                    session_id,
-                    lambda item: (
-                        ((item.get("package") or {}).get("ticket") or {}).get("status")
-                        == "READY_FOR_APPROVAL"
-                    ),
-                )
-                self.assertEqual(
-                    generated["package"]["ticket"]["status"],
-                    "READY_FOR_APPROVAL",
-                )
-                before_hash = generated["network"]["state_hash"]
-
-                post(
-                    f"/api/change-demos/{session_id}/execute",
-                    {"actor": "web-tester", "inject_failure": ""},
-                )
-                waiting = wait_for_session(
-                    session_id,
-                    lambda item: (
-                        ((item.get("runs") or {}).get("execute") or {}).get("status")
-                        == "WAITING_APPROVAL"
-                    ),
-                )
-                self.assertEqual(waiting["package"]["ticket"]["status"], "WAITING_APPROVAL")
-                self.assertEqual(waiting["network"]["state_hash"], before_hash)
-
-                with self.assertRaises(HTTPError) as invalid_confirmation:
-                    post(
-                        f"/api/change-demos/{session_id}/decision",
-                        {
-                            "decision": "APPROVED",
-                            "actor": "web-tester",
-                            "comment": "wrong confirmation must fail",
-                            "confirmation": "APPROVE",
-                        },
-                    )
-                self.assertEqual(invalid_confirmation.exception.code, 400)
-                self.assertEqual(get_session(session_id)["network"]["state_hash"], before_hash)
-
-                post(
-                    f"/api/change-demos/{session_id}/decision",
-                    {
-                        "decision": "APPROVED",
-                        "actor": "web-tester",
-                        "comment": "approved from integrated UI test",
-                        "confirmation": "APPROVE CHG-DEMO-NAT-002",
-                    },
-                )
-                completed = wait_for_session(
-                    session_id,
-                    lambda item: (
-                        (
-                            ((item.get("package") or {}).get("ticket") or {}).get("status")
-                            in {"SUCCEEDED", "ROLLED_BACK"}
-                            and (item.get("package") or {}).get("feedback") is not None
-                        )
-                        or ((item.get("package") or {}).get("ticket") or {}).get("status")
-                        == "FAILED"
-                    ),
-                )
-                self.assertEqual(completed["package"]["ticket"]["status"], "SUCCEEDED")
-                self.assertIsNotNone(completed["package"]["feedback"])
-                routes = completed["network"]["state"]["route_tables"]
-                for table_id in ("rtb-prod-web-a", "rtb-prod-web-b"):
-                    target = next(
-                        route
-                        for route in routes[table_id]["routes"]
-                        if route["destination"] == "0.0.0.0/0"
-                    )
-                    self.assertEqual(target["next_hop"], "nat-green")
-
-                published = post(
-                    f"/api/change-demos/{session_id}/publish-feedback",
-                    {"actor": "web-tester"},
-                )
-                main_card_id = published["publication"]["knowledge_card_id"]
-                self.assertEqual(published["publication"]["status"], "PENDING_REVIEW")
-                self.assertEqual(
-                    service.store.get_card(main_card_id)["status"],
-                    CardStatus.PENDING_REVIEW.value,
-                )
-                duplicate = post(
-                    f"/api/change-demos/{session_id}/publish-feedback",
-                    {"actor": "web-tester"},
-                )
-                self.assertFalse(duplicate["publication"]["created"])
-                self.assertEqual(
-                    duplicate["publication"]["knowledge_card_id"], main_card_id
-                )
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
 
 
 if __name__ == "__main__":

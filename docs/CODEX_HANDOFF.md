@@ -2,37 +2,25 @@
 
 ## Current Objective
 
-按第一性原理审视近期相似治理和真实草案实现，优先删除已确认无用或错误的逻辑。已修复跨案例相同步骤路径被误判为同源而漏召回的问题，保留证据、人工审核、case/phase 隔离和草案不可执行边界。
+退役“变更方案生成 DEMO”及旧十个合成云网络案例，以四份按已确认结构编排的合成 JSON 替代，并统一工作台 UI。真实草案 BETA 保留生成、审核和导出边界。
 
 ## Completed
 
-- 删除扫描器 `_same_lineage()` 及其排除分支：裸 JSON Pointer 只在案例内定位，不能把不同案例的相同路径当作同一来源。案例隔离继续由 `_same_case()` 和 Store 事务执行。
-- 删除无调用的旧 pair 候选构造 `proposed_canonical_merge()` 和 `_pair_key()`。历史 pair 的读取、审核及数据库记录仍保留兼容。
-- 删除 `update_draft()` 的重复 Profile 转换；共享 `_assemble()` 仍强制应用步骤非模型字段的 `empty` 策略，生成 Prompt 和 Profile 展示也继续使用有效策略。
-- 全量测试暴露草案保存的两次事务提交竞态。删除无业务用途的瞬时 `DRAFT` 写入和第二次更新，revision 内容与最终 `READY_FOR_REVIEW` / `BLOCKED` 状态改为同一事务提交。
-- 语义治理合成 fixture 改用标准 ProcedureStep JSON Pointer，不再把案例名拼进路径；加强现有扫描测试，明确覆盖不同 case、相同 pointer 的候选生成和幂等重扫。
-- 生产代码净删 94 行，未增加依赖、配置、数据迁移、门禁或自动化。版本更新为 1.6.4。
-- 上轮 1.6.3 的步骤字段约束继续生效：`result_confirm`、`result_confirm_notes`、`update_user`、`update_time` 在草案中保持类型安全空值；审核/导出仍复核当前硬门禁。
-
-## Files Changed
-
-- `knowledge_platform/semantic_governance.py`
-- `knowledge_platform/change_drafts.py`
-- `tests/test_semantic_governance.py`
-- `tests/test_real_change_drafts.py`
-- `README.md`, `pyproject.toml`
-- `docs/semantic-governance.md`
-- `docs/real-change-generation.md`
-- `docs/CODEX_CONTEXT.md`, `docs/DECISIONS.md`, `docs/CODEX_HANDOFF.md`
+- 删除 change_management 整个包、change_web 管理器、Demo CLI/API、会话额度配置、模拟执行/结果页面、旧十份 Markdown、专用测试与旧案例驱动的实验/导出脚本。旧接口返回 404，启动不再自动预置已批准案例；通用 Runtime、知识问答、长期记忆、安全退出等保留。
+- 新增 knowledge_platform/static/samples/ 下四份 JSON：容量调整、配置更新、证书轮换、监控阈值调整。外层四阶段路径及步骤 20 个字段名使用已确认脱敏信息；Action 13 字段、整单结果 15 字段和部分类型由用户允许暂拟，样例、UI 和 README 都明确标注，不能作为真实接口契约。
+- 知识采集增加样例预览、JSON 下载、标准导入入口；可信问答移入知识库。统一导航分组、图标、首页入口、资产卡、表单、审核、草案、关系图、弹窗和窄屏布局，不加前端依赖或外部资源。
+- 修复生命周期图的内联 width 被 CSP 拦截后所有状态显示满条：使用原生 progress 的 value/max，零值正确显示为空。
+- 本机服务排空停止后，SQLite backup 备份旧库，精确移除旧 10 案例和 3 份 Demo 执行反馈；未发现其他来源文档。通过标准确定性采集路径导入四份新样例，0 次模型调用，产生 4 个案例包和 24 张 PENDING_REVIEW 卡，未自动批准。原 .env 未改变，当前未配置模型 API；BETA 未启用。新服务已启动于 http://127.0.0.1:8765/。
+- 此本地数据替换不是自动数据库迁移；其他部署已有历史数据不会被升级程序自动删除。先备份再按来源清理，禁止全库重置。
+- 版本 1.7.0。上下文、决策、README 与字段对照同步更新；旧功能截图明确标注历史版本，删除 Demo 专属截图。
 
 ## Validation
 
-- 修复前，用标准路径的合成 fixture 运行扫描回归：预期 1 个候选，实际 0；同案例排除测试通过。
-- 修复后，`D:\Anaconda\envs\zte\python.exe -m unittest tests.test_semantic_governance tests.test_real_change_drafts -v`：42 tests 全部通过。
-- 首次全量 181 tests 有 1 项 HTTP 草案测试失败，实际读到 `DRAFT`。新增独立连接观察每次提交的回归测试：加载修改前的 `save_revision` 时稳定复现 `DRAFT -> READY_FOR_REVIEW` 两次可见提交；删除中间写入后该测试与 HTTP 测试均通过。
-- 最终 `D:\Anaconda\envs\zte\python.exe -m unittest discover -s tests -t .`：182 tests 全部通过，98.933 秒，退出码 0。
-- `python -m compileall -q harness knowledge_platform tests scripts`、`node --check knowledge_platform/static/app.js`、`git diff --check` 已通过。
-- 验证仅使用合成 fixture 和测试临时数据库；未读取真实业务数据库，未调用外部模型或真实执行工具。
+- 完整测试：D:/Anaconda/envs/zte/python.exe -m unittest discover -s tests -t . -q，165 tests，40.215 秒，OK，退出码 0。数量下降来自删除已退役模块测试，增加样例端到端回归，保留长期记忆批次和通用安全测试。
+- 样例验证：四份均识别为 change_order_shape_v2，每份 Context 1 + Procedure 4 + Outcome 1；Action 引用保留、Outcome 排除规划生成、重复导入幂等、无模型调用；来源证据完整，全部待审核。
+- Web 验证：旧 GET/POST Demo 路由 404，样例读取与路径越界拒绝正常；浏览器实际检查桌面/窄屏首页、样例预览、审核四包、问答迁移、BETA 禁用状态和关系图（40 节点/72 边）；刷新后的控制台无 error，生命周期 value/max 正确。
+- node --check、compileall、git diff --check 通过。离线构建 wheel 成功，确认含四份 JSON、catalog、README，且无 change_management/change_web。
+- 无真实内网数据、API key、数据库、上传文件或本地工件进入提交；未调用外部模型或真实执行工具。
 
 ## Known Issues
 
@@ -42,17 +30,13 @@
 - `result_confirm` 的正常/异常枚举含义、步骤三个子页是否分别保存核验结果、处理记录来源和“4号提权方式”仍待内网人工确认。
 - 既有语义治理仍不支持单个新案例追加到已接受 canonical，也不支持一次把候选簇拆成多组；README 相似治理截图仍待更新。
 
-## Work In Progress
+## Next Step
 
-实现提交 `8e1bd1a` 的代码、全量测试、文档同步及完整 diff/敏感信息复核已完成。用户已明确授权推送 `main`；本次发布不包含上述后续复核发现的两个草案边界问题的修复。
-
-## Recommended Next Step
-
-后续开发优先修复应留空字段的缺失误报，以及已保存 revision 的 Profile 类型复核，并补充合成回归。内网由人工升级后重新执行相似知识扫描，确认跨案例、相同步骤路径的相似卡能形成待审核知识簇；无需重建案例或迁移数据库。候选数量可能增加，仍由人工审核。其余页面字段映射按脱敏结构证据逐项确认。
+等待用户确认 Action/整单结果字段名、类型、枚举及步骤子页归属，再替换四份暂拟 JSON。当前可在本地审核队列逐包查看和审核。既有草案边界问题见上，不在本次 UI/模块清理范围内。
 
 ## Last Updated
 
-- Date: 2026-09-05 (Asia/Shanghai)
-- Current branch: `main`
-- Package version: 1.6.4
-- Containing commit: use `git log -1 --oneline -- docs/CODEX_HANDOFF.md`; this file does not store its own commit SHA.
+- Date: 2026-09-06 (Asia/Shanghai)
+- Current branch: main
+- Package version: 1.7.0
+- Publication: local main contains the validated changes. Public github/main remains at 602cea252ff76a406d070cc68370c542827ad0ef. Automatic approval review rejected this push because the earlier authorization covered the preceding release; obtain explicit user approval for publishing this batch. No push occurred.

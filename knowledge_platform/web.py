@@ -17,10 +17,7 @@ from harness.api_client import APIError
 from harness.config import ConfigurationError, Settings
 from harness.run_store import RunStoreError
 from harness.runtime import HarnessRuntime, HarnessRuntimeError, RunQueueFull
-from change_management.service import DemoChangeError
-from change_management.simulator import SimulationError
 
-from .change_web import ChangeDemoWebManager, ChangeSessionLimitError
 from .change_drafts import ChangeDraftError
 from .documents import (
     DocumentError,
@@ -49,16 +46,6 @@ RUN_EVENTS_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/events$")
 RUN_CANCEL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/cancel$")
 RUN_RESUME_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/resume$")
 RUN_APPROVAL_PATTERN = re.compile(r"^/api/runs/([0-9a-f]{32})/approvals$")
-CHANGE_DEMO_PATTERN = re.compile(r"^/api/change-demos/([0-9A-Za-z_-]+)$")
-CHANGE_EXECUTE_PATTERN = re.compile(
-    r"^/api/change-demos/([0-9A-Za-z_-]+)/execute$"
-)
-CHANGE_DECISION_PATTERN = re.compile(
-    r"^/api/change-demos/([0-9A-Za-z_-]+)/decision$"
-)
-CHANGE_FEEDBACK_PATTERN = re.compile(
-    r"^/api/change-demos/([0-9A-Za-z_-]+)/publish-feedback$"
-)
 REAL_CHANGE_DRAFT_PATTERN = re.compile(r"^/api/change-drafts/([^/]+)$")
 REAL_CHANGE_DRAFT_REVIEW_PATTERN = re.compile(
     r"^/api/change-drafts/([^/]+)/review$"
@@ -91,7 +78,6 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self.service = service
         self.static_dir = static_dir
         self.runtime = runtime
-        self.change_demos = ChangeDemoWebManager(service)
         self.change_drafts = service.change_drafts
         self.semantic_governance = service.semantic_governance
         self.semantic_governance_worker = SemanticGovernanceWorker(
@@ -140,7 +126,6 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
             "active_work_requests": active_work,
             "active_model_requests": self._active_model_requests(model_activity),
             "runtime_workers": self.runtime.active_worker_count,
-            "change_demo_workers": self.change_demos.active_worker_count,
             "semantic_worker_running": self.semantic_governance_worker.running,
             "model_requests": model_activity,
         }
@@ -173,7 +158,6 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
     def _request_background_stops(self) -> None:
         self.semantic_governance_worker.request_stop()
         self.runtime.request_stop()
-        self.change_demos.request_stop()
 
     def _drain(self, *, stop_http_server: bool) -> None:
         print(f"[SAFE SHUTDOWN] requested actor={self._shutdown_actor}")
@@ -188,7 +172,6 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
                 status["active_work_requests"],
                 status["active_model_requests"],
                 status["runtime_workers"],
-                status["change_demo_workers"],
                 status["semantic_worker_running"],
             )
             if snapshot != previous:
@@ -196,11 +179,10 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
                     "[SAFE SHUTDOWN] draining "
                     f"work={snapshot[0]} model={snapshot[1]} "
                     f"runtime_workers={snapshot[2]} "
-                    f"change_demo_workers={snapshot[3]} "
-                    f"semantic_worker={str(snapshot[4]).lower()}"
+                    f"semantic_worker={str(snapshot[3]).lower()}"
                 )
                 previous = snapshot
-            if snapshot == (0, 0, 0, 0, False):
+            if snapshot == (0, 0, 0, False):
                 break
             with self._lifecycle:
                 self._lifecycle.wait(timeout=0.1)
@@ -250,7 +232,6 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
                 return
             self._closed = True
         self.semantic_governance_worker.stop()
-        self.change_demos.close()
         self.runtime.stop()
         super().server_close()
         with self._lifecycle:
@@ -425,8 +406,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             StoreError,
             RunStoreError,
             HarnessRuntimeError,
-            DemoChangeError,
-            SimulationError,
             SemanticGovernanceError,
             ValueError,
             json.JSONDecodeError,
@@ -436,7 +415,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             (
                 WebSecurityError,
                 KnowledgeRequestError,
-                ChangeSessionLimitError,
                 ChangeDraftError,
             ),
         ):
@@ -503,6 +481,28 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                         "shutdown": shutdown,
                     }
                 )
+                return
+            if path == "/api/sample-cases" or path.startswith("/api/sample-cases/"):
+                sample_dir = Path(__file__).parent / "static" / "samples"
+                catalog = json.loads(
+                    (sample_dir / "catalog.json").read_text(encoding="utf-8")
+                )
+                if path == "/api/sample-cases":
+                    self._send_json({"cases": catalog})
+                else:
+                    sample_id = path.removeprefix("/api/sample-cases/")
+                    sample = next(
+                        (item for item in catalog if item["id"] == sample_id), None
+                    )
+                    if sample is None:
+                        self._send_json({"error": "样例不存在"}, HTTPStatus.NOT_FOUND)
+                    else:
+                        self._send_json({
+                            **sample,
+                            "content": (sample_dir / f"{sample_id}.json").read_text(
+                                encoding="utf-8"
+                            ),
+                        })
                 return
             if path == "/api/health":
                 shutdown = self.server.shutdown_status()
@@ -575,16 +575,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     self._send_json(proposal)
-                return
-            if path == "/api/change-cases":
-                self._send_json({"cases": self.server.change_demos.cases()})
-                return
-            if path == "/api/change-demos/latest":
-                self._send_json({"session": self.server.change_demos.latest()})
-                return
-            change_match = CHANGE_DEMO_PATTERN.match(path)
-            if change_match:
-                self._send_json(self.server.change_demos.describe(change_match.group(1)))
                 return
             if path == "/api/change-schema-profile":
                 self._send_json(self.server.change_drafts.profile_status())
@@ -864,42 +854,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     },
                     HTTPStatus.ACCEPTED,
                 )
-                return
-            if path == "/api/change-demos":
-                result = self.server.change_demos.create(
-                    requested_by=principal,
-                    use_model=bool(payload.get("use_model", False)),
-                    case_id=str(payload.get("case_id") or "dc-route-failover"),
-                )
-                self._send_json(result, HTTPStatus.ACCEPTED)
-                return
-            execute_match = CHANGE_EXECUTE_PATTERN.match(path)
-            if execute_match:
-                result = self.server.change_demos.start_execution(
-                    execute_match.group(1),
-                    actor=principal,
-                    inject_failure=str(payload.get("inject_failure") or ""),
-                )
-                self._send_json(result, HTTPStatus.ACCEPTED)
-                return
-            decision_match = CHANGE_DECISION_PATTERN.match(path)
-            if decision_match:
-                result = self.server.change_demos.decide(
-                    decision_match.group(1),
-                    decision=str(payload.get("decision") or ""),
-                    actor=principal,
-                    comment=str(payload.get("comment") or ""),
-                    confirmation=str(payload.get("confirmation") or ""),
-                )
-                self._send_json(result, HTTPStatus.ACCEPTED)
-                return
-            feedback_match = CHANGE_FEEDBACK_PATTERN.match(path)
-            if feedback_match:
-                result = self.server.change_demos.publish_feedback(
-                    feedback_match.group(1),
-                    actor=principal,
-                )
-                self._send_json(result, HTTPStatus.CREATED)
                 return
             if path == "/api/runs":
                 task_type = str(payload.get("task_type") or "").strip()

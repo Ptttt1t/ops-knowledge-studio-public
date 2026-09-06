@@ -20,23 +20,25 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">K</div>
+        <div class="brand-mark">O<span>↗</span></div>
         <div>
           <strong>Ops Knowledge</strong>
           <span>可信运维知识工作台</span>
         </div>
       </div>
-      <nav>
-        <button class="nav-item active" data-page="dashboard">概览</button>
-        <button class="nav-item" data-page="query">变更方案生成 <span class="nav-demo">DEMO</span></button>
-        <button class="nav-item" data-page="real-change">真实变更生成 <span class="nav-beta">BETA</span></button>
-        <button class="nav-item" data-page="results">变更结果 <span id="result-count" class="nav-count">0</span></button>
-        <button class="nav-item" data-page="ingest">知识采集</button>
-        <button class="nav-item" data-page="review">知识审核队列 <span id="review-count" class="nav-count">0</span></button>
-        <button class="nav-item" data-page="semantic-governance">相似知识治理 <span id="semantic-proposal-count" class="nav-count">0</span></button>
-        <button class="nav-item" data-page="library">知识库</button>
-        <button class="nav-item" data-page="graph">知识关系图</button>
+      <nav aria-label="工作台导航">
+        <p class="nav-group">工作空间</p>
+<button class="nav-item active" data-page="dashboard" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">工作台概览</span></button>
+        <button class="nav-item" data-page="real-change" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H5v18h14V8zM14 3v6h6M8 14h8M8 17h5"/></svg><span class="nav-label">变更草案</span><span class="nav-beta">BETA</span></button>
+        <p class="nav-group">知识管理</p>
+        <button class="nav-item" data-page="ingest" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 7H3v14h18V7h-2"/></svg><span class="nav-label">知识采集</span></button>
+        <button class="nav-item" data-page="review" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H5v17h14V4h-4M9 2h6v5H9zM8 14l3 3 5-6"/></svg><span class="nav-label">审核队列</span><span id="review-count" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="library" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h5v17H4zM11 4h4v17h-4zM17 4l4 16M3 21h19"/></svg><span class="nav-label">知识库</span></button>
+        <p class="nav-group">知识治理</p>
+        <button class="nav-item" data-page="semantic-governance" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="19" r="3"/><path d="m6 9 4 7m8-7-4 7M8 6h8"/></svg><span class="nav-label">相似知识治理</span><span id="semantic-proposal-count" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="graph" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="4" r="2"/><circle cx="20" cy="5" r="2"/><circle cx="6" cy="21" r="2"/><circle cx="21" cy="20" r="2"/><path d="m6 6 4 4m4 0 4-4M11 15l-4 4m8-5 4 4"/></svg><span class="nav-label">知识关系图</span></button>
       </nav>
+      <div class="sidebar-note"><span class="sidebar-note-mark">✓</span><strong>让每份知识有据可循</strong><p>采集 · 审核 · 复用</p></div>
       <div class="sidebar-foot">
         <span id="api-dot" class="status-dot"></span>
         <div><strong id="api-status">检查配置中</strong><small id="model-name">DeepSeek</small></div>
@@ -47,8 +49,8 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <p class="eyebrow">KNOWLEDGE GOVERNANCE HARNESS</p>
-          <h1 id="page-title">知识能力概览</h1>
+          <p class="eyebrow">OPS KNOWLEDGE / WORKSPACE</p>
+          <h1 id="page-title">工作台概览</h1>
         </div>
         <div class="topbar-actions">
           <button id="refresh-button" class="button secondary">刷新数据</button>
@@ -67,6 +69,12 @@
       </div>
 
       <section id="page-dashboard" class="page active">
+        <article class="workspace-welcome">
+          <div><p class="eyebrow">FROM EVIDENCE TO KNOWLEDGE</p><h2>把经验沉淀为<br>可复用的运维知识。</h2><p>从来源证据出发，经人工审核，让每一次变更有据可依。</p>
+          <div class="welcome-actions"><button class="button primary" data-go-page="ingest">采集新知识 <span aria-hidden="true">↗</span></button><button class="button secondary" data-go-page="review">查看待审核</button></div></div>
+          <div class="welcome-flow" aria-label="知识工作流"><div><span>01</span><strong>采集</strong><small>保留来源</small></div><i aria-hidden="true">→</i><div><span>02</span><strong>审核</strong><small>人工确认</small></div><i aria-hidden="true">→</i><div><span>03</span><strong>复用</strong><small>可信知识</small></div></div>
+        </article>
+        <div class="section-caption"><h2>知识资产总览</h2><span>以当前知识库数据为准</span></div>
         <div class="metric-grid">
           <article class="metric"><span>来源文档</span><strong id="metric-documents">0</strong><small>已进入知识流水线</small></article>
           <article class="metric"><span>知识卡片</span><strong id="metric-cards">0</strong><small>结构化知识单元</small></article>
@@ -107,120 +115,11 @@
         </article>
       </section>
 
-      <section id="page-query" class="page">
-        <article class="change-hero">
-          <div>
-            <p class="eyebrow">TRUSTED CHANGE GENERATION</p>
-            <h2>可信变更方案生成</h2>
-            <p>在同一页面完成环境感知、已审核知识复用、风险决策、变更方案生成、硬校验与人工审批。</p>
-          </div>
-          <span class="synthetic-stamp">合成数据<br><small>不连接真实云</small></span>
-        </article>
-
-        <article class="panel case-catalog-panel">
-          <div class="panel-head">
-            <div><p class="eyebrow">SYNTHETIC CASE LIBRARY</p><h2>从知识库选择一个变更实验</h2></div>
-            <span id="change-case-count" class="tag APPROVED">正在加载…</span>
-          </div>
-          <p class="muted-copy">这些案例均为已人工批准的合成历史知识；选择后，平台会重新感知对应环境、检索证据并生成不可变计划。</p>
-          <div id="change-case-catalog" class="change-case-catalog" role="radiogroup" aria-label="合成变更案例"></div>
-        </article>
-
-        <article class="panel change-launcher">
-          <div><p class="eyebrow">NEW CHANGE PLAN</p><h2>生成一份变更方案</h2></div>
-          <div class="trusted-actor"><span>可信身份</span><strong>shared-operator</strong></div>
-          <label>验证场景
-            <select id="change-failure">
-              <option value="">正常闭环</option>
-            </select>
-          </label>
-          <label class="checkbox-label"><input id="change-use-model" type="checkbox"> 使用 DeepSeek 润色叙述</label>
-          <button id="change-generate" class="button primary">生成变更单</button>
-        </article>
-
-        <div id="change-stages" class="change-stages" aria-label="闭环阶段"></div>
-
-        <article id="change-empty" class="panel change-empty">
-          <span>01</span>
-          <div><h2>等待生成演示变更</h2><p>点击“生成变更单”后，平台会准备合成环境并自动完成审批前的全部硬校验。</p></div>
-        </article>
-
-        <div id="change-workspace" class="change-workspace" hidden>
-          <div class="metric-grid change-metrics">
-            <article class="metric"><span>变更状态</span><strong id="change-status">—</strong><small id="change-run-state">等待任务</small></article>
-            <article class="metric warning"><span>风险评分</span><strong id="change-risk">—</strong><small>高风险 · 计划生产变更</small></article>
-            <article class="metric accent"><span>前置校验</span><strong id="change-validation-score">—</strong><small>硬门禁全部通过才可审批</small></article>
-            <article class="metric"><span>执行结果</span><strong id="change-outcome">—</strong><small id="change-network-version">模拟网络未修改</small></article>
-          </div>
-
-          <div class="change-primary-grid">
-            <article class="panel topology-panel">
-              <div class="panel-head"><div><p class="eyebrow">LIVE TOPOLOGY</p><h2>模拟网络与有效下一跳</h2></div><span id="change-network-hash" class="hash-pill">—</span></div>
-              <div id="change-topology" class="network-topology"></div>
-            </article>
-            <article class="panel ticket-panel">
-              <div class="panel-head"><div><p class="eyebrow">CHANGE ORDER</p><h2 id="change-ticket-id">正在准备…</h2></div><span id="change-risk-badge" class="tag">—</span></div>
-              <h3 id="change-ticket-title">正在感知环境并生成方案</h3>
-              <p id="change-ticket-summary" class="muted-copy"></p>
-              <dl id="change-ticket-facts" class="ticket-facts"></dl>
-              <div id="change-plan" class="plan-list"></div>
-            </article>
-          </div>
-
-          <div class="two-column change-evidence-grid">
-            <article class="panel">
-              <div class="panel-head"><div><p class="eyebrow">APPROVED EVIDENCE</p><h2>复用的已审核知识</h2></div></div>
-              <div id="change-knowledge" class="evidence-list"></div>
-            </article>
-            <article class="panel">
-              <div class="panel-head"><div><p class="eyebrow">HARD GATES</p><h2>校验结果</h2></div><span id="change-validation-badge" class="tag">—</span></div>
-              <div id="change-validations" class="validation-list"></div>
-            </article>
-          </div>
-
-          <article id="change-approval-panel" class="panel approval-panel" hidden>
-            <div class="approval-copy">
-              <p class="eyebrow">HUMAN APPROVAL GATE</p>
-              <h2>人工确认后才会修改模拟路由</h2>
-              <p>审批绑定 ticket_id、revision、plan_hash 与 snapshot_version；参数变化后旧审批立即失效。</p>
-            </div>
-            <div class="trusted-actor"><span>审批身份</span><strong>shared-operator</strong></div>
-            <label>审批意见<input id="change-approval-comment" value="同意按已验证计划执行"></label>
-            <label class="confirmation-field">精确确认串<input id="change-confirmation" autocomplete="off" placeholder="APPROVE + 当前变更单号"></label>
-            <div class="approval-actions">
-              <button id="change-reject" class="button danger">拒绝变更</button>
-              <button id="change-approve" class="button primary">批准并执行</button>
-            </div>
-          </article>
-
-        </div>
-
-        <div class="query-layout change-query-helper">
-          <article class="panel query-panel">
-            <p class="eyebrow">KNOWLEDGE ASSIST</p>
-            <h2>基于已审核知识辅助研判</h2>
-            <p>可在生成变更单前补充询问 SOP、风险或回退要求；检索范围固定为 APPROVED。</p>
-            <form id="query-form">
-              <textarea id="query-question" rows="5" required placeholder="例如：生产 VPC 路由主备切换的前置条件和回退原则是什么？"></textarea>
-              <button class="button secondary" type="submit" data-mode="direct">检索可信知识</button>
-              <button class="button" type="submit" data-mode="agent">Agent 辅助研判</button>
-            </form>
-          </article>
-          <article class="panel answer-panel compact-answer-panel">
-            <div class="panel-head"><div><p class="eyebrow">EVIDENCE ANSWER</p><h2>研判结果</h2></div></div>
-            <div id="answer-content" class="answer-content empty">等待问题</div>
-            <div id="answer-agent-meta" class="hint"></div>
-            <div id="answer-memory-meta" class="hint"></div>
-            <div id="answer-sources" class="source-list"></div>
-          </article>
-        </div>
-      </section>
-
       <section id="page-real-change" class="page">
         <article class="real-change-warning" role="alert">
           <div>
-            <p class="eyebrow">INTRANET CAPABILITY PILOT</p>
-            <h2>未鉴权能力试验 · 只生成草案，不执行变更</h2>
+            <p class="eyebrow">CHANGE DRAFT WORKSPACE</p>
+            <h2>变更草案 · 生成、审核与导出</h2>
             <p id="real-change-warning-text">本页面只能部署在防火墙隔离的可信内网。审核人是自报身份，不能作为正式审计证据。</p>
           </div>
           <span id="real-change-feature-badge" class="tag REJECTED">检查开关中</span>
@@ -332,56 +231,12 @@
         </article>
       </section>
 
-      <section id="page-results" class="page">
-        <article class="change-hero results-hero">
-          <div>
-            <p class="eyebrow">CHANGE EXECUTION RESULTS</p>
-            <h2>变更结果与审计</h2>
-            <p>集中查看执行结果、前后网络状态、验证证据、自动回退、完整事件轨迹和经验沉淀。</p>
-          </div>
-          <span class="synthetic-stamp">执行证据<br><small>全量可审计</small></span>
-        </article>
-
-        <article id="result-empty" class="panel change-empty">
-          <span>02</span>
-          <div><h2>暂无已完成的变更结果</h2><p>请先在“变更方案生成”完成生成与审批；执行结束后结果会自动出现在这里。</p></div>
-        </article>
-
-        <div id="result-workspace" class="change-workspace" hidden>
-          <div class="metric-grid change-metrics">
-            <article class="metric"><span>工单状态</span><strong id="result-status">—</strong><small id="result-ticket-id">等待执行</small></article>
-            <article class="metric accent"><span>执行结果</span><strong id="result-outcome">—</strong><small id="result-step-score">尚无操作记录</small></article>
-            <article class="metric"><span>执行期验证</span><strong id="result-validation-score">—</strong><small>有效下一跳与业务指标</small></article>
-            <article class="metric warning"><span>网络快照</span><strong id="result-network-version">—</strong><small id="result-hash-match">等待前后态比对</small></article>
-          </div>
-
-          <div class="change-primary-grid result-primary-grid">
-            <article class="panel topology-panel">
-              <div class="panel-head"><div><p class="eyebrow">POST-CHANGE TOPOLOGY</p><h2>执行后有效下一跳</h2></div><span id="result-network-hash" class="hash-pill">—</span></div>
-              <div id="result-topology" class="network-topology"></div>
-            </article>
-            <article class="panel result-summary-panel">
-              <div class="panel-head"><div><p class="eyebrow">EXECUTION SUMMARY</p><h2>执行摘要</h2></div><span id="result-outcome-badge" class="tag">—</span></div>
-              <div id="result-summary" class="result-summary"></div>
-              <div id="result-execution-validations" class="validation-list"></div>
-            </article>
-          </div>
-
-          <div class="two-column change-bottom-grid">
-            <article class="panel">
-              <div class="panel-head"><div><p class="eyebrow">AUDIT TIMELINE</p><h2>编排与执行轨迹</h2></div></div>
-              <div id="change-timeline" class="change-timeline"></div>
-            </article>
-            <article class="panel feedback-panel">
-              <div class="panel-head"><div><p class="eyebrow">FEEDBACK LOOP</p><h2>执行经验沉淀</h2></div></div>
-              <div id="change-feedback" class="feedback-content"><p class="muted-copy">执行完成后生成带日志证据的知识候选。</p></div>
-              <button id="change-publish-feedback" class="button secondary" hidden>送入知识审核队列</button>
-            </article>
-          </div>
-        </div>
-      </section>
-
       <section id="page-ingest" class="page">
+        <article class="panel sample-panel">
+          <div class="panel-head"><div><p class="eyebrow">SYNTHETIC EXAMPLES</p><h2>从一份结构样例开始</h2></div><span class="tag">4 份 · 全部合成</span></div>
+          <p class="muted-copy">四阶段与 20 个步骤字段名已确认；Action、整单结果的字段和部分类型暂拟，待内网核对。全部内容虚构，可导入后整包审核。</p>
+          <div id="sample-cases" class="sample-grid" aria-live="polite">正在加载样例…</div>
+        </article>
         <div class="two-column ingest-layout">
           <div class="panel form-panel">
             <div class="panel-head"><div><p class="eyebrow">SOURCE TO CARD</p><h2>上传实际文档</h2></div></div>
@@ -424,13 +279,13 @@
       </section>
 
       <section id="page-semantic-governance" class="page">
-        <article class="change-hero semantic-governance-hero">
+        <article class="section-hero semantic-governance-hero">
           <div>
             <p class="eyebrow">HUMAN-GOVERNED SEMANTIC MERGE</p>
             <h2>相似知识治理</h2>
             <p>后台按案例隔离发现跨案例知识簇，不会自动合并。同案例卡片不会进入合并队列；人工可选择完整合并或建立共享核心。</p>
           </div>
-          <span id="semantic-governance-badge" class="synthetic-stamp">检查配置</span>
+          <span id="semantic-governance-badge" class="hero-badge">检查配置</span>
         </article>
 
         <div class="metric-grid semantic-governance-metrics">
@@ -465,8 +320,8 @@
       <section id="page-library" class="page">
         <article class="panel library-tools">
           <div><p class="eyebrow">KNOWLEDGE LIBRARY</p><h2>知识资产</h2></div>
-          <input id="library-query" placeholder="搜索对象、版本、场景、风险……">
-          <select id="library-status">
+          <input id="library-query" aria-label="搜索知识" placeholder="搜索对象、版本、场景、风险……">
+          <select id="library-status" aria-label="知识状态">
             <option value="APPROVED">已批准</option>
             <option value="PENDING_REVIEW">待审核</option>
             <option value="DRAFT">草稿</option>
@@ -475,6 +330,25 @@
           </select>
           <button id="library-search" class="button secondary">检索</button>
         </article>
+        <div class="query-layout library-assist">
+          <article class="panel query-panel">
+            <p class="eyebrow">KNOWLEDGE ASSIST</p>
+            <h2>询问已批准的知识</h2>
+            <p>询问 SOP、风险或回退要求，回答仅引用已批准的知识。</p>
+            <form id="query-form">
+              <textarea id="query-question" rows="5" required placeholder="例如：生产 VPC 路由主备切换的前置条件和回退原则是什么？"></textarea>
+              <button class="button secondary" type="submit" data-mode="direct">检索可信知识</button>
+              <button class="button" type="submit" data-mode="agent">深入研判</button>
+            </form>
+          </article>
+          <article class="panel answer-panel compact-answer-panel">
+            <div class="panel-head"><div><p class="eyebrow">EVIDENCE ANSWER</p><h2>研判结果</h2></div></div>
+            <div id="answer-content" class="answer-content empty">等待问题</div>
+            <div id="answer-agent-meta" class="hint"></div>
+            <div id="answer-memory-meta" class="hint"></div>
+            <div id="answer-sources" class="source-list"></div>
+          </article>
+        </div>
         <div id="library-cards" class="card-list empty">暂无知识</div>
       </section>
 
@@ -556,6 +430,14 @@
   <dialog id="detail-dialog">
     <button id="dialog-close" class="dialog-close" aria-label="关闭">×</button>
     <div id="dialog-content"></div>
+  </dialog>
+  <dialog id="sample-dialog" aria-labelledby="sample-title">
+    <button id="sample-close" class="dialog-close" type="button" aria-label="关闭样例">×</button>
+    <p class="eyebrow">SYNTHETIC STRUCTURE SAMPLE</p><h2 id="sample-title">合成结构样例</h2>
+    <p class="muted-copy">全部内容虚构 · 部分结构暂拟 · 导入后等待人工审核</p>
+    <pre id="sample-content" class="sample-content"></pre>
+    <div class="sample-dialog-actions"><button id="sample-download" class="button secondary">下载 JSON</button><button id="sample-ingest" class="button primary">导入合成案例</button></div>
+    <p id="sample-import-note" class="form-hint"></p>
   </dialog>
   <script src="/app.js"></script>
 </body>

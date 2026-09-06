@@ -1,0 +1,283 @@
+{
+  "code": 0,
+  "provider_code": "SYNTHETIC_ONLY",
+  "msg": "SYNTHETIC_PROVISIONAL_SCHEMA: Action13与结果15字段为临时拟造，非内网接口契约",
+  "data": {
+    "ticket_id": "SYNTH-STRUCT-002",
+    "title": "配置分批更新（合成结构样例）",
+    "original_system": "synthetic-structure-lab",
+    "create_time": "2026-09-10 21:00:00",
+    "cloud_service": "synthetic-cloud",
+    "service": "sample-worker",
+    "micro_service": "sample-worker-component",
+    "affected_service": "sample-worker",
+    "change_scene": "将虚构服务 sample-worker 的批次大小从 20 调整为 30。",
+    "risk_level": "SYNTH_REVIEW_REQUIRED",
+    "impact_risk_level": "SYNTH_REVIEW_REQUIRED",
+    "affected_customer": "仅虚构使用者",
+    "change_notes": "全部内容虚构。四阶段和步骤20字段名已确认；Action13字段/整单结果15字段及枚举类型为临时拟造，待内网核对。仅供采集审核演练，不执行。",
+    "action_list": [
+      {
+        "action_id": "SYNTH-ACTION-2-1",
+        "action_name": "配置分批更新 · 操作检测",
+        "capability": "synthetic-description-only",
+        "object_type": "synthetic-service",
+        "service": "sample-worker",
+        "region": "synthetic-region",
+        "tool_id": "synthetic-tool",
+        "tool_name": "虚构操作说明（不可执行）",
+        "input_schema": "synthetic-object-reference",
+        "output_schema": "synthetic-observation",
+        "risk_level": "SYNTH_REVIEW_REQUIRED",
+        "version": "synthetic-v1",
+        "enabled": false
+      },
+      {
+        "action_id": "SYNTH-ACTION-2-2",
+        "action_name": "配置分批更新 · 操作处理",
+        "capability": "synthetic-description-only",
+        "object_type": "synthetic-service",
+        "service": "sample-worker",
+        "region": "synthetic-region",
+        "tool_id": "synthetic-tool",
+        "tool_name": "虚构操作说明（不可执行）",
+        "input_schema": "synthetic-object-reference",
+        "output_schema": "synthetic-observation",
+        "risk_level": "SYNTH_REVIEW_REQUIRED",
+        "version": "synthetic-v1",
+        "enabled": false
+      },
+      {
+        "action_id": "SYNTH-ACTION-2-3",
+        "action_name": "配置分批更新 · 操作验证",
+        "capability": "synthetic-description-only",
+        "object_type": "synthetic-service",
+        "service": "sample-worker",
+        "region": "synthetic-region",
+        "tool_id": "synthetic-tool",
+        "tool_name": "虚构操作说明（不可执行）",
+        "input_schema": "synthetic-object-reference",
+        "output_schema": "synthetic-observation",
+        "risk_level": "SYNTH_REVIEW_REQUIRED",
+        "version": "synthetic-v1",
+        "enabled": false
+      },
+      {
+        "action_id": "SYNTH-ACTION-2-4",
+        "action_name": "配置分批更新 · 操作回退",
+        "capability": "synthetic-description-only",
+        "object_type": "synthetic-service",
+        "service": "sample-worker",
+        "region": "synthetic-region",
+        "tool_id": "synthetic-tool",
+        "tool_name": "虚构操作说明（不可执行）",
+        "input_schema": "synthetic-object-reference",
+        "output_schema": "synthetic-observation",
+        "risk_level": "SYNTH_REVIEW_REQUIRED",
+        "version": "synthetic-v1",
+        "enabled": false
+      }
+    ],
+    "change_tool_relate_action": {
+      "synthetic-tool": [
+        {
+          "action_id": "SYNTH-ACTION-2-1",
+          "action_name": "配置分批更新 · 操作检测",
+          "capability": "synthetic-description-only",
+          "object_type": "synthetic-service",
+          "service": "sample-worker",
+          "region": "synthetic-region",
+          "tool_id": "synthetic-tool",
+          "tool_name": "虚构操作说明（不可执行）",
+          "input_schema": "synthetic-object-reference",
+          "output_schema": "synthetic-observation",
+          "risk_level": "SYNTH_REVIEW_REQUIRED",
+          "version": "synthetic-v1",
+          "enabled": false
+        },
+        {
+          "action_id": "SYNTH-ACTION-2-2",
+          "action_name": "配置分批更新 · 操作处理",
+          "capability": "synthetic-description-only",
+          "object_type": "synthetic-service",
+          "service": "sample-worker",
+          "region": "synthetic-region",
+          "tool_id": "synthetic-tool",
+          "tool_name": "虚构操作说明（不可执行）",
+          "input_schema": "synthetic-object-reference",
+          "output_schema": "synthetic-observation",
+          "risk_level": "SYNTH_REVIEW_REQUIRED",
+          "version": "synthetic-v1",
+          "enabled": false
+        },
+        {
+          "action_id": "SYNTH-ACTION-2-3",
+          "action_name": "配置分批更新 · 操作验证",
+          "capability": "synthetic-description-only",
+          "object_type": "synthetic-service",
+          "service": "sample-worker",
+          "region": "synthetic-region",
+          "tool_id": "synthetic-tool",
+          "tool_name": "虚构操作说明（不可执行）",
+          "input_schema": "synthetic-object-reference",
+          "output_schema": "synthetic-observation",
+          "risk_level": "SYNTH_REVIEW_REQUIRED",
+          "version": "synthetic-v1",
+          "enabled": false
+        },
+        {
+          "action_id": "SYNTH-ACTION-2-4",
+          "action_name": "配置分批更新 · 操作回退",
+          "capability": "synthetic-description-only",
+          "object_type": "synthetic-service",
+          "service": "sample-worker",
+          "region": "synthetic-region",
+          "tool_id": "synthetic-tool",
+          "tool_name": "虚构操作说明（不可执行）",
+          "input_schema": "synthetic-object-reference",
+          "output_schema": "synthetic-observation",
+          "risk_level": "SYNTH_REVIEW_REQUIRED",
+          "version": "synthetic-v1",
+          "enabled": false
+        }
+      ]
+    },
+    "sop_change_step": {
+      "check_before_change": [
+        {
+          "check_name": "操作检测 · 配置分批更新",
+          "operate_description": "核对现有参数并保存配置副本，确认待处理队列可观测。执行前由执行人与配合人共同核对目标 sample-worker。",
+          "operate_verified": "配合人核验 sample-worker 的本步骤状态，保存证据；异常立即停止，由人工决定后续处置。",
+          "operate_rollback": "按实际变更顺序逆序恢复批次大小 20，核对队列状态。是否采取回退由人工决定。",
+          "impact_analysis": "准备操作只读取配置；未经确认不得修改目标。",
+          "operate_commond": "",
+          "command_list": [],
+          "tool_related_actions": [],
+          "action_unique_ids": [
+            "SYNTH-ACTION-2-1"
+          ],
+          "tool_unique_ids": [
+            "synthetic-tool"
+          ],
+          "is_involved_step": true,
+          "result_confirm": "SYNTH_OK",
+          "result_confirm_notes": "合成历史核验说明；只作证据，禁止生成到新草案。",
+          "label": "SYNTHETIC_ONLY",
+          "annotation": "值和类型为合成设定；is_involved_step 的子页归属待确认。",
+          "operate_doc_list": [],
+          "standardized_items": [],
+          "sop_step_id": "SYNTH-STEP-2-1",
+          "update_time": 1789030200000,
+          "update_user": "synthetic-reviewer"
+        }
+      ],
+      "change_implement": [
+        {
+          "check_name": "操作处理 · 配置分批更新",
+          "operate_description": "先在一个虚构实例调整参数为 30，核验后再逐批处理其余实例。执行前由执行人与配合人共同核对目标 sample-worker。",
+          "operate_verified": "配合人核验 sample-worker 的本步骤状态，保存证据；异常立即停止，由人工决定后续处置。",
+          "operate_rollback": "按实际变更顺序逆序恢复批次大小 20，核对队列状态。是否采取回退由人工决定。",
+          "impact_analysis": "操作可能影响目标实例；配合人核验当前步骤后才能继续。",
+          "operate_commond": "",
+          "command_list": [],
+          "tool_related_actions": [],
+          "action_unique_ids": [
+            "SYNTH-ACTION-2-2"
+          ],
+          "tool_unique_ids": [
+            "synthetic-tool"
+          ],
+          "is_involved_step": true,
+          "result_confirm": "SYNTH_OK",
+          "result_confirm_notes": "合成历史核验说明；只作证据，禁止生成到新草案。",
+          "label": "SYNTHETIC_ONLY",
+          "annotation": "值和类型为合成设定；is_involved_step 的子页归属待确认。",
+          "operate_doc_list": [],
+          "standardized_items": [],
+          "sop_step_id": "SYNTH-STEP-2-2",
+          "update_time": 1789030200000,
+          "update_user": "synthetic-reviewer"
+        }
+      ],
+      "change_verified": [
+        {
+          "check_name": "操作验证 · 配置分批更新",
+          "operate_description": "检查所有目标实例参数一致，观察队列积压与处理耗时。执行前由执行人与配合人共同核对目标 sample-worker。",
+          "operate_verified": "配合人核验 sample-worker 的本步骤状态，保存证据；异常立即停止，由人工决定后续处置。",
+          "operate_rollback": "按实际变更顺序逆序恢复批次大小 20，核对队列状态。是否采取回退由人工决定。",
+          "impact_analysis": "验证过程中若出现异常，停止操作并保留证据，交由人工判断。",
+          "operate_commond": "",
+          "command_list": [],
+          "tool_related_actions": [],
+          "action_unique_ids": [
+            "SYNTH-ACTION-2-3"
+          ],
+          "tool_unique_ids": [
+            "synthetic-tool"
+          ],
+          "is_involved_step": true,
+          "result_confirm": "SYNTH_OK",
+          "result_confirm_notes": "合成历史核验说明；只作证据，禁止生成到新草案。",
+          "label": "SYNTHETIC_ONLY",
+          "annotation": "值和类型为合成设定；is_involved_step 的子页归属待确认。",
+          "operate_doc_list": [],
+          "standardized_items": [],
+          "sop_step_id": "SYNTH-STEP-2-3",
+          "update_time": 1789030200000,
+          "update_user": "synthetic-reviewer"
+        }
+      ],
+      "change_rollback": [
+        {
+          "check_name": "操作回退 · 配置分批更新",
+          "operate_description": "按实际变更顺序逆序恢复批次大小 20，核对队列状态。执行前由执行人与配合人共同核对目标 sample-worker。",
+          "operate_verified": "配合人核验 sample-worker 的本步骤状态，保存证据；异常立即停止，由人工决定后续处置。",
+          "operate_rollback": "按实际变更顺序逆序恢复批次大小 20，核对队列状态。是否采取回退由人工决定。",
+          "impact_analysis": "这是回退指导，不表示已经发生回退；执行前由人工明确影响范围。",
+          "operate_commond": "",
+          "command_list": [],
+          "tool_related_actions": [],
+          "action_unique_ids": [
+            "SYNTH-ACTION-2-4"
+          ],
+          "tool_unique_ids": [
+            "synthetic-tool"
+          ],
+          "is_involved_step": true,
+          "result_confirm": null,
+          "result_confirm_notes": null,
+          "label": "SYNTHETIC_ONLY",
+          "annotation": "值和类型为合成设定；is_involved_step 的子页归属待确认。",
+          "operate_doc_list": [],
+          "standardized_items": [],
+          "sop_step_id": "SYNTH-STEP-2-4",
+          "update_time": null,
+          "update_user": null
+        }
+      ]
+    },
+    "change_plan": [
+      {
+        "result": {
+          "change_result": "SYNTH_COMPLETED",
+          "verified_note": "合成整单结果，不作为后续计划依据",
+          "rollback_start_time": null,
+          "start_time": 1789020000000,
+          "end_time": 1789030200000,
+          "executor": "synthetic-operator",
+          "reviewer": "synthetic-reviewer",
+          "failure_reason": "",
+          "result_summary": "虚构演练完成，无真实执行",
+          "status": "SYNTH_COMPLETED",
+          "duration": 10200,
+          "success": true,
+          "change_id": "SYNTH-STRUCT-002",
+          "update_time": 1789030200000,
+          "result_items": [
+            "SYNTHETIC_EVIDENCE_ONLY"
+          ]
+        }
+      }
+    ]
+  }
+}

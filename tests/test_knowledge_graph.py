@@ -135,7 +135,7 @@ class KnowledgeGraphTests(unittest.TestCase):
 
                 with urlopen(f"{base}/", timeout=5) as response:
                     page = response.read().decode("utf-8")
-                self.assertIn('data-page="graph">知识关系图', page)
+                self.assertIn('data-page="graph"', page)
                 self.assertIn('id="knowledge-graph-canvas"', page)
                 self.assertIn('id="knowledge-graph-tooltip"', page)
                 self.assertIn('id="graph-rotate-left"', page)
