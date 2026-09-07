@@ -36,7 +36,7 @@
 
 ## Last Updated
 
-- Date: 2026-09-06 (Asia/Shanghai)
+- Date: 2026-09-07 (Asia/Shanghai)
 - Current branch: main
 - Package version: 1.7.0
-- Publication: local main contains the validated changes. Public github/main remains at 602cea252ff76a406d070cc68370c542827ad0ef. Automatic approval review rejected this push because the earlier authorization covered the preceding release; obtain explicit user approval for publishing this batch. No push occurred.
+- Publication: 用户已于 2026-09-07 明确授权发布本轮修改，并授权后续本地验证和敏感信息检查通过后自动推送 GitHub main；已写入 AGENTS.md。实现提交为 65054cd；发布完成后以本地 main 与 GitHub refs/heads/main 的 SHA 比对为准。本轮发布操作仅补充授权与交接文档，沿用上述已通过的 165 项测试，无实现变更。
