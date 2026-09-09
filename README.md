@@ -20,6 +20,31 @@ Ops Knowledge Studio 是一个使用 Python 和 SQLite 的本地运维知识工�
 - **统一工作台界面**：更新导航、表单、资产卡、审核弹窗和窄屏布局；可信问答移入“知识库”。
 - **样例由用户导入和审核**：新安装从空库开始，不再自动预置已批准知识。升级不会自动删除已有数据库中的历史案例。
 
+## 运行界面
+
+以下截图采自 2026-09-09 本地运行的 1.7.0 工作台，使用四份合成结构样例，**不是内网原系统的页面截图**。拍摄时已有 12 张卡获批、12 张待审核；这是该本地库的状态，新安装仍从空库开始。模型 API 未配置，草案 BETA 未启用。
+
+**工作台概览**：汇总来源、知识卡和审核状态。
+
+![1.7.0 工作台概览：四份合成文档、24 张知识卡](docs/images/v1.7-workbench.jpg)
+
+<details>
+<summary>展开查看样例采集、案例包详情与关系图</summary>
+
+**知识采集**：四份样例集中展示，并提示哪些字段尚待确认。
+
+![1.7.0 知识采集与四份合成结构样例](docs/images/v1.7-sample-ingestion.jpg)
+
+**案例包详情**：查看来源标识、构建版本、覆盖结果和包内知识卡。这里的 `COMPLETE` 表示当前输入与构建规则下的覆盖，不代表真实页面已完整映射。
+
+![1.7.0 配置分批更新合成案例包详情](docs/images/v1.7-case-bundle.jpg)
+
+**知识关系图**：展示这批合成数据的案例包、卡片、业务对象与来源关系；当时共 40 个节点、72 条边。
+
+![1.7.0 合成知识资产关系图](docs/images/v1.7-knowledge-graph.jpg)
+
+</details>
+
 ## 快速开始
 
 需要 Git 和 Python **3.10–3.13**。CI 覆盖 Windows、Linux 上的这四个 Python 版本。基础应用不需要 Node.js、Docker、Redis 或独立数据库服务。
@@ -108,6 +133,76 @@ DEEPSEEK_MODEL=YOUR_GATEWAY_MODEL_ID
 **已确认的是外层路径、四阶段和步骤的 20 个字段名。Action 的 13 个字段、整单结果的 15 个字段，以及部分类型和枚举仍为暂拟。** 所有业务值均为虚构；可被 Adapter 识别不代表已覆盖真实页面或符合最终接口契约。
 
 样例中的历史核验、人员、时间和结果仅用于测试来源证据，不得作为新草案的本次执行事实。详细说明见[样例说明](knowledge_platform/static/samples/README.md)和[页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)。
+
+## 已收集的真实变更页面结构
+
+以下根据人工反馈的页面层级、标签、操作流程及脱敏字段报告整理，只描述结构，不包含真实单据值或原系统截图。**页面存在、JSON 中存在、平台已完成映射，是三个不同的确认层次。** 完整对应与缺口见[页面与 JSON 字段对应](docs/change-order-page-field-mapping.md)。
+
+### 案例级信息
+
+为便于阅读，下表按主题归纳已收集的页面标签，不代表原页面的分组名称或排列顺序。
+
+| 信息组 | 已收集的页面信息 |
+| --- | --- |
+| 单据与人员 | 标题、GOMSC 序列号、工单来源、原始系统单号、当前责任人、抄送人 |
+| 分类与场景 | 变更级别、变更环境、变更场景、重大变更、需求来源、备注信息 |
+| 服务与范围 | 变更服务；范围中的云服务、微服务组、微服务、Region、Zone、Ring 类型、AZ 类型、Pod、Schema、Hosts；受影响服务详情 |
+| 能力与准备 | 手工/自动化/工具化、4号提权方式、变更指导书、变更 SOP 模板、Action & 命令 |
+| 内容与影响 | 变更描述、变更影响、客户感知及说明、业务面中断、管理面中断、变更风险等级 |
+| 策略与沟通 | 变更灰度、变更回退时间要求、客户授权、通知客户 |
+
+这些标签尚未全部建立精确 JSON 对应。例如，变更环境不能用 Region 代替，微服务组不能直接用 `service` 代替；“4号提权方式”的含义与源键仍未确认。
+
+### 变更实施：四阶段与步骤子页
+
+四阶段路径已确认，阶段内按源顺序组织步骤：
+
+| 页面阶段 | JSON 路径 | 平台阶段 |
+| --- | --- | --- |
+| 01 操作检测 | `/data/sop_change_step/check_before_change` | `PRECHECK` |
+| 02 操作处理 | `/data/sop_change_step/change_implement` | `IMPLEMENTATION` |
+| 03 操作验证 | `/data/sop_change_step/change_verified` | `VALIDATION` |
+| 04 操作回退 | `/data/sop_change_step/change_rollback` | `ROLLBACK` |
+
+单个步骤内部的页面结构可归纳为：
+
+```text
+步骤（名称、顺序、Action 选择、是否有可变参数）
+├─ 操作实施：操作内容、操作验证、结果确认、核验说明与图片证据
+├─ 影响分析：涉及/不涉及、分析内容、结果确认与证据
+└─ 操作回退：涉及/不涉及、回退说明、结果确认与证据
+```
+
+真实操作采用 **1+1 check**：执行人逐步操作，配合人逐步核验、截图和回填。异常时停止后续步骤，由人工决定是否回退或采用其他处置。步骤内核验不等于独立的“03 操作验证”阶段；有回退方案不等于已经执行回退。
+
+三个子页各自的确认字段、图片绑定、核验人和时间尚未形成完整映射。当前一个 `is_involved_step` 不能同时代表多个子页的“涉及/不涉及”，更新人员和时间也不能直接解释成执行人或核验人的记录。
+
+<details>
+<summary>展开已确认的 20 个步骤字段名</summary>
+
+以下仅按阅读用途分组，不据此推断页面子页归属、JSON 类型或枚举含义。
+
+| 用途分组 | 字段名 |
+| --- | --- |
+| 步骤身份 | `check_name`、`sop_step_id` |
+| 指导内容 | `operate_description`、`operate_verified`、`operate_rollback`、`impact_analysis` |
+| 命令与关联 | `operate_commond`、`command_list`、`tool_related_actions`、`action_unique_ids`、`tool_unique_ids` |
+| 核验与标记 | `is_involved_step`、`result_confirm`、`result_confirm_notes` |
+| 辅助说明 | `label`、`annotation`、`operate_doc_list`、`standardized_items` |
+| 更新记录 | `update_time`、`update_user` |
+
+`operate_commond` 保留来源字段拼写。`actions`、`action_risk_level` 是代码中的候选键，不在这份已报告清单内。字段名确认不等于指导内容与事后回填已完成分类。
+
+</details>
+
+### 顶层页面与整单结果
+
+- **顶层“影响分析”**：据人工反馈仍在试运行、当前无人填写，暂不纳入必需覆盖；它与步骤内的影响分析不同。
+- **“处理记录”**：记录申请、流转、执行到完成的操作人员与时间；源字段/详情接口尚未确认，不能用单个更新时间代替，也不等于知识卡审核记录。
+- **Action 与任务分组**：已确认 `/data/action_list` 和 `/data/change_tool_relate_action` 外层路径；Action 的 13 个字段全表仍待提供，不能将其直接当作有序步骤。
+- **整单结果**：已确认 `/data/change_plan/0/result` 路径，平台将其独立构建为 `EXECUTION_OUTCOME` 并排除新变更规划；15 个结果字段全表、`change_plan` 其他字段的业务分类仍待确认。
+
+后续需要补齐的是脱敏字段名、类型、枚举、填写时机和子页归属。当前四份合成样例中的暂拟字段不能用于证明这些缺口已解决。
 
 ## 知识如何被复用
 
