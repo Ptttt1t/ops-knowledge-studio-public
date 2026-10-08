@@ -206,6 +206,11 @@ async function refreshHealth() {
   ]);
   const configured = data.config.api_configured;
   platformConfig = data.config || {};
+  const resetEnabled = Boolean(platformConfig.demo_management?.full_reset_enabled);
+  document.getElementById("clear-knowledge-button").disabled = !resetEnabled;
+  document.getElementById("knowledge-reset-note").textContent = resetEnabled
+    ? "清空前自动备份；保留上传原文件和模型配置，便于重新导入对比。"
+    : "实验环境需在 .env 设置 DEMO_MODE=true、DEMO_FULL_RESET_ENABLED=true，并重启服务。";
   const shutdownButton = document.getElementById("safe-shutdown-button");
   shutdownButton.hidden = !platformConfig.demo_management?.safe_shutdown_enabled;
   document.getElementById("api-dot").classList.toggle("ok", configured);
@@ -1428,7 +1433,6 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   const page = button.dataset.page;
   document.getElementById(`page-${page}`).classList.add("active");
   document.getElementById("page-title").textContent = pageTitles[page];
-  if (page === "ingest") loadSampleCases().catch(error => toast(error.message, true));
   if (page === "real-change") loadRealChangeWorkbench().catch(error => toast(error.message, true));
   if (page === "semantic-governance") loadSemanticGovernance().catch(error => toast(error.message, true));
   if (page === "graph") loadKnowledgeGraph().catch(error => toast(error.message, true));
@@ -1792,7 +1796,6 @@ document.getElementById("query-form").addEventListener("submit", async event => 
 
 async function bootstrap() {
   await refreshAll();
-  await loadSampleCases();
   clearInterval(semanticGovernancePollTimer);
   semanticGovernancePollTimer = window.setInterval(() => {
     loadSemanticGovernanceSummary().catch(() => {});
@@ -1850,53 +1853,20 @@ if (accessToken) {
     .catch(error => showAuthGate(error.message));
 }
 
-let selectedSample = null;
-async function loadSampleCases() {
-  const payload = await api("/api/sample-cases");
-  document.getElementById("sample-cases").innerHTML = payload.cases.map((item, index) => `
-    <button class="sample-card" data-sample-id="${escapeHtml(item.id)}">
-      <span class="sample-card-top"><span class="sample-number">0${index + 1}</span><span class="tag">${escapeHtml(item.category)}</span></span>
-      <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.summary)}</p>
-      <span class="sample-card-foot">四阶段 · 逐步骤核验 <span aria-hidden="true">↗</span></span>
-    </button>`).join("");
-}
 document.querySelectorAll("[data-go-page]").forEach(button => button.addEventListener("click", () => {
   document.querySelector(`.nav-item[data-page="${button.dataset.goPage}"]`).click();
 }));
-document.getElementById("sample-cases").addEventListener("click", async event => {
-  const button = event.target.closest("[data-sample-id]");
-  if (!button) return;
-  try {
-    selectedSample = await api(`/api/sample-cases/${encodeURIComponent(button.dataset.sampleId)}`);
-    document.getElementById("sample-title").textContent = selectedSample.title;
-    document.getElementById("sample-content").textContent = selectedSample.content;
-    const configured = Boolean(platformConfig.api_configured);
-    document.getElementById("sample-ingest").disabled = !configured;
-    document.getElementById("sample-import-note").textContent = configured
-      ? "使用标准 ChangeOrder 采集流程，导入后到审核队列整包确认。"
-      : "当前未配置模型 API，可先阅读和下载；完成配置后即可导入。";
-    document.getElementById("sample-dialog").showModal();
-  } catch (error) { toast(error.message, true); }
-});
-document.getElementById("sample-close").addEventListener("click", () => document.getElementById("sample-dialog").close());
-document.getElementById("sample-download").addEventListener("click", () => {
-  if (!selectedSample) return;
-  const url = URL.createObjectURL(new Blob([selectedSample.content], {type:"application/json;charset=utf-8"}));
-  const link = document.createElement("a"); link.href = url; link.download = `${selectedSample.id}.json`;
-  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-});
-document.getElementById("sample-ingest").addEventListener("click", async event => {
-  if (!selectedSample) return;
+
+document.getElementById("clear-knowledge-button").addEventListener("click", async event => {
+  if (!window.confirm("清空所有来源记录、知识卡、案例包、审核、关系和导入缓存？\n\n系统会先备份数据库。上传原文件与模型配置保留；旧草案/评测失效，SchemaProfile 停用。外部记忆仅断开本地引用并保留待清理队列。此操作不能在页面撤销，恢复需停服使用备份。")) return;
   const button = event.currentTarget;
-  const sample = selectedSample;
-  setBusy(button, true, "正在加工…");
+  setBusy(button, true, "正在备份并清空…");
   try {
-    const result = await api("/api/ingest-text", {method:"POST", body:JSON.stringify({
-      source_name:`${sample.title}（合成结构样例）`, source_ref:`synthetic://structure-samples/${sample.id}`, content:sample.content,
-    })});
-    document.getElementById("ingest-result").textContent = JSON.stringify(result, null, 2);
-    document.getElementById("sample-dialog").close();
-    toast("样例加工完成，请到审核队列确认"); await refreshAll();
+    const result = await api("/api/admin/clear-knowledge", {
+      method: "POST", body: JSON.stringify({confirmation: "CLEAR_ALL_KNOWLEDGE"}),
+    });
+    window.alert(`知识库已清空，可重新导入资料。\n备份目录：${result.backup_directory}\n外部记忆待清理：${result.pending_memory_retirements} 条`);
+    window.location.reload();
   } catch (error) { toast(error.message, true); }
   finally { setBusy(button, false); }
 });

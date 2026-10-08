@@ -1,5 +1,4 @@
 from pathlib import Path
-import json
 import tempfile
 import unittest
 
@@ -14,13 +13,11 @@ class NoModelClient:
 
 class SampleCasesTests(unittest.TestCase):
     def test_samples_import_as_distinct_reviewable_bundles_without_result_reuse(self):
-        sample_dir = Path(__file__).resolve().parents[1] / "knowledge_platform/static/samples"
-        catalog = json.loads((sample_dir / "catalog.json").read_text(encoding="utf-8"))
+        sample_dir = Path(__file__).resolve().parents[1] / "tests/fixtures/structure_samples"
         with tempfile.TemporaryDirectory() as directory:
             service = KnowledgeService(make_settings(Path(directory)), client=NoModelClient())
             case_ids = set()
-            for sample in catalog:
-                path = sample_dir / f"{sample['id']}.json"
+            for path in sorted(sample_dir.glob("*.json")):
                 result = service.ingest_file(path)
                 case_ids.add(result["case_id"])
                 self.assertEqual(result["cards_by_role"], {

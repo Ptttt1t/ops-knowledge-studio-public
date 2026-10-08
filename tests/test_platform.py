@@ -896,7 +896,8 @@ class PlatformTests(unittest.TestCase):
                 self.assertIn("Ops Knowledge", html)
                 self.assertIn('data-page="review"', html)
                 self.assertIn('data-page="real-change"', html)
-                self.assertIn('id="sample-cases"', html)
+                self.assertNotIn('id="sample-cases"', html)
+                self.assertIn('id="clear-knowledge-button"', html)
                 self.assertIn('id="query-form"', html)
                 self.assertNotIn('data-page="query"', html)
                 self.assertNotIn('data-page="results"', html)
@@ -912,20 +913,10 @@ class PlatformTests(unittest.TestCase):
                     with self.assertRaises(HTTPError) as removed:
                         http_urlopen(request, timeout=5)
                     self.assertEqual(removed.exception.code, 404)
-                with http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases", timeout=5) as response:
-                    samples = json.load(response)["cases"]
-                self.assertEqual(len(samples), 4)
-                for sample in samples:
-                    with http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases/{sample['id']}", timeout=5) as response:
-                        content = json.load(response)["content"]
-                    for phase in ("check_before_change", "change_implement", "change_verified", "change_rollback"):
-                        self.assertIn(phase, json.loads(content)["data"]["sop_change_step"])
-                    self.assertIn("SYNTHETIC_PROVISIONAL_SCHEMA", content)
-                    self.assertIn("result_confirm_notes", content)
-                for sample_id in ("unknown", "../app.js", "%2e%2e%2fapp.js"):
-                    with self.assertRaises(HTTPError) as rejected:
-                        http_urlopen(f"http://127.0.0.1:{port}/api/sample-cases/{sample_id}", timeout=5)
-                    self.assertEqual(rejected.exception.code, 404)
+                for path in ("/api/sample-cases", "/api/sample-cases/capacity-adjustment"):
+                    with self.assertRaises(HTTPError) as removed:
+                        http_urlopen(f"http://127.0.0.1:{port}{path}", timeout=5)
+                    self.assertEqual(removed.exception.code, 404)
             finally:
                 server.shutdown()
                 server.server_close()

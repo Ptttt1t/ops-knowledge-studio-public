@@ -232,11 +232,6 @@
       </section>
 
       <section id="page-ingest" class="page">
-        <article class="panel sample-panel">
-          <div class="panel-head"><div><p class="eyebrow">SYNTHETIC EXAMPLES</p><h2>从一份结构样例开始</h2></div><span class="tag">4 份 · 全部合成</span></div>
-          <p class="muted-copy">四阶段与 20 个步骤字段名已确认；Action、整单结果的字段和部分类型暂拟，待内网核对。全部内容虚构，可导入后整包审核。</p>
-          <div id="sample-cases" class="sample-grid" aria-live="polite">正在加载样例…</div>
-        </article>
         <div class="two-column ingest-layout">
           <div class="panel form-panel">
             <div class="panel-head"><div><p class="eyebrow">SOURCE TO CARD</p><h2>上传实际文档</h2></div></div>
@@ -318,6 +313,10 @@
       </section>
 
       <section id="page-library" class="page">
+        <article class="panel knowledge-reset-panel">
+          <div><h2>实验数据管理</h2><p id="knowledge-reset-note" class="muted-copy">清空前自动备份；保留上传原文件和模型配置，便于重新导入对比。</p></div>
+          <button id="clear-knowledge-button" class="button danger" type="button" disabled>清空知识库</button>
+        </article>
         <article class="panel library-tools">
           <div><p class="eyebrow">KNOWLEDGE LIBRARY</p><h2>知识资产</h2></div>
           <input id="library-query" aria-label="搜索知识" placeholder="搜索对象、版本、场景、风险……">
@@ -430,14 +429,6 @@
   <dialog id="detail-dialog">
     <button id="dialog-close" class="dialog-close" aria-label="关闭">×</button>
     <div id="dialog-content"></div>
-  </dialog>
-  <dialog id="sample-dialog" aria-labelledby="sample-title">
-    <button id="sample-close" class="dialog-close" type="button" aria-label="关闭样例">×</button>
-    <p class="eyebrow">SYNTHETIC STRUCTURE SAMPLE</p><h2 id="sample-title">合成结构样例</h2>
-    <p class="muted-copy">全部内容虚构 · 部分结构暂拟 · 导入后等待人工审核</p>
-    <pre id="sample-content" class="sample-content"></pre>
-    <div class="sample-dialog-actions"><button id="sample-download" class="button secondary">下载 JSON</button><button id="sample-ingest" class="button primary">导入合成案例</button></div>
-    <p id="sample-import-note" class="form-hint"></p>
   </dialog>
   <script src="/app.js"></script>
 </body>

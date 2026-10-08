@@ -11,7 +11,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 - 结构化 ChangeOrder 的确定性识别、语义知识建模、证据追溯和案例包治理；
 - 相似知识候选发现、人工确认合并及知识关系变化；
 - 基于 `APPROVED` 完整案例包生成可审核但不可执行的真实 ChangeOrder 草案；
-- 用四份合成 ChangeOrder 样例验证知识采集与整包审核，未确认字段明确暂拟。
+- 内网实验可显式启用一键清空知识库后重新导入；应用不内置 Mock 案例，合成数据只用于自动化测试。
 
 产品形态是一个 Python 单机 Web/CLI Demo。HTTP 服务、Harness Worker 和 SQLite 可运行在同一进程或同一主机，无 Redis、Docker 或外部消息队列依赖。默认配置是本机或隔离内网 Demo，不是生产变更系统。
 
@@ -33,8 +33,8 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 | `knowledge_platform/change_drafts.py` | SchemaProfile、案例推荐、真实草案 revision、硬门禁、审核、导出和留一盲测。 |
 | `knowledge_platform/graph_layout.py`, `static/` | 关系图类型簇提示和 Web UI；浏览器执行 type-centroid + local force 的 3D 布局。 |
 | `knowledge_platform/long_term_memory.py` | 可选 MindMemOS 映射、白名单同步、回读后本地重新验证和降级。 |
-| `knowledge_platform/static/samples/` | 四份合成结构 JSON、目录及字段确认边界；随包发布。 |
-| `tests/`, `sample_data/` | 单元/集成回归和虚构的同结构 fixture；不得加入真实内网样本。 |
+| `tests/fixtures/structure_samples/` | 四份暂拟结构的合成回归 fixture；不随安装包发布，不在 Web 暴露。 |
+| `tests/` | 单元/集成回归和虚构的同结构 fixture；不得加入真实内网样本。 |
 | `docs/` | 部署、安全、ChangeOrder、语义治理、真实草案和共享 Codex 上下文。 |
 
 ### 关键数据流
@@ -78,7 +78,7 @@ RealChangeRequest
 → approved JSON + provenance report export
 ```
 
-合成执行 Demo 已退役，专用模块、CLI/API、十案例种子和模拟执行页面均已删除。可信问答保留在知识库。四份替代样例采用已确认四阶段和 20 个步骤字段名，Action/整单结果及部分类型暂拟，不代表真实接口；样例不自动批准。
+合成执行 Demo 已退役，专用模块、CLI/API、十案例种子和模拟执行页面均已删除。可信问答保留在知识库。1.8.0 进一步移除内置 Mock 样例的界面、接口和包资源；四份 JSON 仅保留为测试 fixture，Action/整单结果及部分类型仍为暂拟。
 
 ## Important Constraints
 
@@ -151,7 +151,7 @@ RealChangeRequest
 - 共享 token 只能支持受控 Demo，操作者自报身份不能作为正式审计证据。
 - SQLite 与进程内后台任务适合单机验证，不是多实例高可用架构。
 - 3D 图布局和相似阈值需要继续用不出网的内网数据做人工可用性校准；真实内容与结果不得带回公开仓库。
-- 全局 Demo 知识库重置只有配置预留，当前 Web 未开放入口；case-scoped rebuild 已实现。
+- 全库清空需 DEMO_MODE=true 且 DEMO_FULL_RESET_ENABLED=true，默认关闭。Web 入口位于知识库，确认后先备份知识/草案/任务库，再清空本地知识数据与导入缓存，保留单条清空审计及外部记忆待清理队列。上传文件、日志、报告、模型配置和历史任务保留；所有 Profile 停用、草案审批撤销、评测失效。写操作/模型/扫描或未完成任务存在时拒绝；卡片 ID 不回退。仅支持单服务进程实验，不承诺多库 WAL 事务在主机断电时原子提交，恢复使用同批三库备份。
 - 真实变更生成、SchemaProfile 和留一盲测仍是 BETA，不能据此宣称具备生产自动变更能力。
 
 ## Development Conventions
@@ -169,7 +169,7 @@ node --check knowledge_platform/static/app.js
 git diff --check
 ```
 
-- `python run.py init` 只补齐 schema/migration，不应清空数据库。普通 ingest 保持幂等，只有显式 case rebuild 才 purge 当前案例并强制重跑。
+- `python run.py init` 只补齐 schema/migration，不应清空数据库。普通 ingest 保持幂等，显式 case rebuild 会清理当前案例并强制重跑；全库清空另有确认、备份与忙碌保护。
 - 新配置写入 `harness/config.py` 和 `.env.example`，并在相关文档说明默认值、安全边界和作用范围。
 - 一轮有意义的工作结束时更新 `CODEX_HANDOFF.md`；只有长期事实改变时更新本文件，只有重要设计选择改变时更新 `DECISIONS.md`。
 - 发布前审查完整 diff 和敏感信息，基于最新 `github/main` 快进本地 `main`，push 后比较本地与远端 SHA。

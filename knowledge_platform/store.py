@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
+from uuid import uuid4
 
 from .graph_layout import cluster_centroid, node_cluster, procedure_phase
 from .schema import CardStatus, ComparisonResult, KnowledgeCardDraft, LIST_FIELDS
@@ -39,6 +40,100 @@ class KnowledgeStore:
             raise
         finally:
             connection.close()
+
+    def clear_knowledge(self, *, actor: str, draft_path: Path, runtime_path: Path) -> dict[str, Any]:
+        """Reset derived knowledge under database write locks, retaining recovery copies.
+
+        Called only by the Web maintenance boundary. Source files and historical
+        runtime/draft records stay on disk; old draft approvals are invalidated.
+        Never reset sqlite_sequence: stale external memory IDs must not bind to
+        newly imported cards.
+        """
+        paths = [self.database_path, draft_path.resolve(), runtime_path.resolve()]
+        if len(set(paths)) != 3:
+            raise StoreError("知识库、草案库与任务库必须使用不同文件")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("ATTACH DATABASE ? AS drafts", (str(paths[1]),))
+            connection.execute("ATTACH DATABASE ? AS runtime", (str(paths[2]),))
+            connection.execute("BEGIN IMMEDIATE")
+            unfinished = connection.execute(
+                "SELECT COUNT(*) FROM runtime.runs WHERE status NOT IN "
+                "('SUCCEEDED', 'FAILED', 'CANCELLED')"
+            ).fetchone()[0]
+            ingesting = connection.execute(
+                "SELECT COUNT(*) FROM ingestion_claims "
+                "WHERE status = 'PROCESSING' AND lease_expires_at > ?", (now,)
+            ).fetchone()[0]
+            syncing = connection.execute(
+                "SELECT COUNT(*) FROM memory_sync_state "
+                "WHERE status = 'SYNCING' AND lease_expires_at > ?", (now,)
+            ).fetchone()[0]
+            if unfinished or ingesting or syncing:
+                raise StoreError("存在未完成任务、采集或记忆同步；请等待完成或取消任务后再清空")
+
+            backup_dir = self.database_path.parent / "knowledge-reset-backups" / (
+                datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
+            )
+            backup_dir.mkdir(parents=True, exist_ok=False)
+            # Separate read connections can snapshot WAL databases while the
+            # maintenance connection holds reserved write locks on all three.
+            for path, name in zip(paths, ("knowledge.db", "change_drafts.db", "runtime.db")):
+                with closing(sqlite3.connect(path)) as source:
+                    with closing(sqlite3.connect(backup_dir / name)) as target:
+                        source.backup(target)
+                        if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                            raise StoreError("清空前数据库备份校验失败，未删除知识")
+
+            tables = (
+                "semantic_merge_cluster_members", "semantic_merge_clusters",
+                "semantic_merge_proposals", "semantic_merge_member_exclusions",
+                "semantic_governance_state", "relations", "audit_log",
+                "card_source_items", "card_lineage", "memory_sync_state",
+                "memory_links", "cards", "change_case_bundles",
+                "extraction_reports", "ingestion_claims", "chunks", "documents",
+            )
+            counts = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                      for table in tables}
+            # Keep the external cleanup queue; unlink locally before any new
+            # retrieval. Cleanup can be retried without permitting stale hits.
+            connection.execute(
+                """INSERT OR REPLACE INTO memory_retirements
+                   (backend, memory_id, card_id, case_id, status, attempts, last_error, updated_at)
+                   SELECT m.backend, m.memory_id, m.card_id, COALESCE(l.case_id, ''),
+                          'PENDING', 0, '', ? FROM memory_links m
+                   LEFT JOIN card_lineage l ON l.card_id = m.card_id""", (now,)
+            )
+            connection.execute("UPDATE drafts.schema_profiles SET active = 0")
+            connection.execute(
+                "UPDATE drafts.change_drafts SET status = 'BLOCKED', "
+                "model_error = 'KNOWLEDGE_RESET', model_error_code = 'KNOWLEDGE_RESET', updated_at = ?",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE drafts.change_draft_revisions SET reviewer = '', "
+                "review_comment = 'KNOWLEDGE_RESET', reviewed_at = ''"
+            )
+            connection.execute(
+                "UPDATE drafts.change_evaluations SET status = 'FAILED', "
+                "error = 'KNOWLEDGE_RESET', updated_at = ?", (now,)
+            )
+            connection.execute("UPDATE cards SET supersedes_id = NULL")
+            for table in tables:
+                connection.execute(f"DELETE FROM {table}")
+            result = {
+                "cleared": counts,
+                "backup_directory": str(backup_dir),
+                "pending_memory_retirements": connection.execute(
+                    "SELECT COUNT(*) FROM memory_retirements WHERE status IN ('PENDING', 'FAILED')"
+                ).fetchone()[0],
+            }
+            connection.execute(
+                "INSERT INTO audit_log(card_id, action, actor, detail, created_at) "
+                "VALUES(NULL, 'KNOWLEDGE_RESET', ?, ?, ?)",
+                (actor, json.dumps(result, ensure_ascii=False), now),
+            )
+        return result
 
     def initialize(self) -> None:
         schema = """

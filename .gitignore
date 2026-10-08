@@ -6,6 +6,7 @@ artifacts/
 data/*.db
 data/*.db-*
 data/*.sqlite*
+knowledge-reset-backups/
 data/paddlex_cache/
 knowledge_sources/uploads/
 knowledge_sources/public_test_corpus/raw/

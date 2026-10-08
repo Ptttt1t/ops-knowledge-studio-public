@@ -372,17 +372,6 @@ button:not(:disabled).secondary:hover { background: #f1f5f7; border-color: #bdcd
 dialog { border: 1px solid var(--line); border-radius: 16px; padding: 30px; }
 dialog::backdrop { background: #17273780; backdrop-filter: blur(4px); }
 .library-assist { margin: 0 0 24px; }
-.sample-panel { margin-bottom: 24px; }
-.sample-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
-.sample-card { display: flex; flex-direction: column; min-width: 0; min-height: 212px; padding: 19px; text-align: left; color: var(--ink); background: #fafcfd; border: 1px solid #e0e7eb; border-radius: 10px; transition: border-color .15s, background .15s; }
-.sample-card:hover { background: #f0f7f4; border-color: #9fc5b8; }
-.sample-card-top, .sample-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.sample-number { color: #8bab9e; font-size: 20px; font-weight: 600; letter-spacing: -.04em; }
-.sample-card strong { margin: 22px 0 7px; font-size: 15px; }
-.sample-card p { color: #74808f; font-size: 12px; line-height: 1.75; }
-.sample-card-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid #e5ece9; color: #528475; font-size: 11px; }
-.sample-content { max-height: 55vh; overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: #f7f9fb; color: #405268; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.85 "Segoe UI","Microsoft YaHei",sans-serif; }
-.sample-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .real-change-form { gap: 18px; }
 .real-change-form small { font-weight: 400; color: var(--muted); line-height: 1.7; }
 .real-change-form .button { width: 100%; }
@@ -401,7 +390,7 @@ dialog::backdrop { background: #17273780; backdrop-filter: blur(4px); }
   .app-shell { grid-template-columns: 212px minmax(0,1fr); }
   .sidebar { padding-inline: 12px; }
   .welcome-flow { display: none; }
-  .metric-grid, .sample-grid, .real-change-profile-strip, .real-change-draft-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .metric-grid, .real-change-profile-strip, .real-change-draft-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .two-column, .query-layout, .review-grid { grid-template-columns: 1fr; }
   .library-tools { grid-template-columns: 1fr 1fr; }
   .workspace-welcome { padding: 28px; }
@@ -427,8 +416,7 @@ dialog::backdrop { background: #17273780; backdrop-filter: blur(4px); }
   .section-caption span { display: none; }
   .metric { padding: 18px; min-height: 130px; }
   .metric-grid { gap: 10px; }
-  .sample-grid, .memory-status-grid, .real-change-profile-strip, .real-change-draft-summary, .real-change-form, .semantic-source-grid, .semantic-editor-grid, .library-tools, .graph-tools, .semantic-governance-controls, .real-change-review-bar, .real-change-evaluation-launcher { grid-template-columns: 1fr; }
-  .sample-card { min-height: 185px; }
+  .memory-status-grid, .real-change-profile-strip, .real-change-draft-summary, .real-change-form, .semantic-source-grid, .semantic-editor-grid, .library-tools, .graph-tools, .semantic-governance-controls, .real-change-review-bar, .real-change-evaluation-launcher { grid-template-columns: 1fr; }
   .real-change-form .span-2, .semantic-editor-grid .span-2 { grid-column: auto; }
   .review-controls { display: grid; }
   .review-controls label { min-width: 0; }
@@ -446,3 +434,5 @@ dialog::backdrop { background: #17273780; backdrop-filter: blur(4px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.knowledge-reset-panel { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; flex-wrap:wrap; }

@@ -12,7 +12,7 @@
 
 这里没有可独立核验的完整原始真实 JSON 字段清单。因此“未见明确字段”只表示当前代码和保留的样例不能建立对应，不能断言原始接口没有该字段；内容也可能来自另一个详情接口。Builder 支持一个字段名，也不证明真实 JSON 一定使用该字段名。
 
-早期自拟字段的五份 JSON 案例及其专用生成、评估脚本已退役，不再作为真实业务字段或页面覆盖的证据。字段基数/漂移测试保留；独立合成执行 Demo 已退役。四份替代样例在 `knowledge_platform/static/samples/`，Action/结果字段经用户允许暂拟，不能作为真实字段证据。外网测试一律使用合成值。
+早期自拟字段的五份 JSON 案例及其专用生成、评估脚本已退役，不再作为真实业务字段或页面覆盖的证据。字段基数/漂移测试保留；独立合成执行 Demo 已退役。四份合成回归 fixture 在 `tests/fixtures/structure_samples/`，不随应用分发，Action/结果字段经用户允许暂拟，不能作为真实字段证据。外网测试一律使用合成值。
 
 必须区分三种差距：源 JSON 是否提供、字段与页面语义是否确认、Builder 是否已经利用。结构覆盖率、单元测试通过和合成 fixture 完整均不等于真实页面覆盖率。
 
@@ -112,4 +112,4 @@
 
 根据人工提供的脱敏报告及其更正，步骤字段为：check_name、operate_description、operate_verified、operate_rollback、impact_analysis、operate_commond、command_list、tool_related_actions、action_unique_ids、tool_unique_ids、is_involved_step、result_confirm、result_confirm_notes、label、annotation、operate_doc_list、standardized_items、sop_step_id、update_time、update_user。共 20 个；actions 与 action_risk_level 是代码候选，不在已报告的实际步骤键中。旧单元测试为结构计数使用的 region/container/cluster_name 不属于这份确认清单。
 
-Action 的 13 个键与整单结果的 15 个键全表尚未提供；当前四份新样例使用临时拟造字段及类型，界面已标注，后续等待脱敏结构信息替换。字段名确认不等于类型、枚举和三个子页归属全部确认。
+Action 的 13 个键与整单结果的 15 个键全表尚未提供；测试 fixture 使用临时拟造字段及类型，应用已移除内置样例入口，后续等待脱敏结构信息替换。字段名确认不等于类型、枚举和三个子页归属全部确认。

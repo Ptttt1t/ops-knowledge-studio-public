@@ -91,6 +91,7 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
         self._shutdown_requested_at = ""
         self._shutdown_actor = ""
         self._active_work_requests = 0
+        self._resetting_knowledge = False
         self._shutdown_thread: threading.Thread | None = None
         self._closed = False
 
@@ -132,6 +133,8 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
 
     def begin_work(self) -> None:
         with self._lifecycle:
+            if self._resetting_knowledge:
+                raise WebSecurityError("知识库正在清空，请稍后重试", status=HTTPStatus.CONFLICT, code="knowledge_reset_busy")
             if self._shutdown_state != "RUNNING":
                 raise WebSecurityError(
                     "平台正在安全退出，已停止接收新任务",
@@ -139,6 +142,38 @@ class KnowledgeHTTPServer(ThreadingHTTPServer):
                     code="platform_draining",
                 )
             self._active_work_requests += 1
+
+    def clear_knowledge(self, *, actor: str, confirmation: str) -> dict[str, Any]:
+        settings = self.service.settings
+        if not (settings.demo_mode and settings.demo_full_reset_enabled):
+            raise WebSecurityError("请在实验环境启用 DEMO_MODE 和 DEMO_FULL_RESET_ENABLED", status=HTTPStatus.NOT_FOUND, code="knowledge_reset_disabled")
+        if confirmation != "CLEAR_ALL_KNOWLEDGE":
+            raise WebSecurityError("请明确确认清空全部知识库", status=HTTPStatus.BAD_REQUEST, code="knowledge_reset_confirmation_required")
+        with self._lifecycle:
+            if self._shutdown_state != "RUNNING" or self._resetting_knowledge or self._active_work_requests:
+                raise WebSecurityError("平台存在在途操作，请稍后再清空", status=HTTPStatus.CONFLICT, code="knowledge_reset_busy")
+            self._resetting_knowledge = True
+            self._active_work_requests += 1
+        scan_lock = self.semantic_governance._scan_lock
+        acquired = False
+        try:
+            acquired = scan_lock.acquire(blocking=False)
+            if not acquired or self._active_model_requests(self.service.model_request_activity()):
+                raise WebSecurityError("后台扫描或模型请求尚未结束，请稍后再清空", status=HTTPStatus.CONFLICT, code="knowledge_reset_busy")
+            try:
+                return self.service.store.clear_knowledge(
+                    actor=actor, draft_path=self.change_drafts.store.path,
+                    runtime_path=self.runtime.store.database_path,
+                )
+            except StoreError as exc:
+                raise WebSecurityError(str(exc), status=HTTPStatus.CONFLICT, code="knowledge_reset_failed") from exc
+        finally:
+            if acquired:
+                scan_lock.release()
+            with self._lifecycle:
+                self._resetting_knowledge = False
+                self._active_work_requests -= 1
+                self._lifecycle.notify_all()
 
     def end_work(self) -> None:
         with self._lifecycle:
@@ -482,28 +517,6 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                     }
                 )
                 return
-            if path == "/api/sample-cases" or path.startswith("/api/sample-cases/"):
-                sample_dir = Path(__file__).parent / "static" / "samples"
-                catalog = json.loads(
-                    (sample_dir / "catalog.json").read_text(encoding="utf-8")
-                )
-                if path == "/api/sample-cases":
-                    self._send_json({"cases": catalog})
-                else:
-                    sample_id = path.removeprefix("/api/sample-cases/")
-                    sample = next(
-                        (item for item in catalog if item["id"] == sample_id), None
-                    )
-                    if sample is None:
-                        self._send_json({"error": "样例不存在"}, HTTPStatus.NOT_FOUND)
-                    else:
-                        self._send_json({
-                            **sample,
-                            "content": (sample_dir / f"{sample_id}.json").read_text(
-                                encoding="utf-8"
-                            ),
-                        })
-                return
             if path == "/api/health":
                 shutdown = self.server.shutdown_status()
                 self._send_json(
@@ -710,6 +723,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         tracked_work = False
         try:
             principal = self._authorize_api(path, "POST")
+            if path == "/api/admin/clear-knowledge":
+                payload = self._read_json()
+                self._send_json(self.server.clear_knowledge(
+                    actor=principal, confirmation=str(payload.get("confirmation") or ""),
+                ))
+                return
             if path == "/api/admin/safe-shutdown":
                 self.server.begin_work()
                 tracked_work = True
