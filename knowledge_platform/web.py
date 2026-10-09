@@ -503,6 +503,22 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_static("styles.css", "text/css; charset=utf-8")
                 return
             self._authorize_api(path, "GET")
+            if path == "/api/standard-sop/batches":
+                self._send_json({"batches": self.server.service.standard_sop.batches()})
+                return
+            sop_match = re.fullmatch(r"/api/standard-sop/batches/([0-9a-f]{32})", path)
+            if sop_match:
+                self._send_json(self.server.service.standard_sop.batch(sop_match.group(1), include_sections=False))
+                return
+            sop_match = re.fullmatch(r"/api/standard-sop/batches/([0-9a-f]{32})/sources/([0-9a-f]{32})", path)
+            if sop_match:
+                self._send_json(self.server.service.standard_sop.source_detail(*sop_match.groups()))
+                return
+            sop_match = re.fullmatch(r"/api/standard-sop/drafts/([0-9a-f]{32})(/export)?", path)
+            if sop_match:
+                manager = self.server.service.standard_sop
+                self._send_json(manager.export(sop_match.group(1)) if sop_match.group(2) else manager.draft(sop_match.group(1)))
+                return
             if path == "/api/admin/safe-shutdown":
                 self._send_json(self.server.shutdown_status())
                 return
@@ -741,6 +757,19 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 return
             self.server.begin_work()
             tracked_work = True
+            sop_upload = re.fullmatch(r"/api/standard-sop/batches/([0-9a-f]{32})/upload", path)
+            if sop_upload:
+                filename, file_payload = self._read_upload()
+                if not filename.lower().endswith(".json"):
+                    raise ValueError("标准 SOP 批量入口只接受 JSON 文件")
+                document = json.loads(file_payload.decode("utf-8-sig"))
+                documents = document if isinstance(document, list) else [{
+                    "content": document, "external_id": filename,
+                    "published": self.headers.get("X-SOP-Published", "") == "true",
+                }]
+                result = self.server.service.standard_sop.import_sources(sop_upload.group(1), documents)
+                self._send_json(result, HTTPStatus.CREATED)
+                return
             if path == "/api/ingest-file":
                 filename, file_payload = self._read_upload()
                 saved_path = self._save_upload(filename, file_payload)
@@ -766,6 +795,42 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(result, HTTPStatus.CREATED)
                 return
             payload = self._read_json()
+            manager = self.server.service.standard_sop
+            if path == "/api/standard-sop/batches":
+                self._send_json(manager.create_batch(payload, actor=principal), HTTPStatus.CREATED)
+                return
+            sop_match = re.fullmatch(r"/api/standard-sop/batches/([0-9a-f]{32})/sources", path)
+            if sop_match:
+                self._send_json(manager.import_sources(sop_match.group(1), payload.get("documents")), HTTPStatus.CREATED)
+                return
+            if path == "/api/standard-sop/jobs":
+                manager.require_model()
+                operation = payload.get("operation")
+                if operation not in ("analyze", "generate"):
+                    raise ValueError("operation 必须为 analyze 或 generate")
+                batch = manager.batch(str(payload.get("batch_id") or ""))
+                if operation == "generate":
+                    manager.selected_sources(batch, payload.get("source_ids"))
+                count = len(batch["sources"]) if operation == "analyze" else 1
+                run, _created = self.server.runtime.submit(
+                    f"standard_sop.{operation}",
+                    {"batch_id": batch["batch_id"], "source_ids": payload.get("source_ids"), "actor": principal},
+                    budget={"max_steps": count + 5, "timeout_seconds": max(count, 1) * (self.server.service.settings.standard_sop_timeout_seconds + 30),
+                            "max_total_tokens": max(count, 1) * 100_000},
+                )
+                with self.server.service.store.connect() as con:
+                    con.execute("UPDATE standard_sop_batches SET last_run_id=? WHERE batch_id=?", (run["id"], batch["batch_id"]))
+                self._send_json({"run": run}, HTTPStatus.ACCEPTED)
+                return
+            sop_match = re.fullmatch(r"/api/standard-sop/drafts/([0-9a-f]{32})/(edit|review)", path)
+            if sop_match:
+                if sop_match.group(2) == "edit":
+                    result = manager.edit(sop_match.group(1), payload.get("payload"), revision=payload.get("revision"), actor=principal)
+                else:
+                    result = manager.review(sop_match.group(1), revision=payload.get("revision"), decision=payload.get("decision"),
+                                            actor=principal, comment=payload.get("comment", ""))
+                self._send_json(result)
+                return
             if path == "/api/semantic-merge-proposals/scan":
                 result = self.server.semantic_governance.scan(actor=principal)
                 self._send_json(result)

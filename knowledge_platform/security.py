@@ -84,6 +84,7 @@ class SlidingWindowLimiter:
 
 class WebSecurity:
     EXPENSIVE_PATHS = {
+        "/api/standard-sop/jobs",
         "/api/ingest-file",
         "/api/ingest-text",
         "/api/query",

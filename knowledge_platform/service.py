@@ -263,6 +263,8 @@ class KnowledgeService:
         )
         self._change_drafts: Any | None = None
         self._semantic_governance: Any | None = None
+        from .standard_sop import StandardSOPService
+        self.standard_sop = StandardSOPService(self)
 
     @property
     def change_drafts(self) -> Any:

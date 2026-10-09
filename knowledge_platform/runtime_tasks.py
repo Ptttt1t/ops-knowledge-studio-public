@@ -127,6 +127,18 @@ def register_knowledge_tasks(runtime: HarnessRuntime, service: KnowledgeService)
     runtime.register_task("change.generate_real_draft", generate_real_change_draft)
     runtime.register_task("change.evaluate_leave_one_out", evaluate_real_change_draft)
 
+    def standard_sop_analyze(context: RunContext) -> dict[str, Any]:
+        return service.standard_sop.analyze(_text(context.input, "batch_id"), context)
+
+    def standard_sop_generate(context: RunContext) -> dict[str, Any]:
+        return service.standard_sop.generate(
+            _text(context.input, "batch_id"), context.input.get("source_ids"), context,
+            actor=_text(context.input, "actor", required=False) or "shared-operator",
+        )
+
+    runtime.register_task("standard_sop.analyze", standard_sop_analyze)
+    runtime.register_task("standard_sop.generate", standard_sop_generate)
+
 
 def create_knowledge_runtime(
     service: KnowledgeService,

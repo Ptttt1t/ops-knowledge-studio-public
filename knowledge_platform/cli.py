@@ -197,6 +197,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_approve_tool.add_argument("--actor", required=True)
     run_approve_tool.add_argument("--comment", default="")
     run_approve_tool.add_argument("--wait-seconds", type=int)
+    sop_import = subparsers.add_parser("sop-import", help="Import local SOP JSON directory into a standard SOP batch without model calls")
+    sop_import.add_argument("--directory", type=Path, required=True)
+    sop_import.add_argument("--scenario", required=True)
+    sop_import.add_argument("--keywords", default="")
+    sop_import.add_argument("--published", action="store_true", help="Operator confirms sources were published upstream")
+    sop_import.add_argument("--batch-id", default="", help="Append to an existing batch")
     return parser
 
 
@@ -240,6 +246,20 @@ def main(argv: list[str] | None = None) -> int:
                 server.drain_before_close(actor="keyboard-interrupt")
             finally:
                 server.server_close()
+        elif command == "sop-import":
+            files = sorted(args.directory.glob("*.json"))
+            if not files or len(files) > 500:
+                raise ValueError("目录须包含 1–500 份 JSON 文件")
+            documents = []
+            for path in files:
+                if path.stat().st_size > settings.max_upload_bytes:
+                    raise ValueError(f"文件过大：{path.name}")
+                documents.append({"content": json.loads(path.read_text(encoding="utf-8-sig")),
+                                  "external_id": path.name, "published": args.published})
+            batch_id = args.batch_id or service.standard_sop.create_batch(
+                {"scenario": args.scenario, "keywords": [item.strip() for item in args.keywords.split(",") if item.strip()]}, actor="cli-operator"
+            )["batch_id"]
+            _print_json({"batch_id": batch_id, **service.standard_sop.import_sources(batch_id, documents)})
         elif command == "ingest":
             _print_json(service.ingest_file(args.file))
         elif command == "list":

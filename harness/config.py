@@ -181,6 +181,8 @@ class Settings:
     demo_rebuild_enabled: bool = True
     demo_safe_shutdown_enabled: bool = True
     demo_full_reset_enabled: bool = False
+    standard_sop_generation_enabled: bool = False
+    standard_sop_timeout_seconds: int = 240
     max_model_calls_per_ingest: int = 60
     max_cards_per_document: int = 30
     max_concurrent_ingestions: int = 1
@@ -329,6 +331,11 @@ class Settings:
                     self.demo_mode and self.demo_safe_shutdown_enabled
                 ),
                 "full_reset_enabled": self.demo_mode and self.demo_full_reset_enabled,
+            },
+            "standard_sop": {
+                "generation_enabled": self.standard_sop_generation_enabled,
+                "timeout_seconds": self.standard_sop_timeout_seconds,
+                "crawler_mode": "push_only",
             },
             "long_term_memory": {
                 "enabled": self.mindmemos_enabled,
@@ -612,6 +619,8 @@ class Settings:
             max_model_calls_per_ingest=_read_int(
                 values, "KNOWLEDGE_MAX_MODEL_CALLS_PER_INGEST", 60
             ),
+            standard_sop_generation_enabled=_read_bool(values, "STANDARD_SOP_GENERATION_ENABLED", False),
+            standard_sop_timeout_seconds=_read_int(values, "STANDARD_SOP_TIMEOUT_SECONDS", 240),
             max_cards_per_document=_read_int(
                 values, "KNOWLEDGE_MAX_CARDS_PER_DOCUMENT", 30
             ),

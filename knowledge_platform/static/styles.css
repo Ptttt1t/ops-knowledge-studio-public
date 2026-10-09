@@ -436,3 +436,16 @@ dialog::backdrop { background: #17273780; backdrop-filter: blur(4px); }
 }
 
 .knowledge-reset-panel { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
+.sop-intro, .sop-setup { margin-bottom:24px; }
+.sop-intro h2 { margin-bottom:12px; }
+.sop-actions { display:flex; flex-wrap:wrap; gap:10px; }
+#page-standard-sop .panel-head { flex-wrap:wrap; }
+#sop-drafts { flex:1 1 320px; min-width:0; width:auto; }
+.sop-check { display:flex; align-items:center; gap:10px; }
+.sop-check input, .sop-source input { width:auto; }
+.sop-source { padding:18px; border:1px solid var(--line); border-radius:10px; }
+.sop-source h3 { margin:0 0 8px; }
+.sop-source p { margin:8px 0; overflow-wrap:anywhere; }
+.sop-source blockquote { margin:10px 0; padding:8px 14px; border-left:3px solid var(--accent); background:#f4f8f6; white-space:pre-wrap; }
+.sop-editor { min-height:420px; font:12px/1.7 Consolas,monospace; }
+.sop-preview { white-space:pre-wrap; overflow-wrap:anywhere; max-height:650px; overflow:auto; line-height:1.85; }

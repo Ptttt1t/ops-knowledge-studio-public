@@ -86,6 +86,7 @@ class KnowledgeStore:
                             raise StoreError("清空前数据库备份校验失败，未删除知识")
 
             tables = (
+                "standard_sop_drafts", "standard_sop_sources", "standard_sop_batches",
                 "semantic_merge_cluster_members", "semantic_merge_clusters",
                 "semantic_merge_proposals", "semantic_merge_member_exclusions",
                 "semantic_governance_state", "relations", "audit_log",
@@ -137,6 +138,25 @@ class KnowledgeStore:
 
     def initialize(self) -> None:
         schema = """
+        CREATE TABLE IF NOT EXISTS standard_sop_batches (
+            batch_id TEXT PRIMARY KEY, scenario TEXT NOT NULL, keywords_json TEXT NOT NULL,
+            created_by TEXT NOT NULL, created_at TEXT NOT NULL, last_run_id TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS standard_sop_sources (
+            source_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL REFERENCES standard_sop_batches(batch_id),
+            fingerprint TEXT NOT NULL, raw_json TEXT NOT NULL, normalized_json TEXT NOT NULL,
+            analysis_json TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(batch_id, fingerprint)
+        );
+        CREATE TABLE IF NOT EXISTS standard_sop_drafts (
+            draft_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL REFERENCES standard_sop_batches(batch_id),
+            title TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
+            sources_json TEXT NOT NULL, payload_json TEXT NOT NULL, validation_json TEXT NOT NULL,
+            created_by TEXT NOT NULL, reviewer TEXT NOT NULL, review_comment TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_name TEXT NOT NULL,

@@ -1,4 +1,5 @@
 const pageTitles = {
+  "standard-sop": "标准化 SOP",
   dashboard: "工作台概览",
   "real-change": "变更草案",
   ingest: "知识采集与加工",
@@ -9,6 +10,11 @@ const pageTitles = {
 };
 
 let realChangeRecommendations = [];
+let sopBatch = null;
+let sopDraft = null;
+let sopRun = null;
+let sopPollTimer = null;
+const sopKinds = {SCOPE:"适用范围", PRECONDITIONS:"前置条件", RISKS:"风险与停止条件", PRECHECK:"操作前检查", IMPLEMENTATION:"操作实施", VALIDATION:"操作验证", ROLLBACK:"操作回退"};
 let activeRealChangeDraft = null;
 let realChangePollTimer = null;
 let activeRealChangeEvaluation = null;
@@ -1431,6 +1437,7 @@ document.querySelectorAll(".nav-item").forEach(button => button.addEventListener
   button.classList.add("active");
   button.setAttribute("aria-current", "page");
   const page = button.dataset.page;
+  if (page === "standard-sop") loadSOPBatches().catch(error => toast(error.message, true));
   document.getElementById(`page-${page}`).classList.add("active");
   document.getElementById("page-title").textContent = pageTitles[page];
   if (page === "real-change") loadRealChangeWorkbench().catch(error => toast(error.message, true));
@@ -1858,7 +1865,7 @@ document.querySelectorAll("[data-go-page]").forEach(button => button.addEventLis
 }));
 
 document.getElementById("clear-knowledge-button").addEventListener("click", async event => {
-  if (!window.confirm("清空所有来源记录、知识卡、案例包、审核、关系和导入缓存？\n\n系统会先备份数据库。上传原文件与模型配置保留；旧草案/评测失效，SchemaProfile 停用。外部记忆仅断开本地引用并保留待清理队列。此操作不能在页面撤销，恢复需停服使用备份。")) return;
+  if (!window.confirm("清空所有来源记录、知识卡、案例包、标准 SOP 批次与草案、审核、关系和导入缓存？\n\n系统会先备份数据库。上传原文件与模型配置保留；旧变更草案/评测失效，SchemaProfile 停用。外部记忆仅断开本地引用并保留待清理队列。此操作不能在页面撤销，恢复需停服使用备份。")) return;
   const button = event.currentTarget;
   setBusy(button, true, "正在备份并清空…");
   try {
@@ -1869,4 +1876,226 @@ document.getElementById("clear-knowledge-button").addEventListener("click", asyn
     window.location.reload();
   } catch (error) { toast(error.message, true); }
   finally { setBusy(button, false); }
+});
+
+async function loadSOPBatches(preferred = "") {
+  const data = await api("/api/standard-sop/batches");
+  const selected = preferred || document.getElementById("sop-batches").value;
+  document.getElementById("sop-batches").innerHTML = '<option value="">选择批次</option>' + data.batches.map(batch => `<option value="${escapeHtml(batch.batch_id)}">${escapeHtml(batch.scenario)} · ${escapeHtml(batch.created_at)}</option>`).join("");
+  document.getElementById("sop-batches").value = selected;
+  if (selected) await loadSOPBatch(selected);
+}
+
+async function loadSOPBatch(id) {
+  const batch = await api(`/api/standard-sop/batches/${id}`);
+  if (document.getElementById("sop-batches").value !== id) return;
+  sopBatch = batch;
+  document.getElementById("sop-model-note").textContent = sopBatch.generation_enabled
+    ? "模型分析与生成已启用。上线来源也须核实内容，评分与引用不能替代技术审核。"
+    : "可导入并检查结构。模型分析与生成需在批准环境设置 STANDARD_SOP_GENERATION_ENABLED=true 并配置模型后重启。";
+  const selected = new Set([...document.querySelectorAll("[data-sop-source]:checked")].map(input => input.value));
+  document.getElementById("sop-sources").classList.toggle("empty", !sopBatch.sources.length);
+  document.getElementById("sop-sources").innerHTML = sopBatch.sources.map(source => {
+    const report = source.analysis;
+    const usable = source.published && report.status === "SUCCEEDED" && report.relevant;
+    return `<article class="sop-source"><h3><label class="sop-check"><input type="checkbox" data-sop-source value="${escapeHtml(source.source_id)}" ${usable ? "" : "disabled"} ${selected.has(source.source_id) ? "checked" : ""}>${escapeHtml(source.title)}</label></h3>
+      <p class="form-hint">${source.published ? "已声明上线" : "未声明上线，暂不参与分析"} · ${report.status === "SUCCEEDED" ? `模型书写评分 ${report.score}/100 · ${report.relevant ? "场景相关" : "不相关"}` : "尚未完成模型分析"}</p>
+      <p class="form-hint">结构缺口：${escapeHtml(source.structure.missing_sections.map(kind => sopKinds[kind]).join("、") || "七节字段齐全")}</p>
+      <details><summary>查看质量、引用与来源正文</summary>
+        <p>${escapeHtml(report.compatibility_notes || "尚无兼容性评审")}</p>
+        <p>${escapeHtml(Object.entries(report.dimensions || {}).map(([key,value]) => `${key}: ${value}/5`).join(" · "))}</p>
+        ${(report.strengths || []).map(item => `<blockquote>${escapeHtml(item.quote)}<br><small>${escapeHtml(item.reason)} · ${escapeHtml(item.section_id)}</small></blockquote>`).join("")}
+        <p>${escapeHtml((report.issues || []).join("；"))}</p>
+        <p class="form-hint">来源 ${escapeHtml(source.external_id)} · ${escapeHtml(source.source_ref)} · ${escapeHtml(source.source_id)}</p>
+        <button type="button" class="button secondary" data-sop-preview="${escapeHtml(source.source_id)}">查看来源正文（${source.section_count} 节）</button><div data-sop-body="${escapeHtml(source.source_id)}"></div>
+      </details></article>`;
+  }).join("") || "尚无来源。";
+  document.getElementById("sop-import-status").textContent = `${sopBatch.sources.length} 份来源 · ${sopBatch.sources.filter(s => s.analysis.status === "SUCCEEDED").length} 份已分析；重复导入会跳过相同来源。`;
+  const draftId = sopDraft?.batch_id === id ? sopDraft.draft_id : "";
+  document.getElementById("sop-drafts").innerHTML = '<option value="">选择草案</option>' + sopBatch.drafts.map(draft => `<option value="${escapeHtml(draft.draft_id)}">${escapeHtml(draft.title)} · ${escapeHtml(draft.status)} · v${draft.revision}</option>`).join("");
+  document.getElementById("sop-drafts").value = draftId;
+  document.getElementById("sop-analyze").disabled = !sopBatch.generation_enabled;
+  document.getElementById("sop-generate").disabled = !sopBatch.generation_enabled;
+  if (sopBatch.last_run_id && !sopRun) {
+    const data = await api(`/api/runs/${sopBatch.last_run_id}`);
+    if (!["SUCCEEDED","FAILED","CANCELLED","INTERRUPTED"].includes(data.status)) {
+      sopRun = data;
+      pollSOPRun().catch(error => toast(error.message, true));
+    }
+  }
+}
+
+function clearSOPDraft() {
+  sopDraft = null;
+  document.getElementById("sop-draft-preview").textContent = "";
+  document.getElementById("sop-editor").value = "";
+  document.getElementById("sop-review-comment").value = "";
+  document.getElementById("sop-draft-status").textContent = "选择或生成草案后查看内容与引用。";
+  document.getElementById("sop-export").disabled = true;
+  document.getElementById("sop-export-json").disabled = true;
+}
+
+function showSOPDraft(draft) {
+  sopDraft = draft;
+  document.getElementById("sop-drafts").value = draft.draft_id;
+  document.getElementById("sop-editor").value = JSON.stringify(draft.payload, null, 2);
+  document.getElementById("sop-draft-status").textContent = `${draft.status} · v${draft.revision} · 缺失章节：${draft.validation.missing_sections.join("、") || "无"} · 引用 ${draft.validation.citation_count} 处。${draft.validation.boundary}`;
+  const lines = [draft.title, ""];
+  for (const section of draft.payload.sections) {
+    lines.push(sopKinds[section.kind]);
+    section.items.forEach((item,index) => {
+      lines.push(`${index + 1}. ${item.text}`);
+      item.citations.forEach(ref => lines.push(`  来源 ${ref.source_id}/${ref.section_id}：${ref.quote}`));
+    });
+    lines.push("");
+  }
+  lines.push("实例参数说明", ...draft.payload.parameters.map(p => `${p.name}：${p.description}`), "", "待补齐内容", ...draft.payload.gaps, "", "冲突", ...draft.payload.conflicts);
+  document.getElementById("sop-draft-preview").textContent = lines.join("\n");
+  document.getElementById("sop-export").disabled = draft.status !== "APPROVED";
+  document.getElementById("sop-export-json").disabled = draft.status !== "APPROVED";
+}
+
+async function pollSOPRun() {
+  if (!sopRun) return;
+  const runId = sopRun.id;
+  const data = await api(`/api/runs/${runId}`);
+  if (sopRun?.id !== runId) return;
+  sopRun = data;
+  document.getElementById("sop-job-status").textContent = `后台任务 ${sopRun.id} · ${sopRun.status}${sopRun.error ? ` · ${typeof sopRun.error === "string" ? sopRun.error : JSON.stringify(sopRun.error)}` : ""}`;
+  const terminal = ["SUCCEEDED","FAILED","CANCELLED","INTERRUPTED"].includes(sopRun.status);
+  document.getElementById("sop-cancel").disabled = terminal;
+  if (sopBatch) {
+    // Keep the known run handle while rendering, so refreshing a batch never
+    // recursively starts another polling loop.
+    await loadSOPBatch(sopBatch.batch_id);
+  }
+  if (sopRun?.id !== runId) return;
+  if (terminal) {
+    if (sopRun.result?.draft_id) showSOPDraft(sopRun.result);
+    clearTimeout(sopPollTimer);
+  } else {
+    sopPollTimer = window.setTimeout(() => pollSOPRun().catch(error => toast(error.message, true)), 2000);
+  }
+}
+
+document.getElementById("sop-batch-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    const batch = await api("/api/standard-sop/batches", {method:"POST", body:JSON.stringify({scenario:document.getElementById("sop-scenario").value, keywords:document.getElementById("sop-keywords").value.split(/[,，]/).map(s => s.trim()).filter(Boolean)})});
+    clearTimeout(sopPollTimer); sopRun = null; clearSOPDraft();
+    await loadSOPBatches(batch.batch_id);
+  } catch (error) { toast(error.message,true); }
+});
+document.getElementById("sop-batches").addEventListener("change", async event => {
+  clearTimeout(sopPollTimer); sopRun = null; sopBatch = null; clearSOPDraft();
+  document.getElementById("sop-sources").textContent = "尚无来源。";
+  document.getElementById("sop-drafts").innerHTML = '<option value="">选择草案</option>';
+  document.getElementById("sop-job-status").textContent = "";
+  document.getElementById("sop-import-status").textContent = "";
+  document.getElementById("sop-cancel").disabled = true;
+  try { if (event.target.value) await loadSOPBatch(event.target.value); else sopBatch = null; }
+  catch (error) { toast(error.message,true); }
+});
+document.getElementById("sop-import-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  setBusy(button,true,"导入中…");
+  try {
+    if (!sopBatch) throw new Error("先选择场景批次");
+    const files = [...document.getElementById("sop-files").files];
+    if (files.length > 500) throw new Error("每批最多 500 份文件");
+    const id = sopBatch.batch_id;
+    let documents = [], bytes = 0, completed = 0;
+    const flush = async () => {
+      if (!documents.length) return;
+      const form = new FormData();
+      form.append("file", new Blob([JSON.stringify(documents)], {type:"application/json"}), "sop-batch.json");
+      await api(`/api/standard-sop/batches/${id}/upload`, {method:"POST", body:form});
+      completed += documents.length; documents = []; bytes = 0;
+      document.getElementById("sop-import-status").textContent = `已处理 ${completed}/${files.length} 份文件`;
+    };
+    for (const file of files) {
+      if (file.size > 4 * 1024 * 1024) throw new Error(`${file.name} 超过批量页面单文件 4 MB 限制`);
+      if (bytes + file.size > 4 * 1024 * 1024) await flush();
+      let content;
+      try { content = JSON.parse((await file.text()).replace(/^\uFEFF/,"")); }
+      catch { throw new Error(`${file.name} 不是有效 JSON；此前成功导入的包已保留`); }
+      documents.push({content, external_id:file.name, published:document.getElementById("sop-published").checked}); bytes += file.size;
+    }
+    await flush();
+    await loadSOPBatch(id);
+    toast("SOP 导入完成，尚未写入已批准知识库");
+  } catch (error) { toast(error.message,true); if(sopBatch) await loadSOPBatch(sopBatch.batch_id); }
+  finally { setBusy(button,false); }
+});
+async function startSOPJob(operation) {
+  try {
+    if (!sopBatch) throw new Error("先选择场景批次");
+    if (sopRun && !["SUCCEEDED","FAILED","CANCELLED","INTERRUPTED"].includes(sopRun.status)) throw new Error("请等待当前任务完成或取消后再提交");
+    const sourceIds = [...document.querySelectorAll("[data-sop-source]:checked")].map(input => input.value);
+    const batchId = sopBatch.batch_id;
+    const data = await api("/api/standard-sop/jobs", {method:"POST", body:JSON.stringify({operation,batch_id:batchId,source_ids:sourceIds})});
+    if (sopBatch?.batch_id !== batchId) return;
+    sopRun = data.run;
+    clearTimeout(sopPollTimer);
+    await pollSOPRun();
+  } catch (error) { toast(error.message,true); }
+}
+document.getElementById("sop-analyze").addEventListener("click", () => startSOPJob("analyze"));
+document.getElementById("sop-generate").addEventListener("click", () => startSOPJob("generate"));
+document.getElementById("sop-recommend").addEventListener("click", () => {
+  if (!sopBatch) return;
+  const best = new Set(sopBatch.sources.filter(source => source.published && source.analysis.status === "SUCCEEDED" && source.analysis.relevant)
+    .sort((a,b) => b.analysis.score-a.analysis.score).slice(0,8).map(source => source.source_id));
+  document.querySelectorAll("[data-sop-source]").forEach(input => input.checked = best.has(input.value));
+  toast(`按模型书写评分选中 ${best.size} 份；适用范围和版本仍需核对`);
+});
+document.getElementById("sop-sources").addEventListener("click", async event => {
+  const button = event.target.closest("[data-sop-preview]");
+  if (!button || !sopBatch) return;
+  try {
+    const source = await api(`/api/standard-sop/batches/${sopBatch.batch_id}/sources/${button.dataset.sopPreview}`);
+    button.parentElement.querySelector("[data-sop-body]").innerHTML = source.sections.map(section => `<h4>${escapeHtml(section.section_id)} · ${escapeHtml(sopKinds[section.kind])} · ${escapeHtml(section.title)}</h4><p>${escapeHtml(section.text)}</p><small>${escapeHtml(section.pointer)}</small>`).join("");
+  } catch(error) { toast(error.message,true); }
+});
+document.getElementById("sop-cancel").addEventListener("click", async () => {
+  try { if (sopRun) await api(`/api/runs/${sopRun.id}/cancel`, {method:"POST",body:"{}"}); }
+  catch (error) { toast(error.message,true); }
+});
+document.getElementById("sop-drafts").addEventListener("change", async event => {
+  try {
+    const id = event.target.value;
+    clearSOPDraft();
+    if (id) {
+      const draft = await api(`/api/standard-sop/drafts/${id}`);
+      if (document.getElementById("sop-drafts").value === id) showSOPDraft(draft);
+    }
+  }
+  catch(error) { toast(error.message,true); }
+});
+document.getElementById("sop-save").addEventListener("click", async () => {
+  try {
+    if (!sopDraft) throw new Error("先选择草案");
+    showSOPDraft(await api(`/api/standard-sop/drafts/${sopDraft.draft_id}/edit`, {method:"POST",body:JSON.stringify({revision:sopDraft.revision,payload:JSON.parse(document.getElementById("sop-editor").value)})}));
+    await loadSOPBatch(sopDraft.batch_id);
+  } catch(error) { toast(error.message,true); }
+});
+for(const decision of ["APPROVED","REJECTED"]) {
+  document.getElementById(decision === "APPROVED" ? "sop-approve" : "sop-reject").addEventListener("click", async () => {
+    try {
+      if(!sopDraft) throw new Error("先选择草案");
+      showSOPDraft(await api(`/api/standard-sop/drafts/${sopDraft.draft_id}/review`, {method:"POST",body:JSON.stringify({revision:sopDraft.revision,decision,comment:document.getElementById("sop-review-comment").value})}));
+      await loadSOPBatch(sopDraft.batch_id);
+    } catch(error) { toast(error.message,true); }
+  });
+}
+for (const extension of ["md", "json"]) document.getElementById(extension === "md" ? "sop-export" : "sop-export-json").addEventListener("click", async () => {
+  try {
+    if(!sopDraft) throw new Error("先选择草案");
+    const data = await api(`/api/standard-sop/drafts/${sopDraft.draft_id}/export`);
+    const body = extension === "md" ? data.markdown : JSON.stringify(data,null,2);
+      const url = URL.createObjectURL(new Blob([body],{type:"text/plain;charset=utf-8"}));
+      const link = document.createElement("a"); link.href=url; link.download=`standard-sop-${sopDraft.draft_id}.${extension}`;
+      link.click(); URL.revokeObjectURL(url);
+  } catch(error) { toast(error.message,true); }
 });

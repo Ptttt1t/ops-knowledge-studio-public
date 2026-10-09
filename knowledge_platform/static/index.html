@@ -28,6 +28,7 @@
       </div>
       <nav aria-label="工作台导航">
         <p class="nav-group">工作空间</p>
+        <button class="nav-item" data-page="standard-sop" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM8 7h8M8 11h8M8 15h5"/></svg><span class="nav-label">标准化 SOP</span><span class="nav-beta">NEW</span></button>
 <button class="nav-item active" data-page="dashboard" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">工作台概览</span></button>
         <button class="nav-item" data-page="real-change" aria-current="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H5v18h14V8zM14 3v6h6M8 14h8M8 17h5"/></svg><span class="nav-label">变更草案</span><span class="nav-beta">BETA</span></button>
         <p class="nav-group">知识管理</p>
@@ -112,6 +113,52 @@
         <article class="panel">
           <div class="panel-head"><div><p class="eyebrow">RECENT KNOWLEDGE</p><h2>最近知识</h2></div></div>
           <div id="recent-cards" class="card-list empty">暂无知识卡片</div>
+        </article>
+      </section>
+
+      <section id="page-standard-sop" class="page">
+        <article class="panel sop-intro">
+          <p class="eyebrow">STANDARD SOP STUDIO</p><h2>从已有经验，编写更好的标准 SOP。</h2>
+          <p class="muted-copy">批量收集 → 书写质量分析 → 选择来源 → 编写、编辑与审核。保留好的原文和来源，让缺口与冲突可见。</p>
+          <p id="sop-model-note" class="form-hint">导入与结构检查无需模型；质量分析和生成需启用模型能力。</p>
+        </article>
+        <div class="two-column sop-setup">
+          <article class="panel form-panel">
+            <h2>1. 场景与采集批次</h2>
+            <form id="sop-batch-form">
+              <label>需求或场景<textarea id="sop-scenario" required maxlength="4000" placeholder="例如：某产品、某版本范围下的冷补丁标准操作；说明适用范围及排除范围。"></textarea></label>
+              <label>采集关键词<input id="sop-keywords" placeholder="冷补丁, 热修复（逗号分隔，仅作采集记录）"></label>
+              <button class="button primary">建立批次</button>
+            </form>
+            <label for="sop-batches">已有批次</label><select id="sop-batches"><option value="">选择批次</option></select>
+            <p class="form-hint">内网爬虫可向同一批次推送 JSON；此版本预留接口，不直接连接内网网站。</p>
+          </article>
+          <article class="panel form-panel">
+            <h2>2. 导入已有 SOP</h2>
+            <form id="sop-import-form">
+              <label>选择 JSON 文件（可多选）<input id="sop-files" type="file" accept=".json,application/json" multiple required></label>
+              <label class="sop-check"><input id="sop-published" type="checkbox">我确认这一批来源已在上游上线</label>
+              <p class="form-hint">支持已知四阶段结构；每批最多 500 份，按小包上传。上线声明仅用于选择来源，不等于本平台审核。</p>
+              <button class="button secondary">导入所选文件</button>
+            </form>
+            <p id="sop-import-status" class="form-hint" aria-live="polite">先建立或选择场景批次。</p>
+          </article>
+        </div>
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">SOURCE REVIEW</p><h2>3. 分析书写质量，选择参考来源</h2></div>
+            <div class="sop-actions"><button id="sop-analyze" class="button secondary" type="button">分析未完成来源</button><button id="sop-recommend" class="button secondary" type="button">按评分选择前 8 份</button><button id="sop-cancel" class="button danger" type="button" disabled>取消当前任务</button><button id="sop-generate" class="button primary" type="button">用选定来源编写 SOP</button></div>
+          </div>
+          <p class="form-hint">结构检查只反映字段存在。模型评分关注适用范围、前置条件、清晰度、验证、回退与风险，不代表技术正确；每次分析最多调用一次模型/来源。选择 1–12 份相关来源用于生成。</p>
+          <p id="sop-job-status" class="form-hint" aria-live="polite"></p>
+          <div id="sop-sources" class="card-list empty">尚无来源。</div>
+        </article>
+        <article class="panel form-panel">
+          <div class="panel-head"><div><p class="eyebrow">STANDARD SOP DRAFT</p><h2>4. 编辑、审核与导出</h2></div><select id="sop-drafts" aria-label="选择标准 SOP 草案"><option value="">选择草案</option></select></div>
+          <p id="sop-draft-status" class="form-hint">生成后在这里查看完整内容及引用。标准 SOP 使用参数占位符，实例化需另行处理。</p>
+          <div id="sop-draft-preview" class="sop-preview"></div>
+          <details><summary>编辑标准 SOP 结构与引用（JSON）</summary><textarea id="sop-editor" class="sop-editor" aria-label="标准 SOP JSON"></textarea><button id="sop-save" class="button secondary" type="button">保存修改并重新待审</button></details>
+          <label>审核说明<textarea id="sop-review-comment" placeholder="记录对适用版本、步骤顺序、引用支持、实例泛化和停止/回退条件的人工核验。"></textarea></label>
+          <div class="sop-actions"><button id="sop-approve" class="button primary" type="button">批准当前版本</button><button id="sop-reject" class="button danger" type="button">驳回当前版本</button><button id="sop-export" class="button secondary" type="button" disabled>导出 Markdown</button><button id="sop-export-json" class="button secondary" type="button" disabled>导出来源 JSON</button></div>
         </article>
       </section>
 

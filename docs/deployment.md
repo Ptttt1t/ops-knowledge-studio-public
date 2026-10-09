@@ -155,6 +155,8 @@ DEMO_FULL_RESET_ENABLED=true
 
 ### 从清空前备份恢复
 
+1.9.0 的清空范围还包括标准 SOP 批次、来源、质量报告与草案，保存在同一 knowledge.db 备份中。上文保留并失效的“旧草案”特指实例化变更草案；标准 SOP 的已导出文件和 Runtime 历史仍保留。
+
 1. 停止 HTTP 服务和所有使用这三个库的进程。
 2. 将当前三个数据库及其同名 `-wal`、`-shm` 文件移到另一个受保护目录保存，确保恢复目标处没有旧 WAL 文件。
 3. 选择同一次成功清空提示对应的完整备份目录，将其中 `knowledge.db`、`change_drafts.db`、`runtime.db` **一起**复制到各自配置的数据库路径。备份内使用这些固定文件名，即使实际配置名称不同；不要混用不同批次。
@@ -174,7 +176,9 @@ python -m unittest discover -s tests -v
 python run.py serve
 ```
 
-`python run.py init` 可以重复执行：它只会补齐缺失的数据表和迁移记录，不会清空现有知识。
+`python run.py init` 可以重复执行：它只会补齐缺失的数据表和迁移记录，不会清空现有知识。1.9.0 会在现有 knowledge.db 中补齐标准 SOP 的三张表，不增加独立数据库。
+
+标准 SOP 导入不需要模型。书写质量分析与生成默认关闭，在批准环境设置 `STANDARD_SOP_GENERATION_ENABLED=true` 后重启，复用现有模型配置；单次超时 `STANDARD_SOP_TIMEOUT_SECONDS=240`。已有内网爬虫通过推送接口接入，或用 `python run.py sop-import --directory <目录> --scenario <场景> --keywords 冷补丁 --published` 导入下载文件。操作与接口见[标准 SOP 指南](standard-sop.md)，真实资料与 Prompt 不出网。
 
 ## 9. 运行参数
 

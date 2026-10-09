@@ -8,6 +8,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 
 当前主要目标是验证以下闭环：
 
+- 当前优先：按需求/场景批量导入已上线 SOP，模型评审书写质量，从人工选择的参考中编写标准 SOP，经编辑审核后导出；实例化变更单独立保留为 BETA。
 - 结构化 ChangeOrder 的确定性识别、语义知识建模、证据追溯和案例包治理；
 - 相似知识候选发现、人工确认合并及知识关系变化；
 - 基于 `APPROVED` 完整案例包生成可审核但不可执行的真实 ChangeOrder 草案；
@@ -31,6 +32,7 @@ Ops Knowledge Studio 是一个本地优先、带证据和人工治理的运维�
 | `knowledge_platform/retrieval.py`, `agent.py` | 本地可信检索、回答契约和只读 Agent 辅助。 |
 | `knowledge_platform/semantic_governance.py` | case-aware 相似扫描、跨案例 complete-link 知识簇、人工成员窄化、跨阶段关系及完整合并/共享核心治理。 |
 | `knowledge_platform/change_drafts.py` | SchemaProfile、案例推荐、真实草案 revision、硬门禁、审核、导出和留一盲测。 |
+| `knowledge_platform/standard_sop.py` | 场景批次、四阶段 SOP/显式章节适配、来源快照、模型书写质量报告、引用草案与审核导出。 |
 | `knowledge_platform/graph_layout.py`, `static/` | 关系图类型簇提示和 Web UI；浏览器执行 type-centroid + local force 的 3D 布局。 |
 | `knowledge_platform/long_term_memory.py` | 可选 MindMemOS 映射、白名单同步、回读后本地重新验证和降级。 |
 | `tests/fixtures/structure_samples/` | 四份暂拟结构的合成回归 fixture；不随安装包发布，不在 Web 暴露。 |
@@ -82,6 +84,12 @@ RealChangeRequest
 
 ## Important Constraints
 
+标准 SOP（1.9.0）的独立流程：场景批次 → 爬虫推送/多文件上传/目录 CLI → 来源快照 → 六维模型书写评审 → 人工选 1–12 源 → 模型编写七节模板 → 编辑/审核 → Markdown 与来源 JSON。数据保存在 knowledge.db 三张独立表，不自动注册已批准知识卡；无需 SchemaProfile，不执行变更。批次最多 500 源，每份分析一次调用；失败停止，再次分析跳过已成功来源，无隐藏重试或规则替代。爬虫鉴权/搜索/下载由已有内网程序负责，平台不访问 source_ref，关键词是接入参数。
+
+标准 SOP 引用必须逐字存在于指定来源章节；空节及显式缺口/冲突阻断批准，但技术兼容、步骤顺序和实例值泛化仍须人工核验。编辑增加 revision、替换当前稿并撤销审批，暂无完整历史版本浏览。模型默认关闭，需 STANDARD_SOP_GENERATION_ENABLED=true；超时 STANDARD_SOP_TIMEOUT_SECONDS=240。同进程分析/生成串行且使用模型路由独占槽位，上下文超限明确拒绝，不截断。接入契约见 standard-sop.md。
+
+全库实验清空包含标准 SOP 批次/来源/质量报告/当前草案，并由现有三库备份保护；旧实例化变更草案仍保留并失效，已导出文件及 Runtime 历史不清除。
+
 - 跨电脑 Codex 接力只发生在两台外网开发电脑之间：一台常用外网电脑，以及一台放在工位但接入外网的老旧笔记本。公司内网环境不允许使用 Codex，也不能依赖内网 Codex session 完成开发或诊断。
 - 内网环境仅由人工按批准流程部署代码并使用真实 ChangeOrder 验证。内网数据、卡片、Prompt、SchemaProfile 和报告不出网；外网 Codex 只能接收人工整理的脱敏计数、错误类型、结构特征和 QA 结果。
 - Python 支持范围是 3.10–3.13；CI 在 Windows 和 Linux 的四个版本上运行基础测试。基础依赖只有 `pypdf`，OCR 是可选依赖。
@@ -93,7 +101,7 @@ RealChangeRequest
 - 真实草案关闭底层隐藏 HTTP retry；草案服务只对已收到响应正文后、由模型负责的 JSON/`GeneratedChangeDraft` 协议失败进行一次显式修复。请求/Profile 的确定性字段或类型绑定在模型调用前预检，使用 `REQUEST_PROFILE_BINDING_ERROR` 立即失败，不进入协议修复。可通过 `CHANGE_DRAFT_FALLBACK_MODEL` 配置同一兼容端点上的备用模型；只有 429、`count/limit` 等明确容量错误才从主模型切换一次。超时不能证明远端推理已结束，因此既不重试也不切换备用模型。实际路由写入 revision，避免混淆不同模型的能力结果。`/api/health.model_requests.routes` 提供各路由的进程级活动/等待/峰值诊断，但不能约束其他进程或其他主机。
 - 真实草案根记录、revision `model_usage` 和 Runtime checkpoint 保存非敏感 `generation_budget` / `generation_performance`，包括案例/卡片计数、Prompt 大小、输出预算、请求次数、起止时间、客户端等待耗时和响应大小；没有供应商 usage 时不得估算 token，也不得写入 Prompt 正文。
 - `generation_diagnostics.protocol_repairs` 是判断第二次草案调用原因的事实来源，记录 JSON 解析或草案装配阶段的错误码/截断原因。`missing_fields` 本身只形成最终硬门禁，不会触发协议修复。
-- `DEMO_MODE=true` 时，安全且可逆的 Demo 子功能默认启用。破坏性或敏感例外仍默认关闭，当前包括 `DEMO_FULL_RESET_ENABLED=false` 和 `REAL_CHANGE_GENERATION_ENABLED=false`。
+- `DEMO_MODE=true` 时，安全且可逆的 Demo 子功能默认启用。破坏性或敏感例外仍默认关闭，当前包括 `DEMO_FULL_RESET_ENABLED=false`、`REAL_CHANGE_GENERATION_ENABLED=false` 和 `STANDARD_SOP_GENERATION_ENABLED=false`。
 - 真实草案生成必须有已激活且结构一致的 SchemaProfile，且第一版只生成/审核/导出，不注册真实执行工具。
 - Web 当前使用共享 token 而非组织级身份。公网暴露、多租户、正式审计和职责分离均不在当前实现能力内。
 - 默认持久化是单主机 SQLite：`data/knowledge.db`、`data/runtime.db`、`data/change_drafts.db`。升级前应停服备份，再执行 `python run.py init`。
