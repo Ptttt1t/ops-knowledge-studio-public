@@ -52,12 +52,14 @@ Ops Knowledge Studio 是一个使用 Python 和 SQLite 的本地运维知识工�
 
 ## 快速开始
 
+在新电脑接续当前开发，请先阅读[新电脑开发接续指南](docs/NEW_COMPUTER_HANDOFF.md)：当前 1.9.0 功能位于 `codex/standard-sop-studio`，默认克隆的 `main` 尚未包含标准 SOP 工作区。指南包含 Windows PowerShell 命令、环境验收、可选数据迁移、已知问题和新会话接续提示词。
+
 需要 Git 和 Python **3.10–3.13**。CI 覆盖 Windows、Linux 上的这四个 Python 版本。基础应用不需要 Node.js、Docker、Redis 或独立数据库服务。
 
 ### 1. 获取代码
 
 ```text
-git clone https://github.com/Ptttt1t/ops-knowledge-studio-public.git
+git clone --branch codex/standard-sop-studio https://github.com/Ptttt1t/ops-knowledge-studio-public.git
 cd ops-knowledge-studio-public
 python -m venv .venv
 ```
@@ -327,6 +329,7 @@ Node.js 仅用于这里的 JavaScript 语法检查，运行平台无需安装。
 
 | 文档 | 内容 |
 | --- | --- |
+| [新电脑开发接续指南](docs/NEW_COMPUTER_HANDOFF.md) | 当前分支、环境重建、验证、可选数据迁移、待办与新会话提示词 |
 | [标准 SOP 与爬虫对接](docs/standard-sop.md) | 批量 JSON、质量分析、编写审核、CLI 与爬虫推送契约 |
 | [部署指南](docs/deployment.md) / [安全加固](docs/security-hardening.md) | 安装、OCR、配置、访问控制与部署边界 |
 | [ChangeOrder 知识卡构建](docs/structured-change-order-extraction.md) | Adapter、证据、语义单元和质量报告 |
